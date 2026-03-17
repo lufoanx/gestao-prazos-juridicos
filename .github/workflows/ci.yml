@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [ "principal", "main" ]
+  pull_request:
+    branches: [ "principal", "main" ]
+
+jobs:
+  check-structure:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Verificar estrutura básica
+        run: |
+          test -f README.md
+          test -f docs/proposta-inicial.md
+          test -f docs/pesquisa/validacao-problema.md
+          test -f docs/requisitos/requisitos-funcionais.md
+          test -f docs/requisitos/requisitos-nao-funcionais.md
+          test -f backend/app/main.py
+          test -f frontend/public/index.html
