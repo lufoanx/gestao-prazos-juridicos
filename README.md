@@ -89,13 +89,13 @@ frontend/      # interface do sistema
 
 O sistema será desenvolvido considerando boas práticas de segurança da informação:
 
-uso de HTTPS
+- Uso de HTTPS
 
-autenticação segura
+- Autenticação segura
 
-controle de acesso por usuário
+- Controle de acesso por usuário
 
-isolamento de dados entre escritórios
+- Isolamento de dados entre escritórios
 
 Além disso, o projeto será inspirado nos princípios da ISO 27001.
 
@@ -109,4 +109,4 @@ Em fase inicial de levantamento de requisitos, validação do problema e defini�
 
 ## Autor
 
-José Lucas
+- José Lucas
