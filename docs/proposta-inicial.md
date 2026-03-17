@@ -90,13 +90,15 @@ A aplicação será composta por diferentes componentes responsáveis por funç�
 
 Essa organização facilita manutenção, escalabilidade e futuras expansões do sistema.
 
+Abaixo está a representação da arquitetura do sistema em nível de contexto.
+
 ### Diagrama de Contexto do Sistema
 
-[Inserir aqui a imagem do diagrama de contexto C4]
+![Diagrama de Contexto](diagramas/contexto-c4.png)
 
 ### Diagrama de Arquitetura (Containers)
 
-[Inserir aqui a imagem do diagrama de containers C4]
+![Diagrama de Containers](diagramas/containers-c4.png)
 
 ## 6. Tecnologias previstas
 
