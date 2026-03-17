@@ -83,8 +83,9 @@ backend/       # API e regras de negócio
 frontend/      # interface do sistema
 .github/       # automações e CI/CD
 ```
+---
 
-Segurança
+## Segurança
 
 O sistema será desenvolvido considerando boas práticas de segurança da informação:
 
@@ -98,10 +99,14 @@ isolamento de dados entre escritórios
 
 Além disso, o projeto será inspirado nos princípios da ISO 27001.
 
-Status do projeto
+---
+
+## Status do projeto
 
 Em fase inicial de levantamento de requisitos, validação do problema e definição arquitetural.
 
-Autor
+---
+
+## Autor
 
 José Lucas
