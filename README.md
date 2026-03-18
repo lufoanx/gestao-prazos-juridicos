@@ -109,4 +109,4 @@ Em fase inicial de levantamento de requisitos, validação do problema e defini�
 
 ## Autor
 
-- José Lucas
+- José Lucas Andrade Fonseca
