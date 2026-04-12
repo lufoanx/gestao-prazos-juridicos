@@ -1,4 +1,4 @@
-# Sistema Web para Gestão Inteligente de Prazos Jurídicos
+# PrazoAI — Sistema Inteligente de Gestão de Prazos Jurídicos
 
 ## Visão geral
 Este projeto está sendo desenvolvido na disciplina PAC Extensionista VII do curso de Engenharia de Software.
