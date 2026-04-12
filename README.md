@@ -32,6 +32,14 @@ A proposta é atuar diretamente na redução do risco de perda de prazos.
 
 ---
 
+## Diferencial do Projeto
+
+Diferente dos sistemas jurídicos tradicionais, o PrazoAI é focado especificamente na gestão inteligente de prazos processuais, utilizando inteligência artificial para análise de intimações em PDF, automação no cálculo de prazos e visualização clara das tarefas prioritárias.
+
+Enquanto muitas plataformas do mercado são mais amplas e generalistas, o PrazoAI concentra sua proposta no ponto mais crítico da rotina jurídica: reduzir falhas humanas e aumentar a segurança no acompanhamento dos prazos.
+
+---
+
 ## Validação do problema
 
 A ideia foi validada com profissional da área jurídica com experiência em escritório contendo aproximadamente:
@@ -46,6 +54,15 @@ Principais pontos identificados:
 - dificuldade de organização e visualização  
 
 A solução proposta foi avaliada como altamente relevante (10/10).
+
+---
+
+## Métricas de Sucesso (KPIs)
+
+- Redução de erros no controle de prazos em até 90%
+- Aumento da eficiência no cálculo de prazos em até 50%
+- Suporte inicial para no mínimo 10 usuários simultâneos
+- Taxa de acerto da IA superior a 85%
 
 ---
 
@@ -75,6 +92,16 @@ A solução proposta foi avaliada como altamente relevante (10/10).
 
 ---
 
+## Documentação
+
+- [RFC do Projeto](docs/RFC.md)
+- [Proposta Inicial](docs/proposta-inicial.md)
+- [Validação do Problema](docs/pesquisa/validacao-problema.md)
+- [Requisitos Funcionais](docs/requisitos/requisitos-funcionais.md)
+- [Requisitos Não Funcionais](docs/requisitos/requisitos-nao-funcionais.md)
+
+---
+
 ## Estrutura do projeto
 
 ```bash
@@ -101,9 +128,24 @@ Além disso, o projeto será inspirado nos princípios da ISO 27001.
 
 ---
 
+## Protótipo (em desenvolvimento)
+
+A interface web do sistema será desenvolvida em React, com foco em clareza visual, priorização de tarefas e melhor experiência de uso para advogados e escritórios.
+
+Nas próximas etapas, serão construídas as telas principais de dashboard, cadastro de processos, visualização de prazos e alertas críticos.
+
+---
+
 ## Status do projeto
 
-Em fase inicial de levantamento de requisitos, validação do problema e definição arquitetural.
+Projeto em desenvolvimento acadêmico na disciplina PAC Extensionista VII, atualmente na fase de levantamento de requisitos, validação do problema e definição arquitetural.
+
+Próximos passos:
+- detalhamento completo do RFC
+- implementação do motor de cálculo de prazos
+- integração da análise de documentos com IA
+- desenvolvimento da interface em React
+- evolução dos testes e da arquitetura do sistema
 
 ---
 
