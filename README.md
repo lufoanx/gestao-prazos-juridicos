@@ -1,9 +1,12 @@
 # PrazoAI — Sistema Inteligente de Gestão de Prazos Jurídicos
 
 ## Visão geral
+
 Este projeto está sendo desenvolvido na disciplina PAC Extensionista VII do curso de Engenharia de Software.
 
-A proposta é criar uma plataforma web focada na gestão inteligente de prazos jurídicos, com o objetivo de reduzir falhas humanas, melhorar a organização dos processos e trazer mais segurança no acompanhamento de prazos.
+A proposta é criar uma plataforma web focada na gestão inteligente de prazos jurídicos, com o objetivo de reduzir falhas humanas, melhorar a organização dos processos e trazer mais segurança no acompanhamento de prazos processuais.
+
+O PrazoAI atua como uma solução especializada para auxiliar advogados, assistentes jurídicos e escritórios de pequeno e médio porte na organização, cálculo e acompanhamento de prazos.
 
 ---
 
@@ -11,12 +14,15 @@ A proposta é criar uma plataforma web focada na gestão inteligente de prazos j
 
 O controle de prazos processuais ainda é uma atividade crítica em escritórios de advocacia.
 
-Mesmo com o uso de sistemas jurídicos e terceirização, falhas humanas na atribuição de prazos ainda ocorrem, podendo resultar na perda de processos e prejuízos financeiros significativos.
+Mesmo com o uso de sistemas jurídicos, planilhas, agendas e serviços terceirizados, falhas humanas na leitura de intimações, atribuição de datas e acompanhamento de vencimentos ainda ocorrem, podendo gerar prejuízos processuais, financeiros e reputacionais.
 
 Além disso, muitos sistemas atuais apresentam:
-- baixa clareza visual
-- excesso de complexidade
-- dificuldade de organização por prioridade
+
+- baixa clareza visual;
+- excesso de complexidade;
+- dificuldade de organização por prioridade;
+- dependência de lançamentos manuais;
+- pouca automação na interpretação de intimações em PDF.
 
 ---
 
@@ -24,49 +30,63 @@ Além disso, muitos sistemas atuais apresentam:
 
 O sistema será desenvolvido com foco em três pilares principais:
 
-- Motor automatizado de cálculo de prazos processuais  
-- Análise de intimações em PDF utilizando inteligência artificial  
-- Dashboard visual para organização e priorização de prazos  
+- motor automatizado de cálculo de prazos processuais;
+- análise de intimações em PDF utilizando inteligência artificial;
+- dashboard visual para organização e priorização de prazos.
 
-A proposta é atuar diretamente na redução do risco de perda de prazos.
+A proposta é reduzir o risco de perda de prazos, melhorar a visualização das tarefas críticas e apoiar a rotina operacional de escritórios jurídicos.
 
 ---
 
 ## Diferencial do Projeto
 
-Diferente dos sistemas jurídicos tradicionais, o PrazoAI é focado especificamente na gestão inteligente de prazos processuais, utilizando inteligência artificial para análise de intimações em PDF, automação no cálculo de prazos e visualização clara das tarefas prioritárias.
+Diferente dos sistemas jurídicos tradicionais, o PrazoAI é focado especificamente na gestão inteligente de prazos processuais.
 
-Enquanto muitas plataformas do mercado são mais amplas e generalistas, o PrazoAI concentra sua proposta no ponto mais crítico da rotina jurídica: reduzir falhas humanas e aumentar a segurança no acompanhamento dos prazos.
+Enquanto muitas plataformas do mercado são amplas e generalistas, o PrazoAI concentra sua proposta em um ponto crítico da rotina jurídica: reduzir falhas humanas no acompanhamento de prazos.
+
+O diferencial está na combinação entre:
+
+- extração de dados de intimações em PDF com apoio de IA;
+- cálculo automatizado considerando dias úteis, feriados e regras de contagem;
+- visualização clara dos prazos por prioridade;
+- foco em escritórios pequenos e médios, que muitas vezes não possuem equipe dedicada apenas ao controle processual.
 
 ---
 
 ## Validação do problema
 
-A ideia foi validada com profissional da área jurídica com experiência em escritório contendo aproximadamente:
+A ideia foi validada com profissional da área jurídica, em contexto de escritório com aproximadamente:
 
-- 5 advogados  
-- cerca de 700 processos ativos  
+- 5 advogados;
+- cerca de 700 processos ativos.
 
 Principais pontos identificados:
 
-- ocorrência de perda de prazos  
-- falhas humanas na atribuição de datas  
-- dificuldade de organização e visualização  
+- ocorrência de perda de prazos;
+- falhas humanas na atribuição de datas;
+- dificuldade de organização e visualização;
+- dependência de leitura manual de intimações;
+- necessidade de uma visão mais clara dos prazos urgentes.
 
-A solução proposta foi avaliada como altamente relevante (10/10).
+A solução proposta foi avaliada como altamente relevante, recebendo nota 10/10 na validação inicial.
 
 ---
 
 ## Métricas de Sucesso (KPIs)
 
-- Redução de erros no controle de prazos em até 90%
-- Aumento da eficiência no cálculo de prazos em até 50%
-- Suporte inicial para no mínimo 10 usuários simultâneos
-- Taxa de acerto da IA superior a 85%
+As métricas previstas para avaliar o sucesso do projeto são:
+
+- acurácia da extração de dados pela IA superior a 85%;
+- redução de pelo menos 70% no tempo médio gasto para cadastrar um prazo a partir de uma intimação;
+- tempo de resposta inferior a 500ms nas principais ações do sistema;
+- suporte inicial para no mínimo 10 usuários simultâneos;
+- zero prazos perdidos por falha do sistema durante a fase de testes.
 
 ---
 
 ## Arquitetura inicial
+
+A arquitetura do sistema foi organizada com base no modelo C4, permitindo visualizar o projeto em diferentes níveis de detalhe: contexto, containers e componentes.
 
 ### Diagrama de contexto
 
@@ -82,13 +102,16 @@ A solução proposta foi avaliada como altamente relevante (10/10).
 
 ## Tecnologias previstas
 
-- Python
-- FastAPI
-- PostgreSQL
-- Docker
-- GitHub Actions (CI/CD)
-- Cloud computing
-- Inteligência Artificial para análise de documentos
+As tecnologias previstas para o desenvolvimento do projeto são:
+
+- Python;
+- FastAPI;
+- React;
+- PostgreSQL;
+- Docker;
+- GitHub Actions (CI, com possibilidade futura de CD);
+- Cloud computing;
+- Inteligência Artificial para análise de documentos.
 
 ---
 
@@ -104,48 +127,73 @@ A solução proposta foi avaliada como altamente relevante (10/10).
 
 ## Estrutura do projeto
 
-```bash
-docs/          # documentação do projeto
-backend/       # API e regras de negócio
-frontend/      # interface do sistema
-.github/       # automações e CI/CD
-```
+    docs/          # documentação do projeto
+    backend/       # API, regras de negócio e motor de cálculo
+    frontend/      # interface web do sistema
+    .github/       # automações e integração contínua
+
 ---
 
 ## Segurança
 
-O sistema será desenvolvido considerando boas práticas de segurança da informação:
+O sistema será desenvolvido considerando boas práticas de segurança da informação, especialmente por lidar com dados sensíveis relacionados a processos jurídicos.
 
-- Uso de HTTPS
+Entre os cuidados previstos estão:
 
-- Autenticação segura
+- uso de HTTPS;
+- autenticação segura;
+- controle de acesso por usuário;
+- isolamento de dados entre escritórios;
+- armazenamento seguro de senhas com hash;
+- separação lógica dos dados por escritório;
+- validação de permissões para acesso a processos e prazos.
 
-- Controle de acesso por usuário
-
-- Isolamento de dados entre escritórios
-
-Além disso, o projeto será inspirado nos princípios da ISO 27001.
+Além disso, o projeto será inspirado em princípios de segurança da informação, como confidencialidade, integridade e disponibilidade, alinhando-se a boas práticas presentes na ISO 27001.
 
 ---
 
-## Protótipo (em desenvolvimento)
+## Protótipo visual
 
-A interface web do sistema será desenvolvida em React, com foco em clareza visual, priorização de tarefas e melhor experiência de uso para advogados e escritórios.
+Nesta etapa, foram elaboradas telas estáticas de média fidelidade para representar o fluxo principal do sistema.
 
-Nas próximas etapas, serão construídas as telas principais de dashboard, cadastro de processos, visualização de prazos e alertas críticos.
+Os mockups contemplam telas como:
+
+- login;
+- dashboard de prazos;
+- cadastro de prazo;
+- upload e revisão de intimação;
+- detalhes do prazo;
+- gestão de usuários.
+
+A versão navegável no Figma será estruturada em etapa posterior, com conexão entre as telas e simulação completa do fluxo principal.
 
 ---
 
 ## Status do projeto
 
-Projeto em desenvolvimento acadêmico na disciplina PAC Extensionista VII, atualmente na fase de levantamento de requisitos, validação do problema e definição arquitetural.
+Projeto acadêmico em desenvolvimento na disciplina PAC Extensionista VII.
+
+A entrega atual contempla os capítulos 1 a 5 do modelo de RFC, incluindo:
+
+- visão do produto;
+- validação do problema;
+- análise de soluções existentes;
+- engenharia de requisitos;
+- fluxos do sistema;
+- mockups e experiência do usuário;
+- arquitetura inicial;
+- modelo de dados;
+- principais componentes;
+- stack tecnológica.
 
 Próximos passos:
-- detalhamento completo do RFC
-- implementação do motor de cálculo de prazos
-- integração da análise de documentos com IA
-- desenvolvimento da interface em React
-- evolução dos testes e da arquitetura do sistema
+
+- evolução do protótipo navegável;
+- implementação do motor de cálculo de prazos;
+- integração da análise de documentos com IA;
+- desenvolvimento da interface em React;
+- implementação da API em FastAPI;
+- evolução dos testes e da arquitetura do sistema.
 
 ---
 
