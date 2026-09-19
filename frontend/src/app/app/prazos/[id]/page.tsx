@@ -1,7 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import {
   Pencil, CheckCircle2, RotateCcw, XCircle, Paperclip, Trash2, MessageSquarePlus,
   FileText, History, ShieldAlert, Building2,
@@ -36,7 +36,6 @@ function formatSize(bytes: number) {
 export default function PrazoDetalhePage() {
   const params = useParams<{ id: string }>();
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
-  const router = useRouter();
   const { scope, scopeKind, user, membership, office } = useScope();
   const { getDeadline, commentsFor, attachmentsFor, historyFor, setStatus, addComment, addAttachment, removeAttachment, transferDeadlineToOffice } = useData();
   const toast = useToast();

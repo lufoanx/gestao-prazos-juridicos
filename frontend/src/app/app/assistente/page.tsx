@@ -52,7 +52,6 @@ export default function AssistentePage() {
     cancelPending();
     const store = readStore();
     setConv({ key: convKey, msgs: Array.isArray(store[convKey]) ? store[convKey] : [] });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [convKey, hydrated]);
 
   // Persiste a conversa sob a SUA própria chave (nunca sob outra).

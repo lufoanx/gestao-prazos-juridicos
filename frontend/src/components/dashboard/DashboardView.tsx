@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useMemo } from "react";
 import {
   AlertTriangle, CalendarClock, CalendarDays, FileScan, ListChecks,
@@ -7,6 +8,7 @@ import {
 import { useScope } from "@/context/ScopeContext";
 import { useData } from "@/context/DataContext";
 import { canReadDeadline } from "@/lib/access.mjs";
+import { canAccessIntimation } from "@/lib/deadline-guards.mjs";
 import { buildDashboard } from "@/lib/dashboard.mjs";
 import { getDemoToday } from "@/lib/clock.mjs";
 import { URGENCY_META } from "@/lib/urgency.mjs";
@@ -40,9 +42,14 @@ export function DashboardView() {
     const deadlines = allDeadlines
       .filter((d) => inScope(d, scope))
       .filter((d) => canReadDeadline(user.id, membership, d));
-    const intimations = allIntimations.filter((i) => inScope(i, scope));
+    // Intimações seguem a MESMA política das telas de intimações/assistente:
+    // isolamento por ambiente + permissão + visibilidade (com uploader e responsável do
+    // prazo vinculado). Usuário sem permissão não vê arquivo/título/data nem contadores.
+    const gctx = { scope, scopeKind, userId: user.id, membership };
+    const responsibleOf = (deadlineId: string) => allDeadlines.find((d) => d.id === deadlineId)?.responsibleId;
+    const intimations = allIntimations.filter((i) => canAccessIntimation(i, gctx, responsibleOf));
     return buildDashboard(deadlines, intimations, today);
-  }, [allDeadlines, allIntimations, scope, user.id, membership, today]);
+  }, [allDeadlines, allIntimations, scope, scopeKind, user.id, membership, today]);
 
   const { urgent, agenda, reviews, overview } = data;
   const scopeName = scopeKind === "office"
@@ -66,16 +73,16 @@ export function DashboardView() {
         </div>
         <div className="page-head__actions">
           {canManageOffice ? (
-            <a className="btn btn--secondary" href="/app/escritorio">
+            <Link className="btn btn--secondary" href="/app/escritorio">
               <Building2 size={17} aria-hidden /> Gerenciar escritório
-            </a>
+            </Link>
           ) : null}
-          <a className="btn btn--teal" href="/app/intimacoes/upload">
+          <Link className="btn btn--teal" href="/app/intimacoes/upload">
             <Upload size={17} aria-hidden /> Enviar intimação
-          </a>
-          <a className="btn btn--primary" href="/app/prazos/novo">
+          </Link>
+          <Link className="btn btn--primary" href="/app/prazos/novo">
             <Plus size={17} aria-hidden /> Novo prazo
-          </a>
+          </Link>
         </div>
       </div>
 
@@ -107,9 +114,9 @@ export function DashboardView() {
           </div>
           {urgent.length > 0 ? (
             <div className="list-foot">
-              <a className="btn btn--ghost btn--sm" href="/app/prazos">
+              <Link className="btn btn--ghost btn--sm" href="/app/prazos">
                 Ver todos os prazos <ArrowRight size={15} aria-hidden />
-              </a>
+              </Link>
             </div>
           ) : null}
         </section>
@@ -159,7 +166,7 @@ export function DashboardView() {
               </EmptyState>
             ) : (
               reviews.map((i) => (
-                <a className="review-item" key={i.id} href="/app/intimacoes">
+                <Link className="review-item" key={i.id} href="/app/intimacoes">
                   <span className="review-item__icon"><FileScan size={20} aria-hidden /></span>
                   <span className="review-item__main">
                     <span className="review-item__name" style={{ display: "block" }}>
@@ -171,15 +178,15 @@ export function DashboardView() {
                     </span>
                   </span>
                   <Badge tone={REVIEW_META[i.status].tone}>{REVIEW_META[i.status].label}</Badge>
-                </a>
+                </Link>
               ))
             )}
           </div>
           {reviews.length > 0 ? (
             <div className="list-foot">
-              <a className="btn btn--ghost btn--sm" href="/app/intimacoes">
+              <Link className="btn btn--ghost btn--sm" href="/app/intimacoes">
                 Abrir intimações <ArrowRight size={15} aria-hidden />
-              </a>
+              </Link>
             </div>
           ) : null}
         </section>
@@ -217,7 +224,7 @@ export function DashboardView() {
 function UrgentRow({ d, today }: { d: AnnotatedDeadline; today: string }) {
   const meta = URGENCY_META[d.urgency.level];
   return (
-    <a className="deadline-row" href="/app/prazos">
+    <Link className="deadline-row" href="/app/prazos">
       <span className="deadline-row__main">
         <span className="deadline-row__title" style={{ display: "block" }}>{d.title}</span>
         <span className="deadline-row__meta">
@@ -234,6 +241,6 @@ function UrgentRow({ d, today }: { d: AnnotatedDeadline; today: string }) {
         <span className="deadline-row__due-date" style={{ display: "block" }}>{formatCivil(d.dueDate)}</span>
         <span className="deadline-row__due-rel">{relativeToToday(d.dueDate, today)}</span>
       </span>
-    </a>
+    </Link>
   );
 }

@@ -16,5 +16,5 @@ export function permissionForOp(op: DeadlineOp): Permission | null;
 export function canWriteDeadline(deadline: Deadline, ctx: WriteContext, perm: Permission): boolean;
 export function canCreateDeadline(ctx: WriteContext): boolean;
 export function canPerformOp(deadline: Deadline, ctx: WriteContext, op: DeadlineOp): boolean;
-export function canAccessIntimation(intimation: { scope: Scope; suggestedResponsibleId?: string; deadlineId?: string }, ctx: WriteContext, resolveResponsible?: (deadlineId: string) => string | undefined): boolean;
+export function canAccessIntimation(intimation: { scope: Scope; createdBy?: string; suggestedResponsibleId?: string; deadlineId?: string }, ctx: WriteContext, resolveResponsible?: (deadlineId: string) => string | undefined): boolean;
 export function canWriteIntimation(intimation: { scope: Scope }, ctx: WriteContext, perm: Permission): boolean;

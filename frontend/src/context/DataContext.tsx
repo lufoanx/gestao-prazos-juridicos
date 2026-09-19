@@ -2,7 +2,7 @@
 import {
   createContext, useContext, useState, useEffect, useMemo, useCallback, type ReactNode,
 } from "react";
-import type { Deadline, Comment, Attachment, AuditEvent, Notification, Intimation, Permission } from "@/types/domain";
+import type { Deadline, Comment, Attachment, AuditEvent, Notification, Intimation } from "@/types/domain";
 import {
   demoDeadlines, demoComments, demoAttachments, demoAudit, demoNotifications, demoIntimations,
 } from "@/mocks/data";
@@ -94,7 +94,6 @@ function loadStored(): PersistedData | null {
 
 export function DataProvider({ children }: { children: ReactNode }) {
   const { user, scope, scopeKind, membership } = useScope();
-  const actor = user.id;
   const today = getDemoToday();
 
   const [data, setData] = useState<PersistedData>(() => emptyData());
@@ -179,7 +178,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
     if (res.id === null) return null;
     setData(res.state);
     return res.id;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, ctx, deps]);
 
   const processIntimation = useCallback((id: string, outcome: "success" | "fail", suggestion: IntimationSuggestion | null) =>

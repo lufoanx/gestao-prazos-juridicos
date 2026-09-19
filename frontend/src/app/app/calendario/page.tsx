@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -54,7 +55,7 @@ export default function CalendarioPage() {
           <p className="page-head__subtitle">{scopeKind === "office" ? "Escritório" : "Ambiente pessoal"} · vencimentos dos prazos</p>
         </div>
         <div className="page-head__actions">
-          <a className="btn btn--secondary" href="/app/prazos">Ver lista</a>
+          <Link className="btn btn--secondary" href="/app/prazos">Ver lista</Link>
         </div>
       </div>
 

@@ -35,7 +35,8 @@ function loadStored(): OrgState | null {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const p = JSON.parse(raw) as Persisted;
-    if (!p || p.version !== ORG_VERSION || !Array.isArray(p.offices)) return null;
+    // Migração: versão futura/ inválida → fallback; igual/anterior → preserva o roster.
+    if (!p || typeof p.version !== "number" || p.version > ORG_VERSION || !Array.isArray(p.offices)) return null;
     return {
       offices: p.offices, memberships: p.memberships || [], invites: p.invites || [], joinRequests: p.joinRequests || [],
       leftKeys: p.leftKeys || [],

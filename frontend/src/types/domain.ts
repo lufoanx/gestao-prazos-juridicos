@@ -61,6 +61,8 @@ export interface Intimation {
   fileName: string;
   status: "sent" | "processing" | "awaiting_review" | "reviewed" | "failed";
   receivedAt: string;   // data civil YYYY-MM-DD
+  /** Quem enviou (uploader). Permite acompanhar/remover o item ainda em processamento. */
+  createdBy?: string;
   /** Dados SUGERIDOS por processamento SIMULADO — não derivam do PDF e exigem conferência humana. */
   suggestedTitle?: string;
   suggestedCaseNumber?: string;

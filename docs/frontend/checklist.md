@@ -227,6 +227,22 @@ Estado inicial: base pronta; nenhuma tela de produto concluída.
       /onboarding · /onboarding/autonomo · /onboarding/escritorio · /convite/[token] ·
       /solicitar-ingresso · /_not-found.
       Gates: `npm test` 133/133 · `npm run typecheck` OK · `npm run build` OK (27 rotas).
+  - Etapa 7 (correções de code review do PR) — CONCLUÍDA:
+      Dashboard aplica canAccessIntimation às intimações (isolamento + permissão +
+      visibilidade + responsável do prazo vinculado). Intimação em processing: campo
+      createdBy permite ao autor acompanhar/remover o item pendente sem afrouxar
+      isolamento. .gitignore: regras Python ancoradas a /backend e salvaguarda
+      !/frontend/src/** (git check-ignore confirma que frontend/src/lib não é ignorado);
+      + backups/temp/.env.example. session KNOWN_PERMISSIONS derivado de ADMIN+MEMBER.
+      Migração: sanitizeStored migra versões ≤ atual preservando registros válidos
+      (futura/ inválida → fallback); mesma tolerância em Org/Settings. ESLint configurado
+      (eslint + eslint-config-next 15.5.25, flat config, script lint) e lint LIMPO após
+      corrigir <a>→<Link> e remover imports/vars e diretivas eslint-disable obsoletas.
+      checkJs global revertido (684 erros implicit-any sob strict; converter .mjs→.ts
+      quebraria node --test) — mitigado por tests/contracts.test.mjs (contrato .d.mts↔.mjs).
+      Busca global via helper puro buildSearchHref (trata espaços/acentos). assets/
+      references: 32 capturas mantidas (sem duplicatas byte-idênticas; documentam o design).
+      Gates: `npm test` 158/158 · `npm run typecheck` OK · `npm run lint` OK · `npm run build` OK (27 rotas).
 Por tela: funcionalidade, loading, vazio, erro, sucesso, acessibilidade, desktop/mobile e ausência de botão morto. Rota placeholder não conta.
 Cenários obrigatórios:
 A. Autônomo cria, edita, conclui prazo; dados e contadores consistentes.

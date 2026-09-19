@@ -17,11 +17,10 @@ export const ADMIN_PERMISSIONS = [
 ];
 export const MEMBER_PERMISSIONS = ["deadline.read", "deadline.create", "deadline.complete"];
 
-// Conjunto canônico de permissões válidas (para validar sessões restauradas).
-const KNOWN_PERMISSIONS = new Set([
-  "deadline.read", "deadline.create", "deadline.edit", "deadline.complete",
-  "deadline.transfer", "team.manage", "office.manage",
-]);
+// Conjunto canônico de permissões válidas, DERIVADO das listas canônicas
+// (admin + membro) para não duplicar manualmente. Inclui deadline.edit, usado
+// por permissões personalizadas na gestão de equipe.
+const KNOWN_PERMISSIONS = new Set([...ADMIN_PERMISSIONS, ...MEMBER_PERMISSIONS]);
 const KNOWN_PROFILES = new Set(["autonomo", "office-admin", "office-member"]);
 
 export function defaultSession() {

@@ -8,17 +8,17 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-build/
+/backend/build/
 develop-eggs/
-dist/
-downloads/
+/backend/dist/
+/backend/downloads/
 eggs/
 .eggs/
-lib/
-lib64/
-parts/
+/backend/lib/
+/backend/lib64/
+/backend/parts/
 sdist/
-var/
+/backend/var/
 wheels/
 share/python-wheels/
 *.egg-info/
@@ -73,7 +73,7 @@ docs/_build/
 
 # PyBuilder
 .pybuilder/
-target/
+/backend/target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -210,8 +210,8 @@ __marimo__/
 node_modules/
 .next/
 out/
-build/
-dist/
+/backend/build/
+/backend/dist/
 *.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
@@ -219,3 +219,17 @@ yarn-error.log*
 .pnpm-debug.log*
 .vercel
 .DS_Store
+
+# Salvaguarda: nunca ignorar código-fonte do frontend
+!/frontend/src/
+!/frontend/src/**
+
+# Backups, temporários e exemplos de ambiente
+*.bak
+*.backup
+*.backup.*
+*.tmp
+*~
+*.orig
+!*.env.example
+!.env.example

@@ -11,7 +11,7 @@ import { ShieldAlert } from "lucide-react";
 
 export default function NovoPrazoPage() {
   const router = useRouter();
-  const { scope, scopeKind, user, office, membership } = useScope();
+  const { scopeKind, user, office, membership } = useScope();
   const { createDeadline } = useData();
   const org = useOrg();
   const toast = useToast();

@@ -14,8 +14,9 @@ function loadStore(): Store {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { version: SETTINGS_VERSION, byUser: {} };
     const p = JSON.parse(raw);
-    if (!p || p.version !== SETTINGS_VERSION || typeof p.byUser !== "object") return { version: SETTINGS_VERSION, byUser: {} };
-    return p as Store;
+    // Migração: versão futura/ inválida → padrão; igual/anterior → preserva as prefs.
+    if (!p || typeof p.version !== "number" || p.version > SETTINGS_VERSION || typeof p.byUser !== "object") return { version: SETTINGS_VERSION, byUser: {} };
+    return { version: SETTINGS_VERSION, byUser: p.byUser } as Store;
   } catch { return { version: SETTINGS_VERSION, byUser: {} }; }
 }
 

@@ -11,9 +11,8 @@ export interface NavSection { title?: string; items: NavItem[]; scope?: "office"
 /**
  * Itens de navegação da aplicação (área /app).
  * A seção "Escritório" só aparece com vínculo; cada item exige a permissão
- * correspondente (gestão condicionada a vínculo + permissões).
- * Nesta etapa só o Dashboard está implementado; os demais links levam a
- * páginas-placeholder servidas pelo catch-all (nada de botão morto).
+ * correspondente (gestão condicionada a vínculo + permissões). Todas as telas
+ * estão implementadas; rotas desconhecidas caem em um 404 amigável.
  */
 export const navSections: NavSection[] = [
   {

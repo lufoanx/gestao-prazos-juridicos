@@ -1,6 +1,7 @@
 "use client";
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, CalendarClock } from "lucide-react";
 import { useScope } from "@/context/ScopeContext";
 import { useData } from "@/context/DataContext";
@@ -19,14 +20,20 @@ const STATUS_LABEL: Record<Deadline["status"], string> = { open: "Em aberto", co
 const STATUS_TONE: Record<Deadline["status"], "info" | "success" | "neutral"> = { open: "info", completed: "success", cancelled: "neutral" };
 const PER_PAGE = 8;
 
-export default function PrazosPage() {
+function PrazosInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { scope, scopeKind, user, membership } = useScope();
   const { deadlines } = useData();
   const today = getDemoToday();
 
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(searchParams.get("q") ?? "");
   const { settings } = useSettings();
+  // Busca vinda do cabeçalho (?q=): preenche o campo ao chegar/alterar o parâmetro.
+  useEffect(() => {
+    const q = searchParams.get("q");
+    if (q !== null) setQuery(q);
+  }, [searchParams]);
   const [status, setStatus] = useState<"all" | "open" | "completed" | "cancelled">(settings.showCompleted ? "all" : "open");
   const [urgency, setUrgency] = useState<"all" | "overdue" | "today" | "soon" | "upcoming">("all");
   const [area, setArea] = useState("all");
@@ -94,7 +101,7 @@ export default function PrazosPage() {
         </div>
         {canCreate ? (
           <div className="page-head__actions">
-            <a className="btn btn--primary" href="/app/prazos/novo"><Plus size={17} aria-hidden /> Novo prazo</a>
+            <Link className="btn btn--primary" href="/app/prazos/novo"><Plus size={17} aria-hidden /> Novo prazo</Link>
           </div>
         ) : null}
       </div>
@@ -150,5 +157,13 @@ export default function PrazosPage() {
         </>
       )}
     </div>
+  );
+}
+
+export default function PrazosPage() {
+  return (
+    <Suspense fallback={null}>
+      <PrazosInner />
+    </Suspense>
   );
 }

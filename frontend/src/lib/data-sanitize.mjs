@@ -43,9 +43,17 @@ function keepValid(list, pred) {
  * Sanitiza o payload persistido. Retorna estrutura completa (todos os arrays)
  * quando a versão bate; caso contrário null (payload descartado).
  */
+/**
+ * Sanitiza/migra o payload persistido.
+ * - versão AUSENTE/inválida ou FUTURA (> atual) → null (fallback seguro).
+ * - versão IGUAL ou ANTERIOR (≤ atual) → migração preservando os campos válidos
+ *   (cada registro é validado individualmente; registros inválidos são descartados,
+ *   nunca o conteúdo válido inteiro). A saída é sempre normalizada para a versão atual.
+ */
 export function sanitizeStored(parsed, version) {
   if (!parsed || typeof parsed !== "object") return null;
-  if (parsed.version !== version) return null;
+  const v = parsed.version;
+  if (typeof v !== "number" || v > version) return null;
   return {
     version,
     deadlines: keepValid(parsed.deadlines, isValidDeadline),

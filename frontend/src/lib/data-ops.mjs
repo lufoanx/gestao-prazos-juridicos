@@ -130,6 +130,7 @@ export function opUploadIntimation(state, ctx, file, deps) {
   const id = deps.newId("i");
   const intimation = {
     id, scope: ctx.scope, fileName: String(file.name), status: "processing", receivedAt: deps.today,
+    createdBy: ctx.userId, // uploader acompanha/remove enquanto em processamento
     demoForceFail: !!file.demoForceFail, // desfecho simulado, persistido p/ sobreviver a reload
   };
   return { state: { ...state, intimations: [...(state.intimations || []), intimation] }, id };

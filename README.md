@@ -94,11 +94,11 @@ A solução proposta foi avaliada como altamente relevante (10/10).
 
 ## Documentação
 
-- [RFC do Projeto](docs/RFC.md)
 - [Proposta Inicial](docs/proposta-inicial.md)
 - [Validação do Problema](docs/pesquisa/validacao-problema.md)
 - [Requisitos Funcionais](docs/requisitos/requisitos-funcionais.md)
 - [Requisitos Não Funcionais](docs/requisitos/requisitos-nao-funcionais.md)
+- [Frontend (protótipo navegável) — README](frontend/README.md)
 
 ---
 
@@ -128,24 +128,45 @@ Além disso, o projeto será inspirado nos princípios da ISO 27001.
 
 ---
 
-## Protótipo (em desenvolvimento)
+## Protótipo — frontend navegável (concluído)
 
-A interface web do sistema será desenvolvida em React, com foco em clareza visual, priorização de tarefas e melhor experiência de uso para advogados e escritórios.
+A interface web foi desenvolvida em **React + Next.js + TypeScript (CSS puro)** e está
+**navegável e concluída** como protótipo, com foco em clareza visual e priorização de
+tarefas. As telas principais já existem e funcionam de ponta a ponta de forma
+**demonstrativa**: landing, autenticação e onboarding simulados, dashboard, prazos
+(lista, calendário, cadastro/edição/detalhe/conclusão, comentários, anexos e histórico),
+intimações (upload, processamento simulado e revisão obrigatória), notificações,
+escritório/equipe (permissões, convites, solicitações, transferência e saída), perfil,
+configurações e assistente demonstrativo.
 
-Nas próximas etapas, serão construídas as telas principais de dashboard, cadastro de processos, visualização de prazos e alertas críticos.
+A **persistência é local/demonstrativa** (no navegador, via localStorage) — não há
+servidor. Detalhes de instalação, execução, testes, credenciais demonstrativas,
+funcionalidades e limitações estão no [README do frontend](frontend/README.md).
+
+### Ainda são etapas futuras
+- Backend (API) e regras de negócio no servidor
+- Banco de dados e persistência real
+- Autenticação e autorização reais (sessões, tokens, RBAC no servidor)
+- IA/OCR para análise de intimações em PDF
+- Cálculo de prazos processuais oficial
+- Integrações externas (tribunais, e-mail, Google, etc.)
+- Testes de segurança e hardening (ISO 27001, HTTPS, headers)
+- Infraestrutura, CI/CD e observabilidade
 
 ---
 
 ## Status do projeto
 
-Projeto em desenvolvimento acadêmico na disciplina PAC Extensionista VII, atualmente na fase de levantamento de requisitos, validação do problema e definição arquitetural.
+Projeto acadêmico da disciplina PAC Extensionista VII. O **protótipo de frontend está
+concluído e navegável** (demonstrativo, sem backend). Requisitos e validação do problema
+foram levantados nas etapas anteriores.
 
 Próximos passos:
-- detalhamento completo do RFC
-- implementação do motor de cálculo de prazos
-- integração da análise de documentos com IA
-- desenvolvimento da interface em React
-- evolução dos testes e da arquitetura do sistema
+- implementação do backend (API) e do banco de dados
+- autenticação/autorização reais e testes de segurança
+- motor de cálculo de prazos e análise de intimações com IA/OCR
+- integrações externas e infraestrutura (CI/CD, deploy)
+- evolução da suíte de testes (incluindo integração e end-to-end)
 
 ---
 

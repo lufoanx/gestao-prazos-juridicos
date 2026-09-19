@@ -67,7 +67,7 @@ export default function OnboardingEscritorioPage() {
     >
       <div className="form-note">
         <Info size={16} aria-hidden />
-        <span>Criação demonstrativa: o escritório existe apenas nesta sessão. Convites e permissões detalhadas chegam nas próximas etapas.</span>
+        <span>Criação demonstrativa: o escritório e a equipe são simulados neste navegador (sem backend). Você já pode convidar pessoas e definir permissões na tela de Equipe.</span>
       </div>
       <form className="auth__form" onSubmit={submit} noValidate>
         <Input

@@ -1,7 +1,8 @@
 "use client";
+import { buildSearchHref } from "@/lib/search.mjs";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Menu, Search, Bell, LogOut, BellOff } from "lucide-react";
+import { Menu, Search, Bell, BellOff } from "lucide-react";
 import { useScope } from "@/context/ScopeContext";
 import { useSession } from "@/context/SessionContext";
 import { useData } from "@/context/DataContext";
@@ -11,7 +12,7 @@ import { Logo } from "@/components/brand/Logo";
 import { ScopeSwitcher } from "./ScopeSwitcher";
 import { SidebarNav } from "./Sidebar";
 import {
-  Avatar, Badge, Button, Drawer, EmptyState, ConfirmDialog, useToast,
+  Avatar, Badge, Button, Drawer, EmptyState, ConfirmDialog,
 } from "@/components/ui";
 
 function inScope(n: Notification, scope: Scope) {
@@ -23,12 +24,12 @@ function inScope(n: Notification, scope: Scope) {
 
 export function Header() {
   const { user, membership, scope, scopeKind, office } = useScope();
-  const toast = useToast();
   const router = useRouter();
   const { reset } = useSession();
   const [navOpen, setNavOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [confirmOut, setConfirmOut] = useState(false);
+  const [search, setSearch] = useState("");
 
   // Notificações do ambiente atual — recalculadas quando o escopo/dados mudam.
   const { notifications: allNotifications, markNotificationRead, markAllNotificationsRead } = useData();
@@ -51,17 +52,21 @@ export function Header() {
         <Menu size={20} aria-hidden />
       </button>
 
-      <div className="app-header__search">
+      <form
+        className="app-header__search" role="search"
+        onSubmit={(e) => {
+          e.preventDefault();
+          router.push(buildSearchHref(search));
+        }}
+      >
         <Search size={16} aria-hidden />
         <label htmlFor="global-search" className="sr-only">Buscar prazos</label>
         <input
           id="global-search" className="input" type="search"
           placeholder="Buscar prazos, processos…"
-          onKeyDown={(e) => {
-            if (e.key === "Enter") toast.info("Busca demonstrativa", "A busca será conectada em etapa posterior.");
-          }}
+          value={search} onChange={(e) => setSearch(e.target.value)}
         />
-      </div>
+      </form>
 
       <div className="app-header__spacer" />
 

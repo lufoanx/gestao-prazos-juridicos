@@ -57,6 +57,8 @@ export function canAccessIntimation(intimation, ctx, resolveResponsible) {
   if (!ctx.membership
     || ctx.membership.officeId !== ctx.scope.officeId
     || !ctx.membership.permissions.includes("deadline.read")) return false;
+  // O autor do envio acompanha/remove o próprio item mesmo em processamento.
+  if (intimation.createdBy && intimation.createdBy === ctx.userId) return true;
   // Visibilidade "all": vê todas as intimações do escritório.
   if (ctx.membership.visibility === "all") return true;
   // Visibilidade "assigned": só as suas — responsável sugerido OU prazo vinculado dele.
