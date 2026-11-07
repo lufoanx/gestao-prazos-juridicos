@@ -11,14 +11,32 @@ são preservados. GET /api/health é mantido como ALIAS LEGADO de compatibilidad
 """
 from __future__ import annotations
 
-from fastapi import FastAPI
+from typing import Annotated
+
+from fastapi import FastAPI, Query
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import AfterValidator
 
 from app.api.router import api_v1_router
 from app.core.config import get_settings
 from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging, get_logger
-from app.services.prazo_service import calcular_prazo
+from app.services.prazo_service import EntradaPrazoInvalidaError, calcular_prazo, validar_data_inicial
+
+
+def _data_inicial_valida(valor: str) -> str:
+    # Reaproveita a regra do serviço (fonte única); o ValueError vira 422 padronizado.
+    validar_data_inicial(valor)
+    return valor
+
+
+DataInicialQuery = Annotated[
+    str,
+    Query(description="Data inicial no formato DD/MM/AAAA."),
+    AfterValidator(_data_inicial_valida),
+]
+DiasQuery = Annotated[int, Query(ge=1, description="Quantidade de dias úteis (inteiro >= 1).")]
 
 
 def create_app() -> FastAPI:
@@ -69,9 +87,15 @@ def create_app() -> FastAPI:
         return {"message": "API do sistema de prazos jurídicos"}
 
     @app.get("/calcular-prazo", tags=["legacy"])
-    def calcular(data_inicial: str, dias: int):
+    def calcular(data_inicial: DataInicialQuery, dias: DiasQuery):
         # Observação: cálculo demonstrativo pré-existente; NÃO é cálculo processual oficial.
-        resultado = calcular_prazo(data_inicial, dias)
+        # Entradas inválidas → 422 no formato padronizado (Issue #3), nunca 500.
+        try:
+            resultado = calcular_prazo(data_inicial, dias)
+        except EntradaPrazoInvalidaError as exc:
+            raise RequestValidationError(
+                [{"type": "value_error", "loc": ("query", exc.campo), "msg": exc.mensagem}]
+            ) from exc
         return {"data_inicial": data_inicial, "dias": dias, "data_final": resultado}
 
     logger.info("app_ready environment=%s api_base=%s", settings.environment, settings.api_base)

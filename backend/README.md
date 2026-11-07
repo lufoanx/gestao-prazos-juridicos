@@ -75,6 +75,18 @@ GET /api/v1/health  ->  200
 Alias **legado** de compatibilidade (mesmo corpo): `GET /api/health` — o contrato
 oficial é `/api/v1/health`.
 
+## Endpoint legado `/calcular-prazo` — validação (Issue #3)
+```
+GET /calcular-prazo?data_inicial=01/12/2026&dias=5  ->  200
+{ "data_inicial": "01/12/2026", "dias": 5, "data_final": "08/12/2026" }
+```
+- `data_inicial` deve estar em `DD/MM/AAAA` e ser uma data existente (ex.: `31/02/2026` é rejeitada).
+- `dias` deve ser inteiro `>= 1`. Não há limite máximo arbitrário; só é rejeitado
+  o valor cujo resultado ultrapassaria o calendário suportado (31/12/9999).
+- Entradas inválidas retornam **422** no formato padronizado, sem detalhes internos:
+  `{"error": {"code": "validation_error", "message": "Dados inválidos.", "details": [{"field": "query.dias", "message": "..."}]}}`.
+- A mesma regra existe no serviço (`EntradaPrazoInvalidaError` em `app/services/prazo_service.py`).
+
 ## Configuração (variáveis de ambiente)
 Copie `.env.example` para `.env` (nenhum segredo necessário nesta etapa):
 - `SERVICE_NAME` (padrão `prazoai-backend`)
