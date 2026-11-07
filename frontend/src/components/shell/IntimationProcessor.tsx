@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useScope } from "@/context/ScopeContext";
 import { useData } from "@/context/DataContext";
-import { canWriteIntimation } from "@/lib/deadline-guards.mjs";
+import { canWriteIntimation, makeResponsibleResolver } from "@/lib/deadline-guards.mjs";
 import { getDemoToday } from "@/lib/clock.mjs";
 import { addDays } from "@/lib/dates.mjs";
 import type { IntimationSuggestion } from "@/lib/data-ops.d.mts";
@@ -36,13 +36,14 @@ function simulateExtraction(responsibleId: string): IntimationSuggestion {
  */
 export function IntimationProcessor() {
   const { scope, scopeKind, user, membership } = useScope();
-  const { intimations, processIntimation } = useData();
+  const { intimations, deadlines, processIntimation } = useData();
   const ctx = useMemo(() => ({ scope, scopeKind, userId: user.id, membership }), [scope, scopeKind, user.id, membership]);
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   useEffect(() => {
     const map = timers.current;
-    const pending = intimations.filter((i) => i.status === "processing" && canWriteIntimation(i, ctx, "deadline.create"));
+    const resolve = makeResponsibleResolver(deadlines, ctx.scope);
+    const pending = intimations.filter((i) => i.status === "processing" && canWriteIntimation(i, ctx, "deadline.create", resolve));
     const pendingIds = new Set(pending.map((i) => i.id));
 
     // Cancela timers de itens que saíram de "processing" ou do ambiente atual.
@@ -61,7 +62,7 @@ export function IntimationProcessor() {
       map.set(intim.id, t);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [intimations, ctx]);
+  }, [intimations, deadlines, ctx]);
 
   // Limpa todos os timers ao desmontar.
   useEffect(() => {

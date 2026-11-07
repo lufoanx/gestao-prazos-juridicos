@@ -2,7 +2,7 @@
 // Fonte única usada pelo DataContext e pelos testes. Cada operação aplica a guarda
 // compartilhada; quando bloqueada, retorna o MESMO estado (sem alterar dados nem
 // histórico). Dependências (newId, today) são injetadas para testes determinísticos.
-import { canWriteDeadline, canCreateDeadline, permissionForOp, canWriteIntimation } from "./deadline-guards.mjs";
+import { canWriteDeadline, canCreateDeadline, permissionForOp, canWriteIntimation, makeResponsibleResolver } from "./deadline-guards.mjs";
 import { sanitizePatch } from "./data-sanitize.mjs";
 
 function mergeById(seeds, overrides) {
@@ -20,6 +20,9 @@ const mkAudit = (ctx, deps, deadlineId, action, details) =>
   ({ id: deps.newId("h"), deadlineId, actorId: ctx.userId, action, createdAt: deps.today, details });
 
 const findTarget = (state, seeds, id) => mergeById(seeds.deadlines, state.deadlines).find((d) => d.id === id);
+// Resolver do responsável do prazo vinculado (sementes + persistido, só do ambiente atual).
+const responsibleResolver = (state, seeds, ctx) =>
+  makeResponsibleResolver(mergeById(seeds?.deadlines ?? [], state.deadlines ?? []), ctx.scope);
 
 /** Cria prazo no ambiente atual. Retorna { state, id } (id null se bloqueado). */
 export function opCreateDeadline(state, ctx, input, deps) {
@@ -139,7 +142,7 @@ export function opUploadIntimation(state, ctx, file, deps) {
 /** Conclui o processamento SIMULADO: sucesso (awaiting_review + sugestões) ou falha. */
 export function opProcessIntimation(state, ctx, id, outcome, suggestion, deps, seeds) {
   const current = findIntimation(state, seeds, id);
-  if (!current || !canWriteIntimation(current, ctx, permissionForOp("create"))) return state;
+  if (!current || !canWriteIntimation(current, ctx, permissionForOp("create"), responsibleResolver(state, seeds, ctx))) return state;
   if (current.status !== "processing") return state; // só processa o que está processando
   const updated = outcome === "success"
     ? {
@@ -158,7 +161,7 @@ export function opProcessIntimation(state, ctx, id, outcome, suggestion, deps, s
 /** Nova tentativa: falha → processing. Limpa o desfecho forçado (reprocessa até sucesso). */
 export function opRetryIntimation(state, ctx, id, deps, seeds) {
   const current = findIntimation(state, seeds, id);
-  if (!current || !canWriteIntimation(current, ctx, permissionForOp("create"))) return state;
+  if (!current || !canWriteIntimation(current, ctx, permissionForOp("create"), responsibleResolver(state, seeds, ctx))) return state;
   if (current.status !== "failed") return state;
   return { ...state, intimations: upsertIntimation(state.intimations || [], { ...current, status: "processing", demoForceFail: false }) };
 }
@@ -166,7 +169,7 @@ export function opRetryIntimation(state, ctx, id, deps, seeds) {
 /** Remove intimação (não confirmada). Reviewed não pode ser removida. */
 export function opRemoveIntimation(state, ctx, id, deps, seeds) {
   const current = findIntimation(state, seeds, id);
-  if (!current || !canWriteIntimation(current, ctx, permissionForOp("create"))) return state;
+  if (!current || !canWriteIntimation(current, ctx, permissionForOp("create"), responsibleResolver(state, seeds, ctx))) return state;
   if (current.status === "reviewed") return state; // preserva vínculo com prazo criado
   return {
     ...state,
@@ -182,7 +185,7 @@ export function opRemoveIntimation(state, ctx, id, deps, seeds) {
  */
 export function opConfirmIntimationReview(state, ctx, id, review, deps, seeds) {
   const current = findIntimation(state, seeds, id);
-  if (!current || !canWriteIntimation(current, ctx, permissionForOp("create"))) return { state, deadlineId: null };
+  if (!current || !canWriteIntimation(current, ctx, permissionForOp("create"), responsibleResolver(state, seeds, ctx))) return { state, deadlineId: null };
   // Duplicação: já confirmada.
   if (current.status === "reviewed" || current.deadlineId) return { state, deadlineId: current.deadlineId ?? null };
   if (current.status !== "awaiting_review") return { state, deadlineId: null };

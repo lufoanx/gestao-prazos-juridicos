@@ -1,21 +1,44 @@
+"""Issue #3 — validação de entrada em /calcular-prazo.
+
+Cenários cobertos (conforme revisão do mantenedor):
+- formato diferente de DD/MM/AAAA;
+- data inexistente no calendário (ex.: 31/02/2026);
+- string vazia;
+- dias = 0 e dias negativo;
+- entrada válida.
+
+Entradas inválidas retornam 422 no formato padronizado da aplicação
+({"error": {"code": "validation_error", ...}}), o mesmo dos demais DTOs.
+"""
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
+import app.core.config as config_module
+from app.main import create_app
 from app.services.prazo_service import calcular_prazo
 
-client = TestClient(app)
+
+@pytest.fixture
+def client():
+    config_module.get_settings.cache_clear()
+    return TestClient(create_app(), raise_server_exceptions=False)
 
 
-def obter_resposta(data_inicial: str, dias: int):
+def obter_resposta(client: TestClient, data_inicial: str, dias: int | str):
     return client.get(
         "/calcular-prazo",
         params={"data_inicial": data_inicial, "dias": dias},
     )
 
 
-def test_calcula_prazo_em_dias_uteis():
-    resposta = obter_resposta("02/11/2026", 5)
+def campos_invalidos(resposta) -> list[str]:
+    """Campos apontados no erro padronizado de validação."""
+    detalhes = resposta.json()["error"]["details"]
+    return [item["field"] for item in detalhes]
+
+
+def test_calcula_prazo_em_dias_uteis(client):
+    resposta = obter_resposta(client, "02/11/2026", 5)
 
     assert resposta.status_code == 200
     assert resposta.json() == {
@@ -29,47 +52,53 @@ def test_calcula_prazo_em_dias_uteis():
     "data_inicial",
     ["2026-11-07", "7/11/2026", "07-11-2026", "07/11/26"],
 )
-def test_data_em_formato_invalido_retorna_422(data_inicial):
-    resposta = obter_resposta(data_inicial, 5)
+def test_data_em_formato_invalido_retorna_422(client, data_inicial):
+    resposta = obter_resposta(client, data_inicial, 5)
 
     assert resposta.status_code == 422
-    erro = resposta.json()["detail"][0]
-    assert erro["loc"] == ["query", "data_inicial"]
-    assert "DD/MM/AAAA" in erro["msg"]
+    assert resposta.json()["error"]["code"] == "validation_error"
+    assert "query.data_inicial" in campos_invalidos(resposta)
 
 
 @pytest.mark.parametrize("data_inicial", ["31/02/2026", "29/02/2025"])
-def test_data_inexistente_retorna_422(data_inicial):
-    resposta = obter_resposta(data_inicial, 5)
+def test_data_inexistente_retorna_422(client, data_inicial):
+    resposta = obter_resposta(client, data_inicial, 5)
 
     assert resposta.status_code == 422
-    erro = resposta.json()["detail"][0]
-    assert erro["loc"] == ["query", "data_inicial"]
-    assert "não existe" in erro["msg"]
+    assert resposta.json()["error"]["code"] == "validation_error"
+    assert "query.data_inicial" in campos_invalidos(resposta)
 
 
-def test_data_vazia_retorna_422():
-    resposta = obter_resposta("", 5)
-
-    assert resposta.status_code == 422
-    assert resposta.json()["detail"][0]["loc"] == ["query", "data_inicial"]
-
-
-def test_dias_zero_retorna_422():
-    resposta = obter_resposta("06/11/2026", 0)
+def test_data_vazia_retorna_422(client):
+    resposta = obter_resposta(client, "", 5)
 
     assert resposta.status_code == 422
-    assert resposta.json()["detail"][0]["loc"] == ["query", "dias"]
+    assert resposta.json()["error"]["code"] == "validation_error"
+    assert "query.data_inicial" in campos_invalidos(resposta)
 
 
-def test_dias_negativos_retorna_422():
-    resposta = obter_resposta("07/11/2026", -5)
+def test_dias_zero_retorna_422(client):
+    resposta = obter_resposta(client, "06/11/2026", 0)
 
     assert resposta.status_code == 422
-    assert resposta.json()["detail"][0]["loc"] == ["query", "dias"]
+    assert resposta.json()["error"]["code"] == "validation_error"
+    assert "query.dias" in campos_invalidos(resposta)
+
+
+def test_dias_negativos_retorna_422(client):
+    resposta = obter_resposta(client, "07/11/2026", -5)
+
+    assert resposta.status_code == 422
+    assert resposta.json()["error"]["code"] == "validation_error"
+    assert "query.dias" in campos_invalidos(resposta)
 
 
 @pytest.mark.parametrize("dias", [0, -1])
 def test_servico_rejeita_dias_nao_positivo(dias):
     with pytest.raises(ValueError):
         calcular_prazo("07/11/2026", dias)
+
+
+def test_servico_rejeita_data_inexistente():
+    with pytest.raises(ValueError):
+        calcular_prazo("31/02/2026", 5)

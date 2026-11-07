@@ -5,7 +5,7 @@ import { useScope } from "@/context/ScopeContext";
 import { useData } from "@/context/DataContext";
 import { useSession } from "@/context/SessionContext";
 import { canReadDeadline } from "@/lib/access.mjs";
-import { canAccessIntimation } from "@/lib/deadline-guards.mjs";
+import { canAccessIntimation, makeResponsibleResolver } from "@/lib/deadline-guards.mjs";
 import { buildDashboard } from "@/lib/dashboard.mjs";
 import { getDemoToday } from "@/lib/clock.mjs";
 import { newId } from "@/lib/ids.mjs";
@@ -77,7 +77,7 @@ export default function AssistentePage() {
     };
     const visible = deadlines.filter((d) => inScope(d.scope) && canReadDeadline(user.id, membership, d));
     // Resolve o responsável do prazo vinculado (para visibilidade "assigned").
-    const responsibleOf = (deadlineId: string) => deadlines.find((d) => d.id === deadlineId)?.responsibleId;
+    const responsibleOf = makeResponsibleResolver(deadlines, scope);
     const gctx = { scope, scopeKind, userId: user.id, membership };
     const intis = intimations.filter((i) => canAccessIntimation(i, gctx, responsibleOf));
     const o = buildDashboard(visible, intis, today).overview;
