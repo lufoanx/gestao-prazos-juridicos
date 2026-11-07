@@ -6,7 +6,7 @@ import { AlertTriangle, ShieldAlert, CheckCircle2, Loader2 } from "lucide-react"
 import { useScope } from "@/context/ScopeContext";
 import { useData } from "@/context/DataContext";
 import { useOrg } from "@/context/OrgContext";
-import { canAccessIntimation } from "@/lib/deadline-guards.mjs";
+import { canAccessIntimation, makeResponsibleResolver } from "@/lib/deadline-guards.mjs";
 import { canManageDeadline } from "@/lib/access.mjs";
 import { getDemoToday } from "@/lib/clock.mjs";
 import { demoUsers } from "@/mocks/data";
@@ -19,14 +19,15 @@ export default function RevisaoIntimacaoPage() {
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
   const router = useRouter();
   const { scope, scopeKind, user, office, membership } = useScope();
-  const { getIntimation, confirmIntimationReview, retryIntimation } = useData();
+  const { getIntimation, confirmIntimationReview, retryIntimation, deadlines } = useData();
   const org = useOrg();
   const toast = useToast();
   const [submitting, setSubmitting] = useState(false);
 
   const ctx = useMemo(() => ({ scope, scopeKind, userId: user.id, membership }), [scope, scopeKind, user.id, membership]);
   const intimation = id ? getIntimation(id) : undefined;
-  const access = intimation && canAccessIntimation(intimation, ctx);
+  const resolveResponsible = useMemo(() => makeResponsibleResolver(deadlines, ctx.scope), [deadlines, ctx.scope]);
+  const access = intimation && canAccessIntimation(intimation, ctx, resolveResponsible);
   const canCreate = canManageDeadline(scopeKind, membership, "deadline.create");
 
   if (!intimation || !access) {

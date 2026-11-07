@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { Upload, Inbox } from "lucide-react";
 import { useScope } from "@/context/ScopeContext";
 import { useData } from "@/context/DataContext";
-import { canAccessIntimation } from "@/lib/deadline-guards.mjs";
+import { canAccessIntimation, makeResponsibleResolver } from "@/lib/deadline-guards.mjs";
 import { canManageDeadline } from "@/lib/access.mjs";
 import { formatCivil } from "@/lib/dates.mjs";
 import type { Intimation } from "@/types/domain";
@@ -21,14 +21,17 @@ const STATUS_TONE: Record<Intimation["status"], "neutral" | "info" | "warning" |
 export default function IntimacoesPage() {
   const router = useRouter();
   const { scope, scopeKind, user, membership } = useScope();
-  const { intimations } = useData();
+  const { intimations, deadlines } = useData();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
 
   const ctx = useMemo(() => ({ scope, scopeKind, userId: user.id, membership }), [scope, scopeKind, user.id, membership]);
   const visible = useMemo(
-    () => intimations.filter((i) => canAccessIntimation(i, ctx)),
-    [intimations, ctx]
+    () => {
+      const resolve = makeResponsibleResolver(deadlines, ctx.scope);
+      return intimations.filter((i) => canAccessIntimation(i, ctx, resolve));
+    },
+    [intimations, deadlines, ctx]
   );
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

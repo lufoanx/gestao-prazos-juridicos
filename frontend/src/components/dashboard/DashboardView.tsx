@@ -8,7 +8,7 @@ import {
 import { useScope } from "@/context/ScopeContext";
 import { useData } from "@/context/DataContext";
 import { canReadDeadline } from "@/lib/access.mjs";
-import { canAccessIntimation } from "@/lib/deadline-guards.mjs";
+import { canAccessIntimation, makeResponsibleResolver } from "@/lib/deadline-guards.mjs";
 import { buildDashboard } from "@/lib/dashboard.mjs";
 import { getDemoToday } from "@/lib/clock.mjs";
 import { URGENCY_META } from "@/lib/urgency.mjs";
@@ -46,7 +46,7 @@ export function DashboardView() {
     // isolamento por ambiente + permissão + visibilidade (com uploader e responsável do
     // prazo vinculado). Usuário sem permissão não vê arquivo/título/data nem contadores.
     const gctx = { scope, scopeKind, userId: user.id, membership };
-    const responsibleOf = (deadlineId: string) => allDeadlines.find((d) => d.id === deadlineId)?.responsibleId;
+    const responsibleOf = makeResponsibleResolver(allDeadlines, scope);
     const intimations = allIntimations.filter((i) => canAccessIntimation(i, gctx, responsibleOf));
     return buildDashboard(deadlines, intimations, today);
   }, [allDeadlines, allIntimations, scope, scopeKind, user.id, membership, today]);
