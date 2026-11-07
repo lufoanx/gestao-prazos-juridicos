@@ -90,4 +90,7 @@ Copie `.env.example` para `.env` (nenhum segredo necessário nesta etapa):
 - **Sem segredos** no repositório; `.env` é ignorado pelo `.gitignore`.
 - Endpoints legados `/` e `/calcular-prazo` foram **preservados** (o cálculo
   legado é demonstrativo, não é cálculo processual oficial).
+- `/calcular-prazo` desconsidera sábados, domingos e **feriados nacionais**
+  (Issue #2). Não contempla recesso forense, feriados estaduais/municipais nem
+  calendários de tribunais — ver `docs/backend/05-calculo-de-prazos.md`.
 - Swagger/OpenAPI em `/docs` e `/openapi.json` apenas fora de produção.
