@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "principal", "main" ]
   pull_request:
-    branches: [ "principal", "main" ]
+    branches: [ "principal", "main", "feature/backend-foundation" ]
 
 jobs:
   check-structure:
