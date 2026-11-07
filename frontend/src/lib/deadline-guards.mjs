@@ -49,7 +49,37 @@ export function canPerformOp(deadline, ctx, op) {
   return canWriteDeadline(deadline, ctx, perm);
 }
 
-/** Acesso de LEITURA a uma intimação no ambiente atual (isolamento pessoal/escritório). */
+/**
+ * Resolver único "deadlineId → responsibleId" para as guardas de intimação (Issue #5).
+ * Todas as telas e operações devem usá-lo em vez de reimplementar a busca.
+ * - Considera só prazos do ambiente `scope` (quando informado): um prazo de outro
+ *   ambiente nunca libera acesso a uma intimação deste.
+ * - Nunca lança erro: lista ausente, id inexistente ou inválido → undefined
+ *   (ou seja, NÃO libera acesso).
+ * @param {ReadonlyArray<{ id: string, scope?: object, responsibleId?: string }> | null | undefined} deadlines
+ * @param {object} [scope] ambiente atual (pessoal/escritório)
+ * @returns {(deadlineId: string) => string | undefined}
+ */
+export function makeResponsibleResolver(deadlines, scope) {
+  const byId = new Map();
+  if (Array.isArray(deadlines)) {
+    for (const d of deadlines) {
+      if (!d || typeof d.id !== "string" || typeof d.responsibleId !== "string" || !d.responsibleId) continue;
+      if (scope && !matchesScope(d, scope)) continue;
+      byId.set(d.id, d.responsibleId);
+    }
+  }
+  return (deadlineId) => (typeof deadlineId === "string" ? byId.get(deadlineId) : undefined);
+}
+
+/**
+ * Acesso de LEITURA a uma intimação no ambiente atual (isolamento pessoal/escritório).
+ * Com visibilidade "assigned", o responsável do prazo vinculado só é reconhecido se
+ * `resolveResponsible` for informado — use `makeResponsibleResolver(deadlines, scope)`.
+ * @param {object} intimation
+ * @param {{ scope: object, scopeKind: "personal"|"office", userId: string, membership: object|null }} ctx
+ * @param {(deadlineId: string) => string | undefined} [resolveResponsible]
+ */
 export function canAccessIntimation(intimation, ctx, resolveResponsible) {
   if (!intimation) return false;
   if (!matchesScope(intimation, ctx.scope)) return false;
@@ -68,7 +98,14 @@ export function canAccessIntimation(intimation, ctx, resolveResponsible) {
   return false;
 }
 
-/** Escrita sobre intimação (enviar/processar/retry/remover/confirmar) exige acesso + permissão. */
-export function canWriteIntimation(intimation, ctx, perm) {
-  return canAccessIntimation(intimation, ctx) && canManageDeadline(ctx.scopeKind, ctx.membership, perm);
+/**
+ * Escrita sobre intimação (enviar/processar/retry/remover/confirmar) exige acesso + permissão.
+ * Recebe o MESMO resolver da leitura, para que o contrato de acesso seja único.
+ * @param {object} intimation
+ * @param {{ scope: object, scopeKind: "personal"|"office", userId: string, membership: object|null }} ctx
+ * @param {string} perm
+ * @param {(deadlineId: string) => string | undefined} [resolveResponsible]
+ */
+export function canWriteIntimation(intimation, ctx, perm, resolveResponsible) {
+  return canAccessIntimation(intimation, ctx, resolveResponsible) && canManageDeadline(ctx.scopeKind, ctx.membership, perm);
 }
