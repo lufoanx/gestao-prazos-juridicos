@@ -99,6 +99,7 @@ A solução proposta foi avaliada como altamente relevante (10/10).
 - [Requisitos Funcionais](docs/requisitos/requisitos-funcionais.md)
 - [Requisitos Não Funcionais](docs/requisitos/requisitos-nao-funcionais.md)
 - [Frontend (protótipo navegável) — README](frontend/README.md)
+- [Backend — README](backend/README.md)
 
 ---
 
@@ -143,10 +144,16 @@ A **persistência é local/demonstrativa** (no navegador, via localStorage) — 
 servidor. Detalhes de instalação, execução, testes, credenciais demonstrativas,
 funcionalidades e limitações estão no [README do frontend](frontend/README.md).
 
+### Backend (em andamento)
+O backend FastAPI já tem a fundação versionada (`/api/v1/health`) e, na **Etapa 2**,
+autenticação e perfil (`/api/v1/auth/*`, `/api/v1/users/me`) com armazenamento **em
+memória** — não é persistente nem está pronto para produção. O frontend **ainda não**
+está integrado ao backend. Ver o [README do backend](backend/README.md).
+
 ### Ainda são etapas futuras
-- Backend (API) e regras de negócio no servidor
+- Regras de negócio de prazos, intimações e escritórios no servidor
 - Banco de dados e persistência real
-- Autenticação e autorização reais (sessões, tokens, RBAC no servidor)
+- Autorização real (escritórios, RBAC) e integração frontend–backend
 - IA/OCR para análise de intimações em PDF
 - Cálculo de prazos processuais oficial
 - Integrações externas (tribunais, e-mail, Google, etc.)
@@ -158,12 +165,13 @@ funcionalidades e limitações estão no [README do frontend](frontend/README.md
 ## Status do projeto
 
 Projeto acadêmico da disciplina PAC Extensionista VII. O **protótipo de frontend está
-concluído e navegável** (demonstrativo, sem backend). Requisitos e validação do problema
+concluído e navegável** (demonstrativo, ainda não integrado ao backend). O backend tem a
+fundação e a autenticação em memória (Etapa 2). Requisitos e validação do problema
 foram levantados nas etapas anteriores.
 
 Próximos passos:
-- implementação do backend (API) e do banco de dados
-- autenticação/autorização reais e testes de segurança
+- banco de dados e regras de negócio no backend (escritórios, prazos, intimações)
+- autorização real (RBAC), integração frontend–backend e testes de segurança
 - motor de cálculo de prazos e análise de intimações com IA/OCR
 - integrações externas e infraestrutura (CI/CD, deploy)
 - evolução da suíte de testes (incluindo integração e end-to-end)

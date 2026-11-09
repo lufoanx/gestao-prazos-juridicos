@@ -37,7 +37,11 @@ backend/app/
   tests/
 ```
 
-## Fluxo futuro de autenticação (não implementado nesta etapa)
+## Fluxo de autenticação
+> **Etapa 2 implementada** em `/api/v1/auth` (em memória, Argon2id, JWT + refresh rotativo).
+> Detalhes e diferenças em relação ao esboço abaixo: `06-etapa-2-autenticacao.md`.
+
+Esboço original (Etapa 1):
 1. `POST /api/auth/login` (e-mail/senha) → emite token (JWT de acesso + refresh).
 2. Senhas com hash forte (ex.: bcrypt/argon2) — **nunca** em texto puro.
 3. Middleware lê o token, injeta o usuário no request.

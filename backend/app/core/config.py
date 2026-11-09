@@ -6,8 +6,9 @@ variáveis do provedor em produção). Sem banco de dados nesta etapa.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,6 +42,54 @@ class Settings(BaseSettings):
 
     # Nível de log (sem dados sensíveis).
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+
+    # --- Autenticação (Etapa 2: armazenamento EM MEMÓRIA, sem banco) ---
+    # Liga/desliga o módulo de autenticação. Em production o armazenamento em memória
+    # é BLOQUEADO (create_app falha): é preciso desligar o módulo ou, no futuro,
+    # configurar um armazenamento persistente.
+    auth_enabled: bool = Field(default=True, alias="AUTH_ENABLED")
+    auth_storage: Literal["memory"] = Field(default="memory", alias="AUTH_STORAGE")
+
+    # Segredo de assinatura dos access tokens (HS256). Sem valor padrão no código.
+    # Obrigatório em staging/production. Em development/test, se ausente, cada
+    # instância da aplicação gera um segredo aleatório efêmero (tokens deixam de valer
+    # ao reiniciar — coerente com o armazenamento em memória).
+    auth_jwt_secret: SecretStr | None = Field(default=None, alias="AUTH_JWT_SECRET")
+    auth_jwt_issuer: str = Field(default="prazoai-backend", alias="AUTH_JWT_ISSUER", min_length=1)
+    auth_jwt_audience: str = Field(default="prazoai-api", alias="AUTH_JWT_AUDIENCE", min_length=1)
+
+    # Validades (segundos).
+    auth_access_token_ttl_seconds: int = Field(default=900, alias="AUTH_ACCESS_TOKEN_TTL_SECONDS", ge=60, le=3600)
+    # Vida máxima ABSOLUTA da sessão/refresh token (a rotação não estende).
+    auth_refresh_token_ttl_seconds: int = Field(
+        default=7 * 24 * 3600, alias="AUTH_REFRESH_TOKEN_TTL_SECONDS", ge=3600, le=30 * 24 * 3600
+    )
+    auth_password_reset_ttl_seconds: int = Field(
+        default=1800, alias="AUTH_PASSWORD_RESET_TTL_SECONDS", ge=300, le=24 * 3600
+    )
+
+    # Limites básicos (em memória, por instância).
+    auth_login_max_failures: int = Field(default=5, alias="AUTH_LOGIN_MAX_FAILURES", ge=1, le=100)
+    auth_login_window_seconds: int = Field(default=300, alias="AUTH_LOGIN_WINDOW_SECONDS", ge=10, le=24 * 3600)
+    auth_forgot_max_requests: int = Field(default=3, alias="AUTH_FORGOT_MAX_REQUESTS", ge=1, le=100)
+    auth_forgot_window_seconds: int = Field(default=900, alias="AUTH_FORGOT_WINDOW_SECONDS", ge=10, le=24 * 3600)
+
+    @field_validator("auth_jwt_secret")
+    @classmethod
+    def _valid_jwt_secret(cls, v: SecretStr | None) -> SecretStr | None:
+        if v is None:
+            return None
+        raw = v.get_secret_value().strip()
+        if raw == "":
+            return None  # variável vazia = não configurada
+        if len(raw.encode("utf-8")) < 32:
+            raise ValueError(
+                "AUTH_JWT_SECRET deve ter pelo menos 32 bytes "
+                '(gere com: python -c "import secrets; print(secrets.token_urlsafe(64))").'
+            )
+        if raw.lower().startswith(("change", "troque", "placeholder", "example", "exemplo")):
+            raise ValueError("AUTH_JWT_SECRET parece um placeholder; gere um valor aleatório.")
+        return SecretStr(raw)
 
     @field_validator("environment")
     @classmethod

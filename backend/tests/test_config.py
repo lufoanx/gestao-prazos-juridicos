@@ -21,6 +21,9 @@ def test_environment_invalido_rejeitado(monkeypatch):
 
 def test_production_desliga_docs(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
+    # Etapa 2: o armazenamento de autenticação em memória é bloqueado em production;
+    # este teste verifica docs/health, então desliga o módulo de autenticação.
+    monkeypatch.setenv("AUTH_ENABLED", "false")
     get_settings.cache_clear()
     app = create_app()
     client = TestClient(app, raise_server_exceptions=False)

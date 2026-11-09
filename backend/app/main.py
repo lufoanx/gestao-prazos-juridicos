@@ -1,13 +1,15 @@
-"""Fundação do backend PrazoAI (FastAPI) — sem banco de dados.
+"""Backend PrazoAI (FastAPI) — sem banco de dados.
 
 Decisão oficial do projeto: o backend é Python/FastAPI, preservando a tecnologia existente.
 Ver docs/backend/02-arquitetura-proposta.md.
 
-Esta etapa NÃO usa banco de dados, ORM nem autenticação real. Expõe apenas a
-fundação versionada: GET /api/v1/health (contrato canônico), CORS por variável de
-ambiente, prefixo global /api + versão /v1, validação de ambiente, tratamento global
-de erros, logs básicos e OpenAPI em dev. Os endpoints legados (/ e /calcular-prazo)
-são preservados. GET /api/health é mantido como ALIAS LEGADO de compatibilidade.
+Etapa 1 (fundação): GET /api/v1/health (contrato canônico), CORS por variável de ambiente,
+prefixo global /api + versão /v1, validação de ambiente, tratamento global de erros, logs
+básicos e OpenAPI em dev. Endpoints legados (/ e /calcular-prazo) preservados.
+GET /api/health é mantido como ALIAS LEGADO, restrito ao módulo de saúde.
+
+Etapa 2: autenticação e usuários com armazenamento EM MEMÓRIA por instância (sem banco),
+bloqueado em production. Ver docs/backend/06-etapa-2-autenticacao.md.
 """
 from __future__ import annotations
 
@@ -20,10 +22,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import AfterValidator
 
-from app.api.router import api_v1_router
+from app.api.health import router as health_router
+from app.api.router import build_api_v1_router
+from app.core.clock import Clock
 from app.core.config import get_settings
 from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging, get_logger
+from app.security.passwords import PasswordHasher
+from app.services.auth_container import build_auth_container
+from app.services.password_reset_delivery import PasswordResetDelivery
 from app.services.prazo_service import calcular_prazo
 
 FORMATO_DATA = "%d/%m/%Y"
@@ -45,7 +52,17 @@ def validar_data_inicial(valor: str) -> str:
 DataInicial = Annotated[str, AfterValidator(validar_data_inicial)]
 
 
-def create_app() -> FastAPI:
+def create_app(
+    *,
+    clock: Clock | None = None,
+    password_reset_delivery: PasswordResetDelivery | None = None,
+    password_hasher: PasswordHasher | None = None,
+) -> FastAPI:
+    """Cria uma instância isolada da aplicação.
+
+    Parâmetros opcionais permitem injetar relógio, entrega de recuperação e hasher
+    (testes). O estado de autenticação em memória pertence a esta instância.
+    """
     settings = get_settings()
     configure_logging(settings.log_level)
     logger = get_logger("prazoai")
@@ -79,13 +96,27 @@ def create_app() -> FastAPI:
     # Tratamento global de erros (sem stack trace/caminhos).
     register_error_handlers(app)
 
-    # API versionada: contrato canônico sob /api/v1.
-    app.include_router(api_v1_router, prefix=settings.api_base)
+    # Autenticação (Etapa 2): estado EM MEMÓRIA por instância. Bloqueado em production.
+    app.state.auth = None
+    if settings.auth_enabled:
+        container = build_auth_container(
+            settings, clock=clock, delivery=password_reset_delivery, password_hasher=password_hasher
+        )
+        app.state.auth = container
+        logger.warning(
+            "auth_in_memory_store: dados perdidos ao reiniciar; incompatível com múltiplos workers; "
+            "não usar em produção."
+        )
+        if container.ephemeral_secret:
+            logger.warning("auth_ephemeral_jwt_secret: AUTH_JWT_SECRET ausente; segredo aleatório por instância.")
 
-    # Alias LEGADO de compatibilidade: /api/health → mesmo módulo de saúde.
+    # API versionada: contrato canônico sob /api/v1.
+    app.include_router(build_api_v1_router(auth_enabled=settings.auth_enabled), prefix=settings.api_base)
+
+    # Alias LEGADO de compatibilidade: SOMENTE /api/health (não expõe /api/auth, /api/users).
     # Documentado como legado; o contrato canônico é /api/v1/health.
     if settings.enable_legacy_health_alias:
-        app.include_router(api_v1_router, prefix=settings.api_prefix, include_in_schema=False)
+        app.include_router(health_router, prefix=settings.api_prefix, include_in_schema=False)
 
     # --- Endpoints legados preservados (comportamento atual do backend) ---
     @app.get("/", tags=["legacy"])

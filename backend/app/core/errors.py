@@ -15,6 +15,20 @@ from app.core.logging import get_logger
 logger = get_logger("prazoai.errors")
 
 
+class AppError(Exception):
+    """Erro de aplicação com código estável, status HTTP e cabeçalhos opcionais.
+
+    A mensagem é sempre pública e genérica (nunca contém senha, token ou detalhe interno).
+    """
+
+    def __init__(self, status_code: int, code: str, message: str, headers: dict[str, str] | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+        self.headers = headers
+
+
 def _error_body(code: str, message: str, details: object | None = None) -> dict:
     body: dict = {"error": {"code": code, "message": message}}
     if details is not None:
@@ -30,6 +44,15 @@ def register_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body("http_error", str(exc.detail)),
+        )
+
+    @app.exception_handler(AppError)
+    async def app_error_handler(request: Request, exc: AppError):
+        logger.info(
+            "app_error method=%s path=%s status=%s code=%s", request.method, request.url.path, exc.status_code, exc.code
+        )
+        return JSONResponse(
+            status_code=exc.status_code, content=_error_body(exc.code, exc.message), headers=exc.headers
         )
 
     @app.exception_handler(RequestValidationError)
