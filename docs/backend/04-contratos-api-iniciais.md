@@ -3,7 +3,8 @@
 > Contratos sob a base versionada **`/api/v1`**.
 > **Implementados:** `GET /api/v1/health` (Etapa 1) e os grupos **`/auth`** e **`/users/me`**
 > (Etapa 2 — armazenamento em memória, ver `06-etapa-2-autenticacao.md`).
-> **Planejados:** todos os demais grupos (escritórios, prazos, intimações etc.).
+> e, na Etapa 3, **escritórios, equipe, convites e solicitações** (`07-etapa-3-escritorios-rbac.md`).
+> **Planejados:** prazos, intimações, notificações, anexos, auditoria e IA.
 
 ## Convenções
 - Base canônica: `/api/v1` (prefixo `/api` + versão `/v1`). JSON em UTF-8.
@@ -11,7 +12,8 @@
 - Erros: `{ "error": { "code": string, "message": string, "details?": any } }` (sem stack trace).
 - Autenticação: `Authorization: Bearer <accessToken>` (Etapa 2). Corpos JSON em camelCase;
   campos não previstos → 422.
-- Permissões referenciam o RBAC do domínio (03): `deadline.*`, `team.manage`, `office.manage`.
+- Permissões referenciam o RBAC do domínio (03): `deadline.*`, `team.manage`, `office.manage`
+  (matriz de delegação implementada na Etapa 3).
 - Paginação (futura): `?page`, `?perPage`; busca `?q`; filtros conforme recurso.
 
 ---
@@ -61,21 +63,28 @@ adulterado, expirado, finalidade incorreta ou sessão revogada), com `WWW-Authen
   E-mail, senha, id, permissões, escritório e `preferences` → 422 (preferências: planejado).
 - `GET /api/v1/users/:id` — planejado — auth + mesma organização → 200; 403/404.
 
-## /offices (futuro)
-- `POST /api/v1/offices` — auth; body `{ name }` → 201 (regra: escritório único). Erros: 409 já possui escritório.
-- `GET /api/v1/offices/:id` — auth + membro → 200; 403.
-- `PATCH /api/v1/offices/:id` — auth + `office.manage` → 200; 403.
-
-## /memberships (futuro)
-- `GET /api/v1/offices/:id/memberships` — auth + membro (`team.manage` p/ detalhes) → 200.
-- `PATCH /api/v1/offices/:id/memberships/:userId` — auth + `team.manage`; body `{ roleLabel?, permissions?, visibility?, practiceAreas? }` → 200. Regras: sem auto-escalada; preservar último admin.
-- `DELETE /api/v1/offices/:id/memberships/:userId` — auth + `team.manage`; body `{ reassignTo? }` → 200. Regra: reatribuir prazos em aberto; não remover último admin. Erros: 409 `needs-reassign`.
-
-## /invitations (futuro)
-- `POST /api/v1/offices/:id/invitations` — auth + `team.manage`; body `{ roleLabel? }` → 201 `{ token, expiresAt }`.
-- `POST /api/v1/invitations/:token/accept` — auth → 200 (regra escritório único). Erros: 410 expirado/usado/revogado, 404 inválido.
-- `DELETE /api/v1/invitations/:id` — auth + `team.manage` → 204 (revoga).
-- `GET /api/v1/invitations/:token` — público → 200 `{ state }` (valid|expired|used|revoked|invalid).
+## /offices, /memberships, /invitations, /join-requests — IMPLEMENTADO (Etapa 3, em memória)
+Contratos completos, matriz de autorização e códigos de erro em
+`07-etapa-3-escritorios-rbac.md`. Resumo das mudanças em relação ao planejado:
+- `POST /api/v1/offices` → 201 `{ office, membership }` (cria o vínculo administrativo junto);
+  409 `already_in_office`.
+- `GET /api/v1/memberships/me` → `{ office, membership }` (nulos se sem vínculo).
+- `GET|PATCH /api/v1/offices/:id` (membro / `office.manage`); externo → 404.
+- Equipe: `GET /api/v1/offices/:id/members` (projeção pública ou administrativa),
+  `PATCH /api/v1/offices/:id/members/:userId` (matriz de delegação),
+  `POST .../members/:userId/promote`. **Substitui** `PATCH /memberships/:userId`.
+- Remoção: `POST /api/v1/offices/:id/members/:userId/remove` `{ reassignTo? }` e saída
+  `POST /api/v1/offices/:id/leave` `{ successorUserId?, reassignTo? }` — **substituem**
+  `DELETE` com corpo; **bloqueadas até a Etapa 4** (409 `responsibility_module_unavailable`).
+- Convites: `POST /api/v1/offices/:id/invitations` → 201 com `token` (única vez);
+  `GET .../invitations`; `POST .../invitations/:invitationId/revoke`.
+  **Token no corpo:** `POST /api/v1/invitations/lookup` `{ token }` → `{ state, officeName? }`
+  e `POST /api/v1/invitations/accept` `{ token }` **substituem** `GET /invitations/:token` e
+  `POST /invitations/:token/accept` (token fora de caminhos/logs).
+- Código de ingresso: `GET /api/v1/offices/:id/join-code`, `POST .../join-code/rotate`.
+- Solicitações (novas): `POST /api/v1/join-requests` `{ joinCode }`, `GET /api/v1/join-requests/me`,
+  `POST /api/v1/join-requests/:id/cancel`, `GET /api/v1/offices/:id/join-requests?status=`,
+  `POST /api/v1/offices/:id/join-requests/:id/approve|reject`.
 
 ## /roles (futuro)
 - `GET /api/v1/roles` — auth → 200 catálogo de permissões conhecidas.

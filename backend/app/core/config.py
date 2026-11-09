@@ -90,6 +90,49 @@ class Settings(BaseSettings):
         default=1000, alias="AUTH_MAX_REFRESH_ROTATIONS_PER_SESSION", ge=10, le=100_000
     )
 
+    # --- Escritórios, equipe e permissões (Etapa 3: armazenamento EM MEMÓRIA) ---
+    # None = acompanha AUTH_ENABLED. Depende da autenticação. Bloqueado em production
+    # (mesmo com AUTH_ENABLED=false, se OFFICES_ENABLED=true for definido explicitamente).
+    offices_enabled: bool | None = Field(default=None, alias="OFFICES_ENABLED")
+    org_invite_ttl_seconds: int = Field(
+        default=7 * 24 * 3600, alias="ORG_INVITE_TTL_SECONDS", ge=3600, le=30 * 24 * 3600
+    )
+    org_invite_create_max: int = Field(default=20, alias="ORG_INVITE_CREATE_MAX", ge=1, le=1000)
+    org_invite_create_window_seconds: int = Field(
+        default=3600, alias="ORG_INVITE_CREATE_WINDOW_SECONDS", ge=10, le=24 * 3600
+    )
+    org_invite_lookup_max: int = Field(default=30, alias="ORG_INVITE_LOOKUP_MAX", ge=1, le=1000)
+    org_invite_lookup_window_seconds: int = Field(
+        default=900, alias="ORG_INVITE_LOOKUP_WINDOW_SECONDS", ge=10, le=24 * 3600
+    )
+    org_invite_accept_max: int = Field(default=10, alias="ORG_INVITE_ACCEPT_MAX", ge=1, le=1000)
+    org_invite_accept_window_seconds: int = Field(
+        default=900, alias="ORG_INVITE_ACCEPT_WINDOW_SECONDS", ge=10, le=24 * 3600
+    )
+    org_join_request_max: int = Field(default=10, alias="ORG_JOIN_REQUEST_MAX", ge=1, le=1000)
+    org_join_request_window_seconds: int = Field(
+        default=3600, alias="ORG_JOIN_REQUEST_WINDOW_SECONDS", ge=10, le=24 * 3600
+    )
+    org_max_pending_invites_per_office: int = Field(
+        default=50, alias="ORG_MAX_PENDING_INVITES_PER_OFFICE", ge=1, le=1000
+    )
+    org_max_pending_requests_per_office: int = Field(
+        default=200, alias="ORG_MAX_PENDING_REQUESTS_PER_OFFICE", ge=1, le=10_000
+    )
+    org_max_pending_requests_per_user: int = Field(default=5, alias="ORG_MAX_PENDING_REQUESTS_PER_USER", ge=1, le=50)
+    org_closed_retention_seconds: int = Field(
+        default=30 * 24 * 3600, alias="ORG_CLOSED_RETENTION_SECONDS", ge=24 * 3600, le=365 * 24 * 3600
+    )
+
+    @field_validator("offices_enabled", mode="before")
+    @classmethod
+    def _empty_offices_enabled(cls, v: object) -> object:
+        return None if isinstance(v, str) and v.strip() == "" else v
+
+    @property
+    def offices_active(self) -> bool:
+        return self.auth_enabled if self.offices_enabled is None else self.offices_enabled
+
     @field_validator("auth_jwt_secret")
     @classmethod
     def _valid_jwt_secret(cls, v: SecretStr | None) -> SecretStr | None:

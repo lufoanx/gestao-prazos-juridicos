@@ -8,6 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.errors import AppError
 from app.services.auth_service import AuthenticatedUser, AuthService
+from app.services.org_service import OrgService
 
 _bearer = HTTPBearer(auto_error=False, description="Access token (Bearer).")
 
@@ -29,7 +30,15 @@ def get_current_user(
     return service.authenticate(credentials.credentials)
 
 
+def get_org_service(request: Request) -> OrgService:
+    container = getattr(request.app.state, "org", None)
+    if container is None:  # módulo desligado
+        raise AppError(404, "http_error", "Not Found")
+    return container.service
+
+
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+OrgServiceDep = Annotated[OrgService, Depends(get_org_service)]
 CurrentUser = Annotated[AuthenticatedUser, Depends(get_current_user)]
 
 

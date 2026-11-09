@@ -1,5 +1,9 @@
 # 03 — Modelo de Domínio (conceitual)
 
+> **Atualização Etapa 3:** User, Office, Membership, Invitation e JoinRequest estão
+> implementados em memória (`app/domain/org.py`); diferenças em relação a este texto
+> conceitual estão marcadas abaixo e detalhadas em `07-etapa-3-escritorios-rbac.md`.
+
 > Etapa 1. Conceitual, **sem ORM**, sem migrations. Deriva das regras já existentes no
 > frontend (`src/lib/*.mjs`). Campos são conceituais; tipos finais virão com o banco.
 
@@ -18,7 +22,7 @@ Permissões referenciadas: `deadline.read`, `deadline.create`, `deadline.edit`,
 
 ## Office
 - **Responsabilidade:** escritório (ambiente compartilhado).
-- **Campos:** id, name, ownerId, createdAt.
+- **Campos:** id, name, ownerId, createdAt. *(Implementado: `createdBy` informativo — não concede poderes — e `joinCode` aleatório para solicitações.)*
 - **Relacionamentos:** N `Membership`; N `Deadline` de escritório; N `Invitation`; N `JoinRequest`.
 - **Regras:** sempre ≥ 1 administrador (`office.manage`).
 - **CRUD:** criar (onboarding); editar dados (requer `office.manage`); excluir fora do escopo.
@@ -27,7 +31,7 @@ Permissões referenciadas: `deadline.read`, `deadline.create`, `deadline.edit`,
 - **Responsabilidade:** vínculo User↔Office com cargo, permissões e visibilidade.
 - **Campos:** userId, officeId, roleLabel, permissions[], visibility (`all`|`assigned`), practiceAreas[].
 - **Relacionamentos:** pertence a 1 User e 1 Office.
-- **Regras:** escritório único (um Membership ativo por User); sem **auto-escalada**; não remover/rebaixar o **último admin**.
+- **Regras:** escritório único (um Membership ativo por User); sem **auto-escalada**; não remover/rebaixar o **último admin**. *(Implementado: também sem escalada indireta; `office.manage` exige `team.manage`; remoção bloqueada até a Etapa 4.)*
 - **CRUD:** criar via convite/solicitação aprovada; editar (requer `team.manage`); remover (requer `team.manage` + reatribuição de prazos em aberto).
 
 ## Role / Permission
@@ -38,13 +42,13 @@ Permissões referenciadas: `deadline.read`, `deadline.create`, `deadline.edit`,
 
 ## Invitation
 - **Responsabilidade:** convite por link único para ingressar em um Office.
-- **Campos:** id, officeId, token, roleLabel, status (`pending`|`accepted`|`revoked`|`expired`), expiresAt, createdAt.
+- **Campos:** id, officeId, token, roleLabel, status (`pending`|`accepted`|`revoked`|`expired`), expiresAt, createdAt. *(Implementado: só `tokenHash`; `expired` é derivado da data.)*
 - **Regras:** aceitar respeita escritório único; estados inválido/expirado/revogado/usado.
 - **CRUD:** criar/revogar (requer `team.manage`); aceitar (usuário convidado).
 
 ## JoinRequest
 - **Responsabilidade:** solicitação de ingresso via código do escritório.
-- **Campos:** id, officeId, userId, name, email, status (`pending`|`approved`|`rejected`), createdAt.
+- **Campos:** id, officeId, userId, name, email, status (`pending`|`approved`|`rejected`), createdAt. *(Implementado: sem cópia de name/email; estado adicional `cancelled`; `decidedAt`, `decidedBy`.)*
 - **Regras:** solicitante não pode já ter escritório; aprovar respeita escritório único.
 - **CRUD:** criar (solicitante); aprovar/rejeitar (requer `team.manage`).
 

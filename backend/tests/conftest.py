@@ -113,12 +113,15 @@ def make_app(monkeypatch):
     import app.core.config as config_module
     from app.main import create_app
 
-    def _make(clock=None, delivery=None, password_hasher=None, **env):
+    def _make(clock=None, delivery=None, password_hasher=None, responsibility_port=None, **env):
         for k, v in env.items():
             monkeypatch.setenv(k, str(v))
         config_module.get_settings.cache_clear()
         try:
-            return create_app(clock=clock, password_reset_delivery=delivery, password_hasher=password_hasher)
+            return create_app(
+                clock=clock, password_reset_delivery=delivery, password_hasher=password_hasher,
+                responsibility_port=responsibility_port,
+            )
         finally:
             config_module.get_settings.cache_clear()
 
@@ -136,3 +139,7 @@ def client(auth_app):
     from fastapi.testclient import TestClient
 
     return TestClient(auth_app, raise_server_exceptions=False)
+
+
+# Fixture `org` da Etapa 3 (escritórios/equipe).
+from tests.org_utils import org  # noqa: E402,F401
