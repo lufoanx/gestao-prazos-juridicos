@@ -7,6 +7,12 @@ from app.core.clock import Clock
 from app.core.config import Settings
 from app.repositories.auth import UserRepository
 from app.repositories.deadlines_memory import DeadlineLimits, MemoryDeadlineStore
+from app.repositories.intimations_memory import (
+    IntimationLimits,
+    MemoryIntimationStore,
+    MemoryNotificationStore,
+    NotificationLimits,
+)
 from app.repositories.org_memory import MemoryOrgStore
 from app.repositories.unit_of_work import MemoryUnitOfWork
 from app.security.rate_limit import RateLimiter
@@ -52,7 +58,16 @@ def build_org_container(
         max_comments_per_deadline=settings.deadlines_max_comments,
         max_history_per_deadline=settings.deadlines_max_history,
     ))
-    uow = MemoryUnitOfWork(store, deadline_store)
+    intimation_store = MemoryIntimationStore(IntimationLimits(
+        max_per_scope=settings.intimations_max_per_scope,
+        max_events_per_intimation=settings.intimations_max_events,
+        discard_retention_seconds=settings.intimations_discard_retention_seconds,
+    ))
+    notification_store = MemoryNotificationStore(NotificationLimits(
+        max_per_recipient=settings.notifications_max_per_recipient,
+        read_retention_seconds=settings.notifications_read_retention_seconds,
+    ))
+    uow = MemoryUnitOfWork(store, deadline_store, intimation_store, notification_store)
 
     def limiter(max_events: int, window: int) -> RateLimiter:
         return RateLimiter(max_events, window, clock, max_keys=settings.auth_rate_limit_max_keys)

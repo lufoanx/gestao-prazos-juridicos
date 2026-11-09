@@ -1,5 +1,11 @@
 # 08 — Etapa 4: Prazos, calendário, comentários, histórico, transferência e responsabilidades
 
+> **Atualização Etapa 5:** a unidade de trabalho passou a incluir intimações e notificações
+> (ordem escritórios → prazos → intimações → notificações); a transferência exige
+> `shareLinkedIntimation: true` quando há intimação vinculada e trata os consentimentos como
+> booleanos estritos; a remoção/saída também reatribui intimações pendentes; atribuições geram
+> notificações internas. Ver `09-etapa-5-intimacoes-notificacoes.md`.
+
 > **Estado:** implementado no backend com armazenamento **em memória** e integração **real em
 > memória** entre escritórios e prazos (remoção/saída de membros com reatribuição). **Não** há
 > banco de dados (PostgreSQL/ORM/migrations) nem integração com as telas: o frontend continua

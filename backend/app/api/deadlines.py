@@ -138,7 +138,7 @@ def change_status(deadline_id: Id, body: StatusRequest, current: CurrentUser, se
 
 @router.post("/deadlines/{deadline_id}/transfer", response_model=TransferResponse)
 def transfer(deadline_id: Id, body: TransferRequest, current: CurrentUser, service: Service) -> TransferResponse:
-    d = service.transfer(current.user.id, deadline_id, body.version, body.office_id)
+    d = service.transfer(current.user.id, deadline_id, body.version, body.office_id, body.share_linked_intimation)
     return TransferResponse(deadline=deadline_view(d, service), notice=SHARING_NOTICE)
 
 

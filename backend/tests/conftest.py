@@ -113,14 +113,15 @@ def make_app(monkeypatch):
     import app.core.config as config_module
     from app.main import create_app
 
-    def _make(clock=None, delivery=None, password_hasher=None, responsibility_port=None, **env):
+    def _make(clock=None, delivery=None, password_hasher=None, responsibility_port=None, processing_port=None,
+              **env):
         for k, v in env.items():
             monkeypatch.setenv(k, str(v))
         config_module.get_settings.cache_clear()
         try:
             return create_app(
                 clock=clock, password_reset_delivery=delivery, password_hasher=password_hasher,
-                responsibility_port=responsibility_port,
+                responsibility_port=responsibility_port, processing_port=processing_port,
             )
         finally:
             config_module.get_settings.cache_clear()

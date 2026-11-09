@@ -92,8 +92,10 @@ def org(make_app, clock, delivery):
     def _org(**env):
         env.setdefault("AUTH_REGISTER_MAX_REQUESTS", 1000)
         port = env.pop("responsibility_port", None)
-        return OrgClient(
-            make_app(clock=clock, delivery=delivery, responsibility_port=port, password_hasher=fast_hasher(), **env)
-        )
+        processing = env.pop("processing_port", None)
+        return OrgClient(make_app(
+            clock=clock, delivery=delivery, responsibility_port=port, processing_port=processing,
+            password_hasher=fast_hasher(), **env,
+        ))
 
     return _org

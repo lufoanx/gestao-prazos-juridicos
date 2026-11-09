@@ -5,6 +5,7 @@ Montado sob o prefixo canônico API_PREFIX + API_VERSION_PREFIX (ex.: /api/v1).
 - Etapa 2: /auth e /users (autenticação em memória), quando AUTH_ENABLED=true.
 - Etapa 3: /offices, /memberships, /invitations e /join-requests (em memória).
 - Etapa 4: /deadlines e /calendar (em memória, mesma unidade de trabalho).
+- Etapa 5: /intimations e /notifications (em memória, mesma unidade de trabalho).
 Os demais grupos estão em docs/backend/04-contratos-api-iniciais.md (planejados).
 """
 from __future__ import annotations
@@ -14,6 +15,7 @@ from fastapi import APIRouter
 from app.api.auth import router as auth_router
 from app.api.deadlines import router as deadlines_router
 from app.api.health import router as health_router
+from app.api.intimations import router as intimations_router
 from app.api.invitations import router as invitations_router
 from app.api.offices import router as offices_router
 from app.api.users import router as users_router
@@ -29,6 +31,7 @@ def build_api_v1_router(*, auth_enabled: bool, offices_enabled: bool = False) ->
         router.include_router(offices_router)
         router.include_router(invitations_router)
         router.include_router(deadlines_router)  # Etapa 4: mesma unidade de trabalho dos escritórios
+        router.include_router(intimations_router)  # Etapa 5: intimações e notificações
     return router
 
 

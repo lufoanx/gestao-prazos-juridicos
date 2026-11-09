@@ -124,9 +124,18 @@ class StatusRequest(_Input):
 
 
 class TransferRequest(_Input):
+    """Consentimentos são booleanos ESTRITOS (`true`; não aceita 1 nem "true")."""
+
     version: Version
     office_id: UserRef
-    confirm_sharing: Literal[True]
+    confirm_sharing: StrictBool
+    share_linked_intimation: StrictBool = False
+
+    @model_validator(mode="after")
+    def _consent(self) -> TransferRequest:
+        if self.confirm_sharing is not True:
+            raise ValueError("confirmSharing deve ser true.")
+        return self
 
 
 class CommentRequest(_Input):

@@ -73,6 +73,11 @@ Permissões referenciadas: `deadline.read`, `deadline.create`, `deadline.edit`,
 - **Regras:** somente leitura; registra criação/edição/conclusão/transferência/reatribuição/anexos/comentários.
 
 ## Intimation
+> **Implementado na Etapa 5** (`app/domain/intimations.py`): só metadados declarados
+> (`file.storage = "not_stored"`), sem processamento; estados `processing|awaiting_review|failed|
+> reviewed|discarded`; rascunho, versão, vínculo único com o prazo e histórico próprio.
+> Detalhes em `09-etapa-5-intimacoes-notificacoes.md`.
+
 - **Responsabilidade:** documento (PDF) a revisar que pode gerar um prazo.
 - **Campos:** id, scope, fileName, status(`sent`|`processing`|`awaiting_review`|`reviewed`|`failed`),
   receivedAt, createdBy, suggested*(title/caseNumber/court/area/responsible/dueDate)?, deadlineId?.
@@ -82,6 +87,9 @@ Permissões referenciadas: `deadline.read`, `deadline.create`, `deadline.edit`,
 - **CRUD:** criar/processar/retry/remover (requer `deadline.create` + acesso); confirmar revisão cria Deadline.
 
 ## Notification
+> **Implementado na Etapa 5:** destinatário individual, sem conteúdo armazenado, leitura
+> individual com autorização atual. Ver `09-etapa-5-intimacoes-notificacoes.md`.
+
 - **Responsabilidade:** aviso por ambiente.
 - **Campos:** id, scope, title, read, deadlineId?, createdAt.
 - **Regras:** isoladas por ambiente; marcar como lida (individual/todas).

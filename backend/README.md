@@ -5,9 +5,11 @@ apenas como alias legado), os endpoints legados preservados, **autenticação e 
 (Etapa 2: `/api/v1/auth/*`, `/api/v1/users/me`) e **escritórios, equipe, permissões,
 convites e solicitações** (Etapa 3: `/api/v1/offices/*`, `/api/v1/memberships/me`,
 `/api/v1/invitations/*`, `/api/v1/join-requests/*`) e **prazos, comentários, histórico,
-calendário e transferência** (Etapa 4: `/api/v1/deadlines/*`, `/api/v1/calendar`), tudo com
-armazenamento **em memória**. **Não há banco de dados, ORM, intimações, arquivos, envio de
-e-mail nem integração com o frontend** — as telas continuam demonstrativas.
+calendário e transferência** (Etapa 4: `/api/v1/deadlines/*`, `/api/v1/calendar`) e
+**intimações (metadados + revisão humana) e notificações internas** (Etapa 5:
+`/api/v1/intimations/*`, `/api/v1/notifications/*`), tudo com armazenamento **em memória**.
+**Não há banco de dados, ORM, armazenamento de arquivos, processamento/IA, envio de e-mail nem
+integração com o frontend** — as telas continuam demonstrativas.
 
 > **Stack oficial: Python/FastAPI.** Decisão do projeto é preservar o backend
 > Python existente; não há migração para NestJS. Ver
@@ -137,6 +139,17 @@ Detalhes, matriz completa, exemplos e limites: `docs/backend/07-etapa-3-escritor
 
 Detalhes, matriz, exemplos e limites: `docs/backend/08-etapa-4-prazos.md`.
 
+## Intimações e notificações (Etapa 5 — em memória)
+- Registro de **metadados declarados** (`file.storage = "not_stored"`); nenhum PDF é recebido,
+  armazenado ou processado (`processing.status = "not_available"`).
+- Rascunho com versão; **confirmação** exige `version` e todos os dados finais, cria exatamente
+  um prazo (regras da Etapa 4) — 201 na primeira, 200 em repetição sem efeito.
+- Descarte lógico com retenção; acesso da Issue #5 (responsável atual do prazo vinculado).
+- Notificações individuais sem conteúdo armazenado, ocultas quando o acesso ao recurso se perde;
+  política da caixa documentada em `retentionPolicy`.
+
+Detalhes: `docs/backend/09-etapa-5-intimacoes-notificacoes.md`.
+
 ## Configuração (variáveis de ambiente)
 Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigatório; nunca versione o `.env`):
 - `SERVICE_NAME` (padrão `prazoai-backend`)
@@ -153,6 +166,7 @@ Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigató
 - `AUTH_LOGIN_MAX_FAILURES` (5) / `AUTH_LOGIN_WINDOW_SECONDS` (300), `AUTH_FORGOT_MAX_REQUESTS` (3) / `AUTH_FORGOT_WINDOW_SECONDS` (900)
 - `AUTH_REGISTER_MAX_REQUESTS` (10) / `AUTH_REGISTER_WINDOW_SECONDS` (3600), `AUTH_RESET_MAX_REQUESTS` (10) / `AUTH_RESET_WINDOW_SECONDS` (900)
 - `AUTH_RATE_LIMIT_MAX_KEYS` (10000; chaves além do teto compartilham um balde de transbordo) e `AUTH_MAX_SESSIONS_PER_USER` (10)
+- `INTIMATIONS_*` e `NOTIFICATIONS_*` (tetos e retenção — ver doc 09)
 - `DEADLINES_TIMEZONE` (America/Sao_Paulo), `DEADLINES_SOON_DAYS` (3) e tetos `DEADLINES_MAX_*` — ver doc 08
 - `OFFICES_ENABLED` (vazio = acompanha `AUTH_ENABLED`) e `ORG_*` (validade de convite, limites de taxa, tetos de pendências e retenção — ver doc 07)
 - `AUTH_MAX_REFRESH_ROTATIONS_PER_SESSION` (1000, entre 10 e 100000): rotações de refresh por sessão; ao atingir o teto, o próximo refresh encerra a sessão (401 `session_rotation_limit_reached`)
