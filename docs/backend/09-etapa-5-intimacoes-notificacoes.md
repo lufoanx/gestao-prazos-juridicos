@@ -45,15 +45,20 @@ Pessoal: somente o dono. Escritório: vínculo atual + `deadline.read` e:
 | Ação | Regra (além da leitura) |
 |---|---|
 | Registrar | `deadline.create` + `deadline.read`; sugestão: `assigned` só a si mesmo; membro ativo |
-| Editar rascunho / sugestão | `deadline.create`; mesmas regras de sugestão; só `awaiting_review` |
+| Editar rascunho / sugestão | `deadline.create`; mesmas regras de sugestão; só `awaiting_review`. Limpar a sugestão de uma pendência do escritório cujo autor não é mais membro → 409 `operational_responsible_required` (sem efeito) |
 | Confirmar | `deadline.create` + **regras de criação de prazo da Etapa 4** (`assigned` só para si; responsável ativo; datas) |
 | Descartar / tentar de novo | `deadline.create` + ser autor ou ter `visibility=all` |
 | Processamento | somente interno (`apply_processing_result`), sem rota |
 
 Gestão de equipe, cargo e `createdBy` de prazo não concedem acesso. Sem leitura → 404 (mesmo
 corpo de inexistente); com leitura sem permissão → 403; autorização **antes** da versão.
-Respostas de intimação só trazem `deadlineId` se o solicitante puder ler o prazo (`linked`
-indica o vínculo sem revelar o id).
+
+**Referências protegidas (projeção única):** detalhe, listagem e **históricos** (da intimação
+e do prazo) passam pela mesma projeção (`deadline_ops.visible_ref` / `project_details`),
+calculada dentro da unidade com a autorização ATUAL. Respostas de intimação só trazem
+`deadlineId` se o solicitante puder ler o prazo (`linked` indica o vínculo). Nos históricos,
+chaves `deadlineId`, `intimationId` e `linkedIntimationId` de recursos não legíveis aparecem como
+`null` com `<chave>Hidden: true`; o evento continua visível e o histórico armazenado não muda.
 
 ## 4. Confirmação: versão × idempotência
 | Situação | Resposta |
@@ -90,6 +95,10 @@ Havendo prazos em aberto ou essas intimações, `reassignTo` é obrigatório; as
 `createdBy` preservado, notificação). Sugestão ativa de outra pessoa não é substituída.
 Revisadas seguem o prazo; descartadas não contam. Tudo na mesma unidade da saída/remoção.
 
+**Invariante permanente:** toda intimação **pendente** do escritório alterada em qualquer
+operação precisa ter autor ativo ou responsável sugerido ativo; isso é verificado na
+preparação final de toda unidade (não só na saída/remoção). Pessoais e terminais ficam fora.
+
 ## 7. Notificações
 - Gatilhos (só para outra pessoa, nunca o autor da ação; somente escritório): prazo atribuído
   (criação, `PATCH`, reabertura, reatribuição administrativa, confirmação) e intimação
@@ -119,6 +128,7 @@ Revisadas seguem o prazo; descartadas não contam. Tudo na mesma unidade da saí
 | `GET /notifications/unread-count?scope=` · `POST /notifications/{id}/read` · `POST /notifications/read-all?scope=` | 200 |
 
 Erros novos: `already_reviewed`, `invalid_state`, `processing_unavailable`,
+`operational_responsible_required`,
 `linked_intimation_requires_consent`, `intimation_limit_reached`,
 `intimation_history_limit_reached` (409). Arquivo: `.pdf`, `application/pdf`, 1 byte a 10 MB
 (limite declarado do protótipo; nada é recebido).
@@ -148,7 +158,8 @@ Unicidade do vínculo também é garantida no próprio armazenamento (equivalent
 em cada fase da publicação, transferência com vínculo), `test_intimations_members.py`
 (saída/remoção com intimações, falhas entre prazos e intimações), `test_notifications.py`,
 `test_intimations_processing_retention.py` (adaptador controlado, retenção, capacidade,
-invariantes, rollback da caixa) e `test_intimations_concurrency.py`.
+invariantes, rollback da caixa), `test_intimations_concurrency.py` e
+`test_intimations_audit_fixes.py` (projeção dos históricos e recusa de pendência órfã).
 
 ## 12. Limitações
 - Sem arquivo, processamento, OCR ou IA; sem notificações pessoais nem lembretes de vencimento.

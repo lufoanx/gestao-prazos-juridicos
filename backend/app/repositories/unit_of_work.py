@@ -195,9 +195,12 @@ class MemoryUnitOfWork:
                 d = dl.get(i.deadline_id)
                 if d is None or it.by_deadline(i.deadline_id) is not i or d.scope != i.scope:
                     raise ConsistencyError("vínculo intimação ↔ prazo inconsistente")
-            if i.pending and i.scope.kind == "office" and i.suggested_responsible_id:
-                if not active_in(i.scope.office_id, i.suggested_responsible_id):
+            if i.pending and i.scope.kind == "office":
+                if i.suggested_responsible_id and not active_in(i.scope.office_id, i.suggested_responsible_id):
                     raise ConsistencyError("intimação pendente com responsável sugerido fora do escritório")
+                if not active_in(i.scope.office_id, i.created_by) and \
+                        not active_in(i.scope.office_id, i.suggested_responsible_id):
+                    raise ConsistencyError("intimação pendente sem responsável operacional (autor e sugerido inativos)")
         for did in dl.touched:
             linked = it.by_deadline(did)
             d = dl.get(did)

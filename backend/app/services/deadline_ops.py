@@ -118,6 +118,55 @@ def reassign_deadline(tx: UnitTransaction, d: Deadline, to_id: str, actor_id: st
     return updated
 
 
+# Chaves de detalhes de eventos que referenciam recursos protegidos → tipo do recurso.
+PROTECTED_REFS: dict[str, str] = {
+    "deadlineId": "deadline",
+    "intimationId": "intimation",
+    "linkedIntimationId": "intimation",
+}
+
+
+def can_read_deadline_id(tx: UnitTransaction, actor_id: str, m: Membership | None, deadline_id: str) -> bool:
+    d = tx.deadlines.get(deadline_id)
+    return d is not None and policy.can_read(actor_id, m, d)
+
+
+def can_read_intimation_id(tx: UnitTransaction, actor_id: str, m: Membership | None, intimation_id: str) -> bool:
+    from app.policies import intimations as in_policy
+
+    i = tx.intimations.get(intimation_id)
+    if i is None:
+        return False
+    linked = tx.deadlines.get(i.deadline_id) if i.deadline_id else None
+    return in_policy.can_read(actor_id, m, i, linked.responsible_id if linked else None)
+
+
+def visible_ref(tx: UnitTransaction, actor_id: str, m: Membership | None, kind: str, ref: str) -> str | None:
+    """Projeção ÚNICA de referências protegidas (detalhe, listagem e históricos)."""
+    readable = can_read_deadline_id if kind == "deadline" else can_read_intimation_id
+    return ref if readable(tx, actor_id, m, ref) else None
+
+
+def project_details(tx: UnitTransaction, actor_id: str, m: Membership | None, details: Any) -> Any:
+    """Cópia dos detalhes de um evento com referências protegidas ocultas conforme a autorização
+    ATUAL. O vínculo continua indicado (`<chave>Hidden: true`); o evento armazenado não muda."""
+    if isinstance(details, dict):
+        out: dict[str, Any] = {}
+        for key, value in details.items():
+            kind = PROTECTED_REFS.get(key)
+            if kind and isinstance(value, str):
+                visible = visible_ref(tx, actor_id, m, kind, value)
+                out[key] = visible
+                if visible is None:
+                    out[f"{key}Hidden"] = True
+            else:
+                out[key] = project_details(tx, actor_id, m, value)
+        return out
+    if isinstance(details, list):
+        return [project_details(tx, actor_id, m, v) for v in details]
+    return details
+
+
 def readable_deadline(tx: UnitTransaction, actor_id: str, deadline_id: str) -> tuple[Deadline, Membership | None]:
     m = tx.org.membership_of_user(actor_id)
     d = tx.deadlines.get(deadline_id)

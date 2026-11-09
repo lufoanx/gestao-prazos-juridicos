@@ -97,8 +97,7 @@ class IntimationService:
     def _visible_deadline(tx: UnitTransaction, actor_id: str, m: Membership | None, i: Intimation) -> str | None:
         if not i.deadline_id:
             return None
-        d = tx.deadlines.get(i.deadline_id)
-        return d.id if d is not None and dl_policy.can_read(actor_id, m, d) else None
+        return ops.visible_ref(tx, actor_id, m, "deadline", i.deadline_id)
 
     def _result(self, tx: UnitTransaction, actor_id: str, m: Membership | None, i: Intimation) -> IntimationResult:
         return IntimationResult(i, self._visible_deadline(tx, actor_id, m, i))
@@ -201,10 +200,13 @@ class IntimationService:
 
     def history(self, actor_id: str, intimation_id: str, page: int, per_page: int) -> tuple[list[IntimationEvent], int]:
         with self._unit() as tx:
-            i, _ = self._readable(tx, actor_id, intimation_id)
+            i, m = self._readable(tx, actor_id, intimation_id)
             events = list(tx.intimations.events(i.id))
-        start = (page - 1) * per_page
-        return events[start:start + per_page], len(events)
+            start = (page - 1) * per_page
+            # Projeção autorizada DENTRO da unidade; o histórico armazenado não é alterado.
+            page_items = [replace(e, details=ops.project_details(tx, actor_id, m, e.details))
+                          for e in events[start:start + per_page]]
+        return page_items, len(events)
 
     # ------------------------------------------------------------------ rascunho
     def update_draft(
@@ -223,6 +225,12 @@ class IntimationService:
                 raise AppError(409, "invalid_state", "A intimação não está aguardando revisão.")
             if change_suggested and suggested is not None:
                 ops.active_responsible(tx, i.scope, suggested)
+            if change_suggested and suggested is None and i.scope.kind == "office" \
+                    and not ops.is_active_member(tx, i.scope.office_id, i.created_by):
+                raise AppError(
+                    409, "operational_responsible_required",
+                    "O autor não pertence mais ao escritório: a intimação precisa de um responsável sugerido.",
+                )
             effective = {k: v for k, v in draft.items() if getattr(i.draft, k) != v}
             if not effective and not change_suggested:
                 return self._result(tx, actor_id, m, i)

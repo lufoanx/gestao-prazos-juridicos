@@ -363,7 +363,10 @@ class DeadlineService:
 
     def history(self, actor_id: str, deadline_id: str, page: int, per_page: int) -> tuple[list[HistoryEvent], int]:
         with self._unit() as tx:
-            d, _ = self._readable(tx, actor_id, deadline_id)
+            d, m = self._readable(tx, actor_id, deadline_id)
             items = list(tx.deadlines.history(d.id))
-        start = (page - 1) * per_page
-        return items[start:start + per_page], len(items)
+            start = (page - 1) * per_page
+            # Mesma projeção autorizada das intimações (referências a recursos protegidos).
+            page_items = [replace(e, details=ops.project_details(tx, actor_id, m, e.details))
+                          for e in items[start:start + per_page]]
+        return page_items, len(items)
