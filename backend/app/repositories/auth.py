@@ -1,9 +1,14 @@
 """Interfaces de repositório de autenticação (contrato para a futura persistência).
 
 A implementação atual é EM MEMÓRIA (app/repositories/memory.py). Uma implementação com
-banco deverá oferecer as mesmas garantias de atomicidade (unicidade de e-mail, rotação
-de refresh token e consumo de token de recuperação), por exemplo com restrições UNIQUE
-e transações.
+banco deverá oferecer as MESMAS garantias de atomicidade, por exemplo:
+- unicidade de e-mail (restrição UNIQUE);
+- criação de sessão condicionada à versão da credencial
+  (`INSERT ... SELECT ... WHERE users.credential_version = :v`, na mesma transação);
+- rehash condicionado à versão (`UPDATE ... WHERE credential_version = :v`);
+- rotação de refresh token e consumo de token de recuperação em transação;
+- redefinição de senha como UMA transação (consumo + credencial + tokens + sessões);
+- no máximo um token de recuperação ativo por usuário (substituição em transação).
 """
 from __future__ import annotations
 
@@ -29,17 +34,25 @@ class UserRepository(Protocol):
 
     def update_name(self, user_id: str, name: str) -> User | None: ...
 
-    def update_password_hash(self, user_id: str, password_hash: str) -> bool: ...
+    def update_password_hash_if_version(self, user_id: str, password_hash: str, expected_version: int) -> bool:
+        """Rehash condicional: grava só se a versão da credencial ainda for `expected_version`.
+
+        Não altera a versão (a senha é a mesma). Retorna False se a credencial mudou.
+        """
+        ...
 
 
 class RotationResult(Enum):
     ROTATED = "rotated"
-    INVALID = "invalid"   # desconhecido, expirado ou sessão revogada
+    INVALID = "invalid"   # desconhecido, expirado, sessão revogada ou credencial alterada
     REUSED = "reused"     # token já utilizado: família revogada
 
 
 class SessionRepository(Protocol):
-    def add(self, session: AuthSession) -> None: ...
+    def add_if_credentials_current(self, session: AuthSession) -> bool:
+        """Cria a sessão SOMENTE se `session.credential_version` ainda for a versão atual
+        do usuário (verificação e inserção atômicas). Aplica o limite de sessões por usuário."""
+        ...
 
     def get(self, session_id: str) -> AuthSession | None: ...
 
@@ -53,12 +66,28 @@ class SessionRepository(Protocol):
 
     def revoke_all_for_user(self, user_id: str, now: datetime) -> int: ...
 
-
-class PasswordResetRepository(Protocol):
-    def add(self, token: PasswordResetToken) -> None: ...
-
-    def consume(self, token_hash: str, now: datetime) -> PasswordResetToken | None:
-        """Marca o token como usado de forma atômica; None se inválido/expirado/usado."""
+    def purge_expired(self, now: datetime) -> int:
+        """Remove sessões cuja vida absoluta terminou (e os índices de seus tokens)."""
         ...
 
-    def invalidate_all_for_user(self, user_id: str, now: datetime) -> int: ...
+
+class PasswordResetRepository(Protocol):
+    def issue_replacing_active(self, token: PasswordResetToken, now: datetime) -> None:
+        """Invalida os tokens ativos do usuário E registra o novo, atomicamente
+        (no máximo um token ativo por usuário)."""
+        ...
+
+    def is_active(self, token_hash: str, now: datetime) -> bool:
+        """Pré-validação SEM consumir (evita trabalho caro com token inválido).
+        Não substitui a revalidação atômica em `complete_reset`."""
+        ...
+
+    def complete_reset(self, token_hash: str, new_password_hash: str, now: datetime) -> str | None:
+        """Operação completa e atômica: revalida e consome o token, troca o hash e
+        incrementa a versão da credencial, invalida os demais tokens e revoga todas as
+        sessões do usuário. Retorna o user_id, ou None se o token não estiver ativo."""
+        ...
+
+    def purge_expired(self, now: datetime) -> int:
+        """Remove tokens usados, invalidados ou expirados."""
+        ...

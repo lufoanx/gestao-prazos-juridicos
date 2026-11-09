@@ -23,8 +23,8 @@ FORGOT_MESSAGE = "Se o e-mail estiver cadastrado, enviaremos instruções de rec
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=PublicUser, response_model_by_alias=True)
-def register(body: RegisterRequest, service: AuthServiceDep) -> PublicUser:
-    return PublicUser.from_user(service.register(body.name, body.email, body.password))
+def register(body: RegisterRequest, request: Request, service: AuthServiceDep) -> PublicUser:
+    return PublicUser.from_user(service.register(body.name, body.email, body.password, client_ip(request)))
 
 
 @router.post("/login", response_model=LoginResponse, response_model_by_alias=True)
@@ -66,6 +66,6 @@ def forgot_password(body: ForgotPasswordRequest, service: AuthServiceDep) -> Mes
 
 
 @router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
-def reset_password(body: ResetPasswordRequest, service: AuthServiceDep) -> Response:
-    service.reset_password(body.token, body.new_password)
+def reset_password(body: ResetPasswordRequest, request: Request, service: AuthServiceDep) -> Response:
+    service.reset_password(body.token, body.new_password, client_ip(request))
     return Response(status_code=status.HTTP_204_NO_CONTENT)

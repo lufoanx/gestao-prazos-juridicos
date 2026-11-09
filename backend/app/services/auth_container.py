@@ -55,7 +55,11 @@ def build_auth_container(
         raise ValueError(f"AUTH_JWT_SECRET é obrigatório em ENVIRONMENT={settings.environment}.")
 
     clock = clock or SystemClock()
-    store = MemoryAuthStore()
+    store = MemoryAuthStore(max_sessions_per_user=settings.auth_max_sessions_per_user)
+
+    def limiter(max_events: int, window: int) -> RateLimiter:
+        return RateLimiter(max_events, window, clock, max_keys=settings.auth_rate_limit_max_keys)
+
     service = AuthService(
         users=InMemoryUserRepository(store),
         sessions=InMemorySessionRepository(store),
@@ -66,8 +70,10 @@ def build_auth_container(
         ),
         clock=clock,
         delivery=delivery or NoopPasswordResetDelivery(),
-        login_limiter=RateLimiter(settings.auth_login_max_failures, settings.auth_login_window_seconds, clock),
-        forgot_limiter=RateLimiter(settings.auth_forgot_max_requests, settings.auth_forgot_window_seconds, clock),
+        login_limiter=limiter(settings.auth_login_max_failures, settings.auth_login_window_seconds),
+        forgot_limiter=limiter(settings.auth_forgot_max_requests, settings.auth_forgot_window_seconds),
+        register_limiter=limiter(settings.auth_register_max_requests, settings.auth_register_window_seconds),
+        reset_limiter=limiter(settings.auth_reset_max_requests, settings.auth_reset_window_seconds),
         refresh_ttl_seconds=settings.auth_refresh_token_ttl_seconds,
         reset_ttl_seconds=settings.auth_password_reset_ttl_seconds,
     )

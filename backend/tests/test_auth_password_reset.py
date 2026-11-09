@@ -102,14 +102,15 @@ def test_reset_invalida_outros_tokens_e_revoga_todas_as_sessoes(client, delivery
     s2 = login(client).json()
     _forgot(client)
     token = delivery.messages[-1].token
-    # Um token pendente extra, criado diretamente no repositório (simula pedido concorrente).
+    # Um token pendente extra, inserido direto no estado (simula estado anterior à política
+    # de token único): a redefinição deve invalidá-lo mesmo assim.
     from app.domain.auth import PasswordResetToken
 
     store_clock = auth_app.state.auth.clock
     pending = "token-pendente-extra-1234567890"
     user_id = s1["user"]["id"]
-    auth_app.state.auth.service._resets.add(
-        PasswordResetToken(hash_opaque_token(pending), user_id, store_clock.now(), store_clock.now().replace(year=2027))
+    auth_app.state.auth.store.reset_tokens[hash_opaque_token(pending)] = PasswordResetToken(
+        hash_opaque_token(pending), user_id, store_clock.now(), store_clock.now().replace(year=2027)
     )
     assert _reset(client, token).status_code == 204
     for s in (s1, s2):

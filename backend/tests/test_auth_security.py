@@ -116,7 +116,7 @@ def test_cadastro_concorrente_do_mesmo_email_cria_um_unico_usuario(auth_app):
     def attempt(i):
         barrier.wait()
         try:
-            return service.register(f"Pessoa {i}", "mesmo@exemplo.com", PASSWORD)
+            return service.register(f"Pessoa {i}", "mesmo@exemplo.com", PASSWORD, f"10.0.0.{i}")
         except Exception as exc:
             return exc
 

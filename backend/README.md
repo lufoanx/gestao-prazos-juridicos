@@ -94,8 +94,11 @@ oficial é `/api/v1/health`.
 | `POST /api/v1/auth/reset-password` `{token,newPassword}` | não | 204 (revoga todas as sessões) |
 
 Senha: Argon2id, 8–128 caracteres, sem truncamento. Access token: JWT HS256 de 15 min,
-validado também contra a sessão no servidor. Limites: 5 falhas de login por IP+e-mail em
-5 min; 3 pedidos de recuperação por e-mail em 15 min (429 + `Retry-After`).
+validado também contra a sessão no servidor e a versão da credencial (sessões anteriores a
+uma redefinição deixam de valer). Limites (429 + `Retry-After`, verificados antes de
+qualquer Argon2): login 5 tentativas por IP+e-mail em 5 min; recuperação 3 pedidos por
+e-mail em 15 min; cadastro 10 por IP por hora; redefinição 10 por IP em 15 min. No máximo
+10 sessões por usuário e um token de recuperação ativo por usuário.
 Detalhes, decisões e limitações: `docs/backend/06-etapa-2-autenticacao.md`; contratos:
 `docs/backend/04-contratos-api-iniciais.md`.
 
@@ -113,6 +116,8 @@ Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigató
 - `AUTH_JWT_ISSUER` / `AUTH_JWT_AUDIENCE` (padrões `prazoai-backend` / `prazoai-api`)
 - `AUTH_ACCESS_TOKEN_TTL_SECONDS` (900), `AUTH_REFRESH_TOKEN_TTL_SECONDS` (604800, vida absoluta da sessão), `AUTH_PASSWORD_RESET_TTL_SECONDS` (1800)
 - `AUTH_LOGIN_MAX_FAILURES` (5) / `AUTH_LOGIN_WINDOW_SECONDS` (300), `AUTH_FORGOT_MAX_REQUESTS` (3) / `AUTH_FORGOT_WINDOW_SECONDS` (900)
+- `AUTH_REGISTER_MAX_REQUESTS` (10) / `AUTH_REGISTER_WINDOW_SECONDS` (3600), `AUTH_RESET_MAX_REQUESTS` (10) / `AUTH_RESET_WINDOW_SECONDS` (900)
+- `AUTH_RATE_LIMIT_MAX_KEYS` (10000; chaves além do teto compartilham um balde de transbordo) e `AUTH_MAX_SESSIONS_PER_USER` (10)
 
 ## Observações
 - **Sem banco/ORM**: nenhuma dependência de persistência foi instalada.

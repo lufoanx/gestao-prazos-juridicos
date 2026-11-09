@@ -12,6 +12,10 @@ class User:
     email: str  # normalizado (minúsculas); âncora de identidade, imutável pelo perfil
     password_hash: str  # Argon2id — nunca exposto em respostas ou logs
     created_at: datetime
+    # Incrementada a cada troca de senha (redefinição). Sessões guardam a versão com que
+    # foram criadas; versão divergente = credencial antiga = sessão inválida.
+    # O rehash (mesma senha, novos parâmetros) NÃO altera a versão.
+    credential_version: int = 0
 
     def __repr__(self) -> str:  # evita vazar o hash em logs/tracebacks
         return f"User(id={self.id!r})"
@@ -26,6 +30,7 @@ class AuthSession:
     created_at: datetime
     expires_at: datetime  # vida máxima absoluta (a rotação não estende)
     current_refresh_hash: str
+    credential_version: int  # versão da credencial do usuário no momento do login
     used_refresh_hashes: set[str] = field(default_factory=set)
     revoked_at: datetime | None = None
 

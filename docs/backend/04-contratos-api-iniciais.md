@@ -30,7 +30,7 @@ Usuário público (`PublicUser`): `{ id, name, email, createdAt }` — nunca sen
 
 - `POST /api/v1/auth/register` — body `{ name, email, password }` → **201** `PublicUser`.
   Não autentica. 409 `email_already_registered`; 422 dados inválidos ou campos extras
-  (`role`, `permissions`, `officeId`, `id`...).
+  (`role`, `permissions`, `officeId`, `id`...); 429 `rate_limited` (por IP).
 - `POST /api/v1/auth/login` — body `{ email, password }` → **200**
   `{ accessToken, refreshToken, tokenType: "Bearer", expiresIn, user }`.
   401 `invalid_credentials` (genérico); 429 `rate_limited` (+ `Retry-After`).
@@ -43,10 +43,12 @@ Usuário público (`PublicUser`): `{ id, name, email, createdAt }` — nunca sen
 - `GET /api/v1/auth/me` — auth → **200** `{ user }` (sem `membership`: escritórios na próxima
   etapa); 401.
 - `POST /api/v1/auth/forgot-password` — body `{ email }` → **202**
-  `{ message }` idêntico para e-mail existente ou não; 429 `rate_limited`. Nenhum token volta
+  `{ message }` idêntico para e-mail existente ou não; no máximo um token ativo por usuário
+  (novo pedido invalida o anterior); 429 `rate_limited`. Nenhum token volta
   pela API (entrega real depende da etapa de e-mail).
 - `POST /api/v1/auth/reset-password` — body `{ token, newPassword }` → **204**; revoga todas
-  as sessões e tokens de recuperação pendentes; não autentica. 400 `invalid_reset_token`; 422.
+  as sessões e tokens de recuperação pendentes; não autentica. 400 `invalid_reset_token`; 422;
+  429 `rate_limited` (por IP).
 
 Erros de autenticação: 401 `not_authenticated` (sem token) ou `invalid_token` (inválido,
 adulterado, expirado, finalidade incorreta ou sessão revogada), com `WWW-Authenticate: Bearer`.

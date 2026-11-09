@@ -73,6 +73,17 @@ class Settings(BaseSettings):
     auth_login_window_seconds: int = Field(default=300, alias="AUTH_LOGIN_WINDOW_SECONDS", ge=10, le=24 * 3600)
     auth_forgot_max_requests: int = Field(default=3, alias="AUTH_FORGOT_MAX_REQUESTS", ge=1, le=100)
     auth_forgot_window_seconds: int = Field(default=900, alias="AUTH_FORGOT_WINDOW_SECONDS", ge=10, le=24 * 3600)
+    # Cadastro e redefinição: limitados por IP ANTES de qualquer cálculo de Argon2.
+    auth_register_max_requests: int = Field(default=10, alias="AUTH_REGISTER_MAX_REQUESTS", ge=1, le=1000)
+    auth_register_window_seconds: int = Field(
+        default=3600, alias="AUTH_REGISTER_WINDOW_SECONDS", ge=10, le=24 * 3600
+    )
+    auth_reset_max_requests: int = Field(default=10, alias="AUTH_RESET_MAX_REQUESTS", ge=1, le=1000)
+    auth_reset_window_seconds: int = Field(default=900, alias="AUTH_RESET_WINDOW_SECONDS", ge=10, le=24 * 3600)
+    # Teto de chaves rastreadas por limitador (excedente usa um balde compartilhado).
+    auth_rate_limit_max_keys: int = Field(default=10_000, alias="AUTH_RATE_LIMIT_MAX_KEYS", ge=10, le=1_000_000)
+    # Sessões simultâneas por usuário; ao exceder, as mais antigas são removidas.
+    auth_max_sessions_per_user: int = Field(default=10, alias="AUTH_MAX_SESSIONS_PER_USER", ge=1, le=100)
 
     @field_validator("auth_jwt_secret")
     @classmethod

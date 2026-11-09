@@ -35,6 +35,68 @@ class CapturingDelivery:
         self.messages.append(message)
 
 
+class InstrumentedHasher:
+    """Fábrica do hasher REAL (Argon2id) com contadores e pausas determinísticas.
+
+    Criado sob demanda para não importar a aplicação antes do sys.path ser ajustado.
+    - conta chamadas a hash/verify/verify_dummy;
+    - `pause_after_verify(thread_name)` / `pause_after_hash(thread_name)`: a thread com
+      esse nome sinaliza `reached` e espera `release` (Events, sem sleep);
+    - `force_rehash=True` simula mudança de parâmetros (needs_rehash verdadeiro).
+    """
+
+    @staticmethod
+    def create(force_rehash: bool = False):
+        from app.security.passwords import PasswordHasher
+
+        class _Instrumented(PasswordHasher):
+            def __init__(self) -> None:
+                super().__init__()
+                self.counts = {"hash": 0, "verify": 0, "verify_dummy": 0}
+                self.force_rehash = force_rehash
+                self.reached = threading.Event()
+                self.release = threading.Event()
+                self._pause_verify_thread: str | None = None
+                self._pause_hash_thread: str | None = None
+                self._lock = threading.Lock()
+
+            def _bump(self, key: str) -> None:
+                with self._lock:
+                    self.counts[key] += 1
+
+            def pause_after_verify(self, thread_name: str) -> None:
+                self._pause_verify_thread = thread_name
+
+            def pause_after_hash(self, thread_name: str) -> None:
+                self._pause_hash_thread = thread_name
+
+            def _maybe_pause(self, target: str | None) -> None:
+                if target is not None and threading.current_thread().name == target:
+                    self.reached.set()
+                    assert self.release.wait(30), "teste travou esperando release"
+
+            def hash(self, password: str) -> str:
+                self._bump("hash")
+                result = super().hash(password)
+                self._maybe_pause(self._pause_hash_thread)
+                return result
+
+            def verify(self, password_hash: str, password: str) -> bool:
+                self._bump("verify")
+                result = super().verify(password_hash, password)
+                self._maybe_pause(self._pause_verify_thread)
+                return result
+
+            def verify_dummy(self, password: str) -> None:
+                self._bump("verify_dummy")
+                super().verify_dummy(password)
+
+            def needs_rehash(self, password_hash: str) -> bool:
+                return True if self.force_rehash else super().needs_rehash(password_hash)
+
+        return _Instrumented()
+
+
 @pytest.fixture
 def clock() -> FakeClock:
     return FakeClock()
@@ -51,12 +113,12 @@ def make_app(monkeypatch):
     import app.core.config as config_module
     from app.main import create_app
 
-    def _make(clock=None, delivery=None, **env):
+    def _make(clock=None, delivery=None, password_hasher=None, **env):
         for k, v in env.items():
             monkeypatch.setenv(k, str(v))
         config_module.get_settings.cache_clear()
         try:
-            return create_app(clock=clock, password_reset_delivery=delivery)
+            return create_app(clock=clock, password_reset_delivery=delivery, password_hasher=password_hasher)
         finally:
             config_module.get_settings.cache_clear()
 

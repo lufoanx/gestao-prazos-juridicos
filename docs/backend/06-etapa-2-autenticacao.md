@@ -54,6 +54,9 @@ app/
 | Segredo JWT | Sem padrão no código. Obrigatório em staging/production (mín. 32 bytes, placeholders recusados). Em development/test, se ausente, gera-se um segredo aleatório **por instância** |
 | Produção | `AUTH_STORAGE=memory` + `ENVIRONMENT=production` → `create_app` falha (`InMemoryAuthBlockedError`). Só sobe com `AUTH_ENABLED=false` |
 | Erros | `AppError` → `{"error": {"code", "message"}}`; 401 com `WWW-Authenticate: Bearer`; 429 com `Retry-After` |
+| Versão da credencial | `User.credential_version` sobe atomicamente na redefinição. Sessão guarda a versão do login; criação de sessão, rehash, refresh e autenticação conferem a versão |
+| Custo (Argon2) | Limites checados antes de qualquer hash; cadastro com e-mail já existente e redefinição com token inativo não calculam hash; nenhum lock é mantido durante o Argon2 |
+| Retenção | Limitadores com varredura de chaves expiradas e teto de chaves (transbordo compartilhado); sessões expiradas e tokens de recuperação inativos removidos periodicamente; máximo de sessões por usuário |
 
 **Dependências novas (fixadas):** `argon2-cffi==25.1.0` (Argon2id mantido, sem
 criptografia própria), `PyJWT==2.15.1` (JWT com validação de claims) e
@@ -66,6 +69,33 @@ Todas publicadas há mais de duas semanas da data de integração.
 - `GET /auth/me` devolve `{ user }`, sem `membership` (escritórios na próxima etapa).
 - Novos: `register`, `forgot-password`, `reset-password`.
 - Usuário público ganhou `createdAt` (previsto no modelo de domínio).
+
+## 3.1 Correções da auditoria independente
+1. **Login × redefinição.** Causa: o login lia hash e usuário, verificava a senha e criava
+   a sessão sem confirmar que a credencial ainda era a mesma; uma redefinição concluída
+   nesse intervalo deixava passar uma sessão baseada na senha antiga (reproduzido com
+   pausa determinística). O rehash gravava incondicionalmente e podia restaurar a senha
+   antiga. Solução: `credential_version` + operações condicionais atômicas
+   (`add_if_credentials_current`, `update_password_hash_if_version`); a redefinição
+   incrementa a versão na mesma operação que troca o hash e revoga as sessões;
+   `authenticate`/`refresh` rejeitam versões divergentes.
+2. **Recuperação/redefinição não atômicas.** Causa: `forgot_password` invalidava e depois
+   inseria em chamadas separadas; a redefinição consumia, trocava hash, invalidava e
+   revogava em passos separados. Solução: `issue_replacing_active` (invalida + insere no
+   mesmo lock: no máximo um token ativo) e `complete_reset` (revalida, consome, troca o
+   hash e a versão, invalida os demais tokens e revoga todas as sessões numa única
+   operação). Em banco, cada uma deve ser uma transação.
+3. **Operações públicas caras.** Causa: `reset_password` calculava Argon2 antes de olhar o
+   token; cadastro e redefinição não tinham limite. Solução: limites por IP para cadastro
+   e redefinição verificados antes de tudo; pré-validação barata do token (`is_active`,
+   sem consumir) antes do hash, com revalidação atômica em `complete_reset`; cadastro com
+   e-mail já existente responde 409 sem hash (unicidade continua atômica em `add`).
+4. **Crescimento do estado temporário.** Causa: o limitador nunca removia chaves; sessões
+   e tokens expirados ficavam para sempre. Solução: varredura periódica (uma vez por
+   janela, pelo relógio injetado) e sob demanda; teto de chaves com balde de transbordo;
+   limpeza periódica (a cada 60 s de relógio, em escritas) de sessões expiradas e tokens
+   inativos; limite de sessões por usuário. Sessões revogadas ficam até a expiração
+   absoluta, preservando a detecção de reuso de refresh tokens durante a validade.
 
 ## 4. Uso
 ```bash
@@ -85,8 +115,11 @@ Para segredo estável entre reinícios em desenvolvimento, defina `AUTH_JWT_SECR
 
 ## 5. Testes
 Arquivos: `test_auth_register_login.py`, `test_auth_tokens.py`, `test_auth_refresh.py`,
-`test_auth_password_reset.py`, `test_users_me.py`, `test_auth_security.py`, com fixtures
-em `tests/conftest.py` (`FakeClock`, `CapturingDelivery`, `make_app`).
+`test_auth_password_reset.py`, `test_users_me.py`, `test_auth_security.py`,
+`test_auth_consistency.py` (login/rehash × reset, recuperação e redefinições concorrentes),
+`test_auth_cost_protection.py` (contagem de chamadas ao hasher) e `test_auth_retention.py`
+(limpeza e tetos), com fixtures em `tests/conftest.py` (`FakeClock`, `CapturingDelivery`,
+`InstrumentedHasher` — Argon2id real com contadores e pausas por Event —, `make_app`).
 Os testes usam os serviços e repositórios **reais** (Argon2id, PyJWT, locks); só o relógio
 e o canal de entrega são substituídos. Concorrência: threads com `Barrier` no cadastro,
 no refresh e no reset.
@@ -97,13 +130,19 @@ no refresh e no reset.
   e, sem `AUTH_JWT_SECRET`, seu próprio segredo. Rode com **um** worker.
 - **Não está pronto para produção:** bloqueado em `production` por padrão.
 - **Rate limiting em memória:** por processo, zera ao reiniciar, não é distribuído. Login é
-  limitado por par IP + e-mail; recuperação, por e-mail. Usa o IP visto pelo servidor
+  limitado por par IP + e-mail; recuperação, por e-mail; cadastro e redefinição, por IP.
+  Sob inundação de chaves distintas acima de `AUTH_RATE_LIMIT_MAX_KEYS`, chaves novas
+  compartilham um balde e podem ser limitadas juntas (degradação segura escolhida para
+  não permitir zerar contadores existentes). Usa o IP visto pelo servidor
   (`X-Forwarded-For` é ignorado de propósito); atrás de proxy, todos podem compartilhar o
   IP do proxy. Produção exigirá armazenamento compartilhado (ex.: Redis) e IP confiável.
 - **Refresh concorrente:** dois usos simultâneos do mesmo refresh token são tratados como
   reutilização: um vence e a família é revogada. O cliente deve serializar o refresh.
 - **Cadastro revela existência de e-mail** (409), por exigência de unicidade explícita;
-  login e recuperação não revelam.
+  login e recuperação não revelam. O 409 sem hash é mais rápido que um cadastro novo.
+- **Limite de sessões:** ao exceder `AUTH_MAX_SESSIONS_PER_USER`, as sessões mais antigas
+  (expiradas, depois revogadas, depois as mais antigas) são removidas sem aviso.
+- **Usuários não expiram:** o crescimento de contas é contido só pelo limite de cadastro.
 - **Recuperação sem entrega real:** o adaptador padrão só registra o evento (sem e-mail e
   sem token). A entrega real depende da etapa de e-mail.
 - **Diferenças de tempo** entre e-mail existente/inexistente na recuperação não são
