@@ -12,7 +12,7 @@ install:
 	$(PIP) install -r requirements-dev.txt
 
 dev:
-	$(VENV)/bin/uvicorn app.main:app --reload --port 8000
+	$(VENV)/bin/uvicorn app.main:app --reload --port 8000 --no-proxy-headers
 
 test:
 	$(VENV)/bin/pytest

@@ -1,4 +1,6 @@
 "use client";
+import { IntegratedSignup } from "@/integrated/IntegratedSignup";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -11,7 +13,7 @@ import { useSession } from "@/context/SessionContext";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export default function CadastroPage() {
+function DemoCadastroPage() {
   const router = useRouter();
   const { signUp } = useSession();
   const [form, setForm] = useState({ name: "", email: "", pw: "", pw2: "" });
@@ -75,4 +77,9 @@ export default function CadastroPage() {
       </p>
     </AuthShell>
   );
+}
+
+// Modo integrado (Etapa 6.1): formulário real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedSignup /> : <DemoCadastroPage />;
 }

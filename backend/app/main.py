@@ -105,6 +105,10 @@ def create_app(
     register_error_handlers(app)
 
     # Autenticação (Etapa 2): estado EM MEMÓRIA por instância. Bloqueado em production.
+    # Etapa 6.1: segredo do intermediário (BFF) para aceitar o IP do cliente; None = desativado.
+    app.state.trusted_proxy_secret = (
+        settings.trusted_proxy_secret.get_secret_value() if settings.trusted_proxy_secret else None
+    )
     app.state.auth = None
     if settings.auth_enabled:
         container = build_auth_container(

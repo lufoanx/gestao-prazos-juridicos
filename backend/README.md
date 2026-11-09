@@ -33,9 +33,9 @@ python3 -m venv .venv
 
 ## Execução
 ```bash
-make dev            # uvicorn app.main:app --reload --port 8000
+make dev            # uvicorn app.main:app --reload --port 8000 --no-proxy-headers
 # ou
-.venv/bin/uvicorn app.main:app --reload --port 8000
+.venv/bin/uvicorn app.main:app --reload --port 8000 --no-proxy-headers
 ```
 
 ## Windows (PowerShell)
@@ -52,7 +52,7 @@ python -m pip install --upgrade pip
 pip install -r requirements-dev.txt
 
 # execução
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000 --no-proxy-headers
 
 # verificações
 pytest
@@ -150,6 +150,13 @@ Detalhes, matriz, exemplos e limites: `docs/backend/08-etapa-4-prazos.md`.
 
 Detalhes: `docs/backend/09-etapa-5-intimacoes-notificacoes.md`.
 
+## Integração com o frontend (Etapa 6.1)
+O frontend usa um BFF no Next.js; o backend não mudou seus contratos. Única adição:
+`TRUSTED_PROXY_SECRET` (desativado por padrão) para aceitar o IP do cliente enviado pelo BFF
+(`X-PrazoAI-Client-IP` + `X-PrazoAI-Proxy-Secret`). Rode sempre com `--no-proxy-headers`: por
+padrão o uvicorn confia em `X-Forwarded-For` vindo de 127.0.0.1. Ver
+`docs/backend/10-etapa-6-1-sessao-bff.md`.
+
 ## Configuração (variáveis de ambiente)
 Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigatório; nunca versione o `.env`):
 - `SERVICE_NAME` (padrão `prazoai-backend`)
@@ -166,6 +173,7 @@ Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigató
 - `AUTH_LOGIN_MAX_FAILURES` (5) / `AUTH_LOGIN_WINDOW_SECONDS` (300), `AUTH_FORGOT_MAX_REQUESTS` (3) / `AUTH_FORGOT_WINDOW_SECONDS` (900)
 - `AUTH_REGISTER_MAX_REQUESTS` (10) / `AUTH_REGISTER_WINDOW_SECONDS` (3600), `AUTH_RESET_MAX_REQUESTS` (10) / `AUTH_RESET_WINDOW_SECONDS` (900)
 - `AUTH_RATE_LIMIT_MAX_KEYS` (10000; chaves além do teto compartilham um balde de transbordo) e `AUTH_MAX_SESSIONS_PER_USER` (10)
+- `TRUSTED_PROXY_SECRET` (vazio = desativado; mín. 32 bytes) — IP do cliente via BFF
 - `INTIMATIONS_*` e `NOTIFICATIONS_*` (tetos e retenção — ver doc 09)
 - `DEADLINES_TIMEZONE` (America/Sao_Paulo), `DEADLINES_SOON_DAYS` (3) e tetos `DEADLINES_MAX_*` — ver doc 08
 - `OFFICES_ENABLED` (vazio = acompanha `AUTH_ENABLED`) e `ORG_*` (validade de convite, limites de taxa, tetos de pendências e retenção — ver doc 07)
