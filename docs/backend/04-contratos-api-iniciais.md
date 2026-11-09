@@ -1,14 +1,16 @@
 # 04 — Contratos de API Iniciais
 
-> Etapa 1. Contratos planejados sob a base versionada **`/api/v1`**. **Apenas
-> `GET /api/v1/health` está implementado** nesta etapa; o restante é especificação
-> para as próximas etapas (não implementar agora).
+> Contratos sob a base versionada **`/api/v1`**.
+> **Implementados:** `GET /api/v1/health` (Etapa 1) e os grupos **`/auth`** e **`/users/me`**
+> (Etapa 2 — armazenamento em memória, ver `06-etapa-2-autenticacao.md`).
+> **Planejados:** todos os demais grupos (escritórios, prazos, intimações etc.).
 
 ## Convenções
 - Base canônica: `/api/v1` (prefixo `/api` + versão `/v1`). JSON em UTF-8.
 - Alias legado: `/api/health` (compatibilidade; o contrato oficial é `/api/v1/health`).
 - Erros: `{ "error": { "code": string, "message": string, "details?": any } }` (sem stack trace).
-- Autenticação (futura): `Authorization: Bearer <token>`.
+- Autenticação: `Authorization: Bearer <accessToken>` (Etapa 2). Corpos JSON em camelCase;
+  campos não previstos → 422.
 - Permissões referenciam o RBAC do domínio (03): `deadline.*`, `team.manage`, `office.manage`.
 - Paginação (futura): `?page`, `?perPage`; busca `?q`; filtros conforme recurso.
 
@@ -23,16 +25,41 @@
 
 ---
 
-## /auth (futuro)
-- `POST /api/v1/auth/login` — body `{ email, password }` → 200 `{ accessToken, refreshToken, user }`; 401 credenciais inválidas.
-- `POST /api/v1/auth/refresh` — body `{ refreshToken }` → 200 `{ accessToken }`; 401.
-- `POST /api/v1/auth/logout` — auth → 204.
-- `GET /api/v1/auth/me` — auth → 200 `{ user, membership? }`; 401.
+## /auth — IMPLEMENTADO (Etapa 2, em memória)
+Usuário público (`PublicUser`): `{ id, name, email, createdAt }` — nunca senha/hash.
 
-## /users (futuro)
-- `GET /api/v1/users/me` — auth → 200 perfil.
-- `PATCH /api/v1/users/me` — auth; body `{ name?, preferences? }` → 200. (e-mail não editável)
-- `GET /api/v1/users/:id` — auth + mesma organização → 200; 403/404.
+- `POST /api/v1/auth/register` — body `{ name, email, password }` → **201** `PublicUser`.
+  Não autentica. 409 `email_already_registered`; 422 dados inválidos ou campos extras
+  (`role`, `permissions`, `officeId`, `id`...); 429 `rate_limited` (por IP).
+- `POST /api/v1/auth/login` — body `{ email, password }` → **200**
+  `{ accessToken, refreshToken, tokenType: "Bearer", expiresIn, user }`.
+  401 `invalid_credentials` (genérico); 429 `rate_limited` (+ `Retry-After`).
+- `POST /api/v1/auth/refresh` — body `{ refreshToken }` → **200**
+  `{ accessToken, refreshToken, tokenType, expiresIn }`. **Evolução do contrato:** devolve um
+  novo `refreshToken` (rotação a cada uso); o anterior deixa de valer e sua reutilização revoga
+  a sessão inteira. 401 `invalid_refresh_token`. Cada sessão aceita no máximo
+  `AUTH_MAX_REFRESH_ROTATIONS_PER_SESSION` rotações (padrão 1000); o refresh seguinte encerra
+  a sessão com 401 `session_rotation_limit_reached` (novo login obrigatório).
+- `POST /api/v1/auth/logout` — auth → **204** sem corpo; revoga a sessão atual (access e
+  refresh deixam de valer imediatamente). 401 sem token.
+- `GET /api/v1/auth/me` — auth → **200** `{ user }` (sem `membership`: escritórios na próxima
+  etapa); 401.
+- `POST /api/v1/auth/forgot-password` — body `{ email }` → **202**
+  `{ message }` idêntico para e-mail existente ou não; no máximo um token ativo por usuário
+  (novo pedido invalida o anterior); 429 `rate_limited`. Nenhum token volta
+  pela API (entrega real depende da etapa de e-mail).
+- `POST /api/v1/auth/reset-password` — body `{ token, newPassword }` → **204**; revoga todas
+  as sessões e tokens de recuperação pendentes; não autentica. 400 `invalid_reset_token`; 422;
+  429 `rate_limited` (por IP).
+
+Erros de autenticação: 401 `not_authenticated` (sem token) ou `invalid_token` (inválido,
+adulterado, expirado, finalidade incorreta ou sessão revogada), com `WWW-Authenticate: Bearer`.
+
+## /users
+- `GET /api/v1/users/me` — **IMPLEMENTADO** — auth → 200 `PublicUser`.
+- `PATCH /api/v1/users/me` — **IMPLEMENTADO** — auth; body `{ name }` → 200 `PublicUser`.
+  E-mail, senha, id, permissões, escritório e `preferences` → 422 (preferências: planejado).
+- `GET /api/v1/users/:id` — planejado — auth + mesma organização → 200; 403/404.
 
 ## /offices (futuro)
 - `POST /api/v1/offices` — auth; body `{ name }` → 201 (regra: escritório único). Erros: 409 já possui escritório.
@@ -94,4 +121,4 @@
 ### Códigos HTTP usados
 200 OK · 201 Created · 202 Accepted · 204 No Content · 400 Bad Request ·
 401 Unauthorized · 403 Forbidden · 404 Not Found · 409 Conflict · 410 Gone ·
-422 Unprocessable Entity (validação de DTO) · 500 Internal Error.
+422 Unprocessable Entity (validação de DTO) · 429 Too Many Requests · 500 Internal Error.

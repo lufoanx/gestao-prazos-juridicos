@@ -2,8 +2,8 @@
 
 Interface web do **PrazoAI**, plataforma de **gestão de prazos jurídicos**. Este
 diretório contém o **protótipo de frontend** — totalmente navegável e
-**100% demonstrativo**: não há backend, banco de dados, IA, OCR, envio de e-mail
-nem cálculo processual oficial. Todos os dados são simulados e persistidos apenas
+**100% demonstrativo**: não há integração com o backend, banco de dados, IA, OCR,
+envio de e-mail nem cálculo processual oficial. Todos os dados são simulados e persistidos apenas
 no navegador (localStorage).
 
 > **Root Directory na Vercel:** `frontend`
