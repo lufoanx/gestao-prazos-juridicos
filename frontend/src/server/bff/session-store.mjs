@@ -7,14 +7,11 @@
 // - Ao terminar, os tokens são apagados do objeto antes da remoção.
 // - Um único Map (id → sessão); a renovação em andamento fica NA PRÓPRIA sessão (sem mapas
 //   auxiliares).
-// - Coordenação login × logout entre abas (correção da auditoria 6.1):
-//   * a sessão guarda UM bilhete de login pendente (`pendingLogin`); um novo login com o mesmo
-//     cookie substitui (e cancela) o anterior; logout cancela o bilhete;
-//   * registro LIMITADO de sessões encerradas por logout (só o hash do id), com TTL curto e teto
-//     fixo, para recusar logins que chegam ao servidor depois do logout carregando o cookie antigo.
-//     Nada cresce indefinidamente: entradas expiram e as mais antigas são descartadas no teto.
+// - Coordenação login × logout (auditoria 6.1, v3): cada sessão guarda o NOME do seu cookie e
+//   UM bilhete de login pendente. Não há registro de logouts: um cookie sem sessão viva nunca é
+//   reabilitado (login com ele é recusado), então nada depende de TTL nem de capacidade.
 // Limitações: perde tudo ao reiniciar; não funciona com várias instâncias nem serverless.
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 
 export class SessionCapacityError extends Error {}
 
@@ -29,20 +26,7 @@ export function newSessionId() {
 export function createMemorySessionStore(limits, now = () => Date.now()) {
   /** @type {Map<string, any>} */
   const sessions = new Map();
-  /** @type {Map<string, number>} hash(id) → expira em (ms); ordem de inserção = mais antigo primeiro */
-  const loggedOut = new Map();
-  const loggedOutTtlMs = (limits.logoutMemorySeconds ?? 120) * 1000;
-  const loggedOutMax = limits.maxSessions;
   let lastSweep = 0;
-  const digest = (id) => createHash("sha256").update(id).digest("base64url");
-
-  function pruneLoggedOut() {
-    const t = now();
-    for (const [k, exp] of loggedOut) {
-      if (exp > t) break;              // inserção em ordem crescente de expiração
-      loggedOut.delete(k);
-    }
-  }
 
   const expired = (s, t) =>
     t - s.lastSeenAt >= limits.idleSeconds * 1000 || t - s.createdAt >= limits.maxAgeSeconds * 1000;
@@ -70,14 +54,13 @@ export function createMemorySessionStore(limits, now = () => Date.now()) {
     for (const [id, s] of sessions) {
       if (expired(s, t)) { remove(id); n++; }
     }
-    pruneLoggedOut();
     return n;
   }
 
   return {
     get size() { return sessions.size; },
 
-    create({ userId, accessToken, refreshToken, accessExpiresAt }) {
+    create({ userId, accessToken, refreshToken, accessExpiresAt, cookieName, browserId = null }) {
       sweep();
       if (sessions.size >= limits.maxSessions) {
         sweep(true);
@@ -86,7 +69,7 @@ export function createMemorySessionStore(limits, now = () => Date.now()) {
       const id = newSessionId();
       const t = now();
       sessions.set(id, {
-        id, userId, accessToken, refreshToken, accessExpiresAt,
+        id, userId, accessToken, refreshToken, accessExpiresAt, cookieName, browserId,
         createdAt: t, lastSeenAt: t, generation: 1, refreshing: null, ended: false, pendingLogin: null,
       });
       return id;
@@ -132,24 +115,28 @@ export function createMemorySessionStore(limits, now = () => Date.now()) {
       if (s && s.pendingLogin === ticket) s.pendingLogin = null;
     },
 
-    /** Logout: cancela o login pendente desta sessão e registra o id (hash) por tempo limitado. */
-    markLoggedOut(id) {
+    /** Logout: cancela o login pendente associado a esta sessão (se houver). */
+    cancelPendingLogin(id) {
       const s = sessions.get(id);
       if (s?.pendingLogin) s.pendingLogin.cancelled = true;
-      pruneLoggedOut();
-      const key = digest(id);
-      loggedOut.delete(key);
-      loggedOut.set(key, now() + loggedOutTtlMs);
-      while (loggedOut.size > loggedOutMax) loggedOut.delete(loggedOut.keys().next().value);
     },
 
-    wasLoggedOut(id) {
-      if (!id) return false;
-      pruneLoggedOut();
-      return loggedOut.has(digest(id));
+    /** Ids das sessões vivas deste navegador (varredura das próprias sessões; sem índice extra). */
+    liveOfBrowser(browserId) {
+      if (!browserId) return [];
+      const t = now();
+      const out = [];
+      for (const [id, s] of sessions) {
+        if (s.browserId === browserId && !s.ended && !expired(s, t)) out.push({ value: id, name: s.cookieName });
+      }
+      return out;
     },
 
-    get loggedOutSize() { return loggedOut.size; },
+    /** A sessão `id` está viva E pertence ao cookie `name`? (sem tocar na inatividade) */
+    isLive(id, name) {
+      const s = id ? sessions.get(id) : undefined;
+      return Boolean(s && !s.ended && s.cookieName === name && !expired(s, now()));
+    },
 
     remainingSeconds(s) {
       const t = now();

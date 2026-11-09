@@ -31,112 +31,241 @@ const creds = { email: "ana@exemplo.com", password: "Senha-123" };
 const cookieOf = (r) => r.headers.get("set-cookie")?.split(";")[0];
 const tick = () => new Promise((r) => setImmediate(r));
 
-function gatedLogin() {
-  const gate = deferred();
-  let hold = true;
+/** Pote de cookies como o navegador: aplica Set-Cookie (inclusive Max-Age=0) e monta o cabeçalho Cookie. */
+function jar() {
+  const m = new Map();
   return {
-    gate,
-    release() { hold = false; gate.resolve(); },
-    wrap: async (fetch, u, i) => { if (hold && String(u).endsWith("/auth/login")) await gate.promise; return fetch(u, i); },
+    apply(r) {
+      for (const c of r.headers.getSetCookie()) {
+        const [nv, ...attrs] = c.split(";");
+        const i = nv.indexOf("=");
+        const name = nv.slice(0, i).trim();
+        if (attrs.some((x) => x.trim() === "Max-Age=0")) m.delete(name);
+        else m.set(name, nv.slice(i + 1));
+      }
+      return this;
+    },
+    header() { return [...m].map(([n, v]) => `${n}=${v}`).join("; "); },
+    sessionNames() { return [...m.keys()].filter((n) => /_sid_[a-z0-9]{10}$/.test(n)); },
   };
 }
 
+/** Pausa a PRÓXIMA chamada ao caminho dado (gate determinístico, sem sleeps). */
+function pausable(env) {
+  const gates = new Map();
+  const wrap = async (fetch, u, i) => {
+    const path = new URL(u).pathname.replace("/api/v1", "");
+    const g = gates.get(path);
+    if (g) { gates.delete(path); g.reached.resolve(); await g.go.promise; }
+    return fetch(u, i);
+  };
+  const pause = (path) => { const g = { reached: deferred(), go: deferred() }; gates.set(path, g); return g; };
+  return { wrap, pause };
+}
+
+function coordSetup(env = {}) {
+  const p = pausable();
+  const e = setup({ env, wrap: p.wrap });
+  return { ...e, pause: p.pause };
+}
+
+const loginReq = (j) => req("POST", "/bff/auth/login", { body: creds, cookie: j?.header() || undefined });
+const logoutReq = (j) => req("POST", "/bff/auth/logout", { cookie: j.header() || undefined });
+const sessionOf = async (env, j) => (await env.bff.session(req("GET", "/bff/session", { cookie: j.header() || undefined }))).json();
+
 // ======================================================================
-// 1. Login × logout entre abas (coordenação no servidor)
+// 1. Login × logout entre abas — protocolo v3 (coordenação no servidor)
 // ======================================================================
-test("login pendente + logout em outra aba com o cookie anterior → não instala sessão", async () => {
-  const g = gatedLogin();
-  g.release();                                                         // 1º login livre
-  const env = setup({ wrap: g.wrap });
-  const first = await env.bff.login(req("POST", "/bff/auth/login", { body: creds }));
-  const cookie = cookieOf(first);
-  const g2 = gatedLogin();
-  const env2 = { ...env, bff: createBff({ config: loadBffConfig(ENV), store: env.store, fetchImpl: (u, i) => g2.wrap(env.backend.fetch, u, i), now: env.clock.now, logger: { info() {} } }) };
-  const pending = env2.bff.login(req("POST", "/bff/auth/login", { cookie, body: creds }));   // aba A
-  await tick();
-  const out = await env2.bff.logout(req("POST", "/bff/auth/logout", { cookie }));            // aba B
-  assert.equal(out.status, 204);
-  g2.release();
+test("pausa 1 (resposta do /auth/login): logout em outra aba vence; nada é instalado", async () => {
+  const env = coordSetup();
+  const j = jar().apply(await env.bff.login(loginReq()));
+  const g = env.pause("/auth/login");
+  const pending = env.bff.login(loginReq(j));                           // aba A
+  await g.reached.promise;
+  const out = await env.bff.logout(logoutReq(j));                       // aba B
+  j.apply(out);
+  g.go.resolve();
   const late = await pending;
+  j.apply(late);
+  assert.equal(out.status, 204);
   assert.equal(late.status, 409);
   assert.equal((await late.json()).error.code, "login_cancelled");
-  assert.match(late.headers.get("set-cookie"), /Max-Age=0/);                              // limpa, não instala
   assert.equal(env.store.size, 0);
-  const newAccess = env.backend.current.access;
-  assert.ok(env.backend.calls.some((c) => c.path === "/auth/logout" && c.headers.authorization === `Bearer ${newAccess}`));
+  assert.equal((await sessionOf(env, j)).authenticated, false);
+  assert.ok(env.backend.sessions.every((s) => s.revoked));             // inclusive o par recém-emitido
 });
 
-test("login que chega ao servidor DEPOIS do logout com o cookie antigo é recusado sem ir ao backend", async () => {
-  const env = setup();
-  const cookie = cookieOf(await env.bff.login(req("POST", "/bff/auth/login", { body: creds })));
-  await env.bff.logout(req("POST", "/bff/auth/logout", { cookie }));
+test("pausa 2 (revogação da sessão anterior): logout concluído não é revertido (cenário da auditoria)", async () => {
+  const env = coordSetup();
+  const j = jar().apply(await env.bff.login(loginReq()));
+  const g = env.pause("/auth/logout");                                  // revogação feita pelo login
+  const pending = env.bff.login(loginReq(j));
+  await g.reached.promise;
+  const out = await env.bff.logout(logoutReq(j));
+  j.apply(out);
+  g.go.resolve();
+  const late = await pending;
+  j.apply(late);
+  assert.equal(out.status, 204);
+  assert.equal(late.status, 409);
+  assert.equal(j.sessionNames().length, 0);                             // nenhum cookie de sessão instalado
+  assert.equal(env.store.size, 0);
+  assert.equal((await sessionOf(env, j)).authenticated, false);
+});
+
+test("pausa 3 (revogação dos tokens da tentativa perdida): resposta tardia não apaga a sessão do login explícito seguinte", async () => {
+  const env = coordSetup();
+  const j = jar().apply(await env.bff.login(loginReq()));
+  const gLogin = env.pause("/auth/login");
+  const pending = env.bff.login(loginReq(j));                           // tentativa A
+  await gLogin.reached.promise;
+  j.apply(await env.bff.logout(logoutReq(j)));                          // logout (aba B)
+  const gRevoke = env.pause("/auth/logout");                            // A vai revogar seus tokens
+  gLogin.go.resolve();
+  await gRevoke.reached.promise;
+  const explicit = await env.bff.login(loginReq(j));                    // login explícito depois do logout
+  assert.equal(explicit.status, 200);
+  j.apply(explicit);
+  const winner = j.header();
+  gRevoke.go.resolve();
+  const late = await pending;
+  assert.equal(late.status, 409);
+  j.apply(late);
+  assert.equal(j.header(), winner);                                     // cookie vencedor intacto
+  assert.equal((await sessionOf(env, j)).authenticated, true);
+});
+
+test("resposta cancelada NÃO apaga o cookie do login vencedor (cenário da auditoria)", async () => {
+  const env = coordSetup();
+  const j = jar().apply(await env.bff.login(loginReq()));
+  const g = env.pause("/auth/login");
+  const a = env.bff.login(loginReq(j));                                 // A pausado
+  await g.reached.promise;
+  const b = await env.bff.login(loginReq(j));                           // B conclui
+  assert.equal(b.status, 200);
+  j.apply(b);
+  const winner = j.header();
+  const winnerName = j.sessionNames()[0];
+  g.go.resolve();
+  const ra = await a;
+  assert.equal(ra.status, 409);
+  assert.ok(ra.headers.getSetCookie().every((c) => !c.startsWith(`${winnerName}=`)));
+  j.apply(ra);
+  assert.equal(j.header(), winner);
+  assert.equal((await sessionOf(env, j)).authenticated, true);
+  assert.equal(env.store.size, 1);
+});
+
+test("expulsão impossível: logouts com IDs arbitrários não reabilitam um cookie encerrado (cenário da auditoria)", async () => {
+  const env = coordSetup({ PRAZOAI_BFF_MAX_SESSIONS: "1" });
+  const j = jar().apply(await env.bff.login(loginReq()));
+  const old = j.header();
+  j.apply(await env.bff.logout(logoutReq(j)));
+  for (let i = 0; i < 50; i++) {
+    const forged = `prazoai_sid_${String(i).padStart(10, "a")}=${"Z".repeat(42)}${i % 10}`;
+    await env.bff.logout(req("POST", "/bff/auth/logout", { cookie: forged }));
+  }
+  const loginsBefore = env.backend.calls.filter((c) => c.path === "/auth/login").length;
+  const r = await env.bff.login(req("POST", "/bff/auth/login", { body: creds, cookie: old }));
+  assert.equal(r.status, 409);
+  assert.equal((await r.json()).error.code, "session_resync_required");
+  assert.equal(env.backend.calls.filter((c) => c.path === "/auth/login").length, loginsBefore);   // nem foi ao backend
+  assert.equal(env.store.size, 0);
+});
+
+test("cookie encerrado por expiração também não é reabilitado; ressincronizar e entrar de novo funciona", async () => {
+  const env = coordSetup();
+  const j = jar().apply(await env.bff.login(loginReq()));
+  env.clock.advance(9 * 3600 * 1000);                                    // passou da inatividade (8 h)
+  const r = await env.bff.login(loginReq(j));
+  assert.equal(r.status, 409);
+  assert.equal((await r.json()).error.code, "session_resync_required");
+  j.apply(r);                                                            // apaga só os cookies mortos observados
+  assert.equal(j.sessionNames().length, 0);
+  const again = await env.bff.login(loginReq(j));                        // tentativa explícita
+  assert.equal(again.status, 200);
+});
+
+test("ressincronização: GET /bff/session apaga cookies mortos (só pelos nomes observados)", async () => {
+  const env = coordSetup();
+  const j = jar().apply(await env.bff.login(loginReq()));
+  const stale = j.header();
+  j.apply(await env.bff.logout(logoutReq(j)));
+  const r = await env.bff.session(req("GET", "/bff/session", { cookie: stale }));
+  assert.deepEqual(await r.json(), { authenticated: false });
+  assert.ok(r.headers.getSetCookie().some((c) => /_sid_[a-z0-9]{10}=;.*Max-Age=0/.test(c)));
+});
+
+test("login que chega ao servidor depois do logout (enviado antes) é recusado sem ir ao backend", async () => {
+  const env = coordSetup();
+  const j = jar().apply(await env.bff.login(loginReq()));
+  const inFlight = loginReq(j);                                          // montado ANTES do logout
+  await env.bff.logout(logoutReq(j));
   const before = env.backend.calls.length;
-  const late = await env.bff.login(req("POST", "/bff/auth/login", { cookie, body: creds }));
+  const late = await env.bff.login(inFlight);
   assert.equal(late.status, 409);
   assert.equal(env.backend.calls.length, before);
   assert.equal(env.store.size, 0);
 });
 
-test("login explícito depois do logout (sem o cookie antigo) funciona", async () => {
-  const env = setup();
-  const cookie = cookieOf(await env.bff.login(req("POST", "/bff/auth/login", { body: creds })));
-  await env.bff.logout(req("POST", "/bff/auth/logout", { cookie }));
-  const again = await env.bff.login(req("POST", "/bff/auth/login", { body: creds }));
+test("login explícito depois do logout funciona e reaproveita o identificador do navegador", async () => {
+  const env = coordSetup();
+  const j = jar().apply(await env.bff.login(loginReq()));
+  j.apply(await env.bff.logout(logoutReq(j)));
+  const again = await env.bff.login(loginReq(j));
   assert.equal(again.status, 200);
-  assert.equal(env.store.size, 1);
+  assert.ok(again.headers.getSetCookie().every((c) => !c.includes("_bid=")));   // bid já existia
+  j.apply(again);
+  assert.equal((await sessionOf(env, j)).authenticated, true);
 });
 
-test("dois logins com o mesmo cookie: o mais antigo é cancelado; fica uma sessão", async () => {
-  const g = gatedLogin();
-  g.release();
-  const env = setup({ wrap: g.wrap });
-  const cookie = cookieOf(await env.bff.login(req("POST", "/bff/auth/login", { body: creds })));
-  const g2 = gatedLogin();
-  const bff2 = createBff({ config: loadBffConfig(ENV), store: env.store, fetchImpl: (u, i) => g2.wrap(env.backend.fetch, u, i), now: env.clock.now, logger: { info() {} } });
-  const older = bff2.login(req("POST", "/bff/auth/login", { cookie, body: creds }));
-  await tick();
-  const newer = env.bff.login(req("POST", "/bff/auth/login", { cookie, body: creds }));      // sem pausa
-  const rNewer = await newer;
-  g2.release();
-  const rOlder = await older;
-  assert.equal(rNewer.status, 200);
-  assert.equal(rOlder.status, 409);
-  assert.equal(env.store.size, 1);
-});
-
-test("primeiro login pendente (sem cookie) + logout sem sessão: o login conclui (comportamento definido)", async () => {
-  const g = gatedLogin();
-  const env = setup({ wrap: g.wrap });
-  const pending = env.bff.login(req("POST", "/bff/auth/login", { body: creds }));
-  await tick();
+test("primeiro login pendente (sem cookies) + logout sem sessão: o login conclui (comportamento definido)", async () => {
+  const env = coordSetup();
+  const g = env.pause("/auth/login");
+  const pending = env.bff.login(loginReq());
+  await g.reached.promise;
   assert.equal((await env.bff.logout(req("POST", "/bff/auth/logout"))).status, 204);
-  g.release();
-  const r = await pending;
-  assert.equal(r.status, 200);
+  g.go.resolve();
+  assert.equal((await pending).status, 200);
   assert.equal(env.store.size, 1);
+});
+
+test("dois primeiros logins concorrentes: a sessão mais nova vale; a outra é encerrada na ressincronização", async () => {
+  const env = coordSetup();
+  const g = env.pause("/auth/login");
+  const first = env.bff.login(loginReq());
+  await g.reached.promise;
+  const second = await env.bff.login(loginReq());
+  g.go.resolve();
+  const j = jar().apply(second).apply(await first);
+  assert.equal(j.sessionNames().length, 2);
+  const r = await env.bff.session(req("GET", "/bff/session", { cookie: j.header() }));
+  assert.equal((await r.json()).authenticated, true);
+  j.apply(r);
+  assert.equal(j.sessionNames().length, 1);
+  assert.equal(env.store.size, 1);
+  j.apply(await env.bff.logout(logoutReq(j)));
+  assert.equal(env.store.size, 0);
 });
 
 test("login com credenciais erradas preserva a sessão anterior", async () => {
-  const env = setup();
-  const cookie = cookieOf(await env.bff.login(req("POST", "/bff/auth/login", { body: creds })));
+  const env = coordSetup();
+  const j = jar().apply(await env.bff.login(loginReq()));
   env.backend.loginStatus = 401;
-  assert.equal((await env.bff.login(req("POST", "/bff/auth/login", { cookie, body: creds }))).status, 401);
-  const s = await env.bff.session(req("GET", "/bff/session", { cookie }));
-  assert.equal((await s.json()).authenticated, true);
+  const r = await env.bff.login(loginReq(j));
+  assert.equal(r.status, 401);
+  assert.equal(r.headers.getSetCookie().length, 0);
+  assert.equal((await sessionOf(env, j)).authenticated, true);
 });
 
-test("registro de logouts é limitado (teto e TTL) e guarda só o hash do id", () => {
-  let t = 0;
-  const store = createMemorySessionStore({ maxSessions: 3, idleSeconds: 60, maxAgeSeconds: 300, sweepIntervalSeconds: 1,
-    logoutMemorySeconds: 120 }, () => t);
-  const ids = ["A".repeat(43), "B".repeat(43), "C".repeat(43), "D".repeat(43)];
-  for (const id of ids) store.markLoggedOut(id);
-  assert.equal(store.loggedOutSize, 3);                                // teto
-  assert.equal(store.wasLoggedOut(ids[0]), false);                     // mais antigo descartado
-  assert.equal(store.wasLoggedOut(ids[3]), true);
-  t += 120_000;
-  assert.equal(store.wasLoggedOut(ids[3]), false);                     // TTL
-  assert.equal(store.loggedOutSize, 0);
+test("capacidade na seção crítica: 503, tokens novos revogados, sessão anterior intacta", async () => {
+  const env = coordSetup({ PRAZOAI_BFF_MAX_SESSIONS: "1" });
+  const j = jar().apply(await env.bff.login(loginReq()));
+  const other = jar();
+  const r = await env.bff.login(loginReq(other));                       // outro navegador
+  assert.equal(r.status, 503);
+  assert.equal(env.backend.sessions.at(-1).revoked, true);
+  assert.equal((await sessionOf(env, j)).authenticated, true);
 });
 
 // ======================================================================

@@ -35,11 +35,14 @@ export function IntegratedLogin() {
     } catch (err) {
       // login_cancelled (servidor) ou resposta descartada porque outra aba encerrou a sessão.
       const cancelled = (err instanceof ApiError && err.code === "login_cancelled") || err instanceof StaleResponseError;
+      const resync = err instanceof ApiError && err.code === "session_resync_required";
       const msg = err instanceof ApiError && err.code === "invalid_credentials"
         ? "E-mail ou senha inválidos."
         : cancelled
           ? "O login foi cancelado porque a sessão foi encerrada em outra aba. Entre novamente."
-          : errorMessage(err);
+          : resync
+            ? "A sessão anterior deste navegador terminou. Entre novamente."
+            : errorMessage(err);
       setErrors({ form: msg });
     } finally {
       setLoading(false);

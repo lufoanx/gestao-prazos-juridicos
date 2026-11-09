@@ -209,6 +209,100 @@ test("real (auditoria): corpo do refresh 200 interrompido → sessão invalidada
   assert.equal(replay.status, 401);                                    // confirma que a rotação ocorreu no backend
 });
 
+// ---------------------------------------------------------------- auditoria 6.1 (v3)
+function jar() {
+  const m = new Map();
+  return {
+    apply(r) {
+      for (const c of r.headers.getSetCookie()) {
+        const [nv, ...attrs] = c.split(";");
+        const i = nv.indexOf("=");
+        const name = nv.slice(0, i).trim();
+        if (attrs.some((x) => x.trim() === "Max-Age=0")) m.delete(name); else m.set(name, nv.slice(i + 1));
+      }
+      return this;
+    },
+    header() { return [...m].map(([n, v]) => `${n}=${v}`).join("; "); },
+  };
+}
+
+function gated() {
+  const gates = new Map();
+  return {
+    pause(path) { const g = {}; g.reached = new Promise((r) => { g.reach = r; }); g.done = new Promise((r) => { g.go = r; }); gates.set(path, g); return g; },
+    wrap: (f) => async (url, init) => {
+      const path = new URL(url).pathname.replace("/api/v1", "");
+      const g = gates.get(path);
+      if (g) { gates.delete(path); g.reach(); await g.done; }
+      return f(url, init);
+    },
+  };
+}
+
+async function newAccount(env) {
+  const ip = nextIp();
+  const email = `v3${randomBytes(4).toString("hex")}@exemplo.com`;
+  const password = "Senha-de-teste-123";
+  assert.equal((await env.bff.register(req("POST", "/bff/auth/register", { body: { name: "P", email, password }, ip }))).status, 201);
+  return { ip, body: { email, password } };
+}
+
+test("real v3: logout durante a revogação feita pelo login não é revertido", async () => {
+  const gt = gated();
+  const env = setup({ wrapFetch: gt.wrap });
+  const acc = await newAccount(env);
+  const j = jar().apply(await env.bff.login(req("POST", "/bff/auth/login", { body: acc.body, ip: acc.ip })));
+  const g = gt.pause("/auth/logout");
+  const pending = env.bff.login(req("POST", "/bff/auth/login", { body: acc.body, ip: acc.ip, cookie: j.header() }));
+  await g.reached;
+  const out = await env.bff.logout(req("POST", "/bff/auth/logout", { ip: acc.ip, cookie: j.header() }));
+  j.apply(out);
+  g.go();
+  const late = await pending;
+  j.apply(late);
+  assert.equal(out.status, 204);
+  assert.equal(late.status, 409);
+  assert.equal(env.store.size, 0);
+  const s = await env.bff.session(req("GET", "/bff/session", { ip: acc.ip, cookie: j.header() }));
+  assert.equal((await s.json()).authenticated, false);
+});
+
+test("real v3: resposta cancelada não apaga o cookie do login vencedor", async () => {
+  const gt = gated();
+  const env = setup({ wrapFetch: gt.wrap });
+  const acc = await newAccount(env);
+  const j = jar().apply(await env.bff.login(req("POST", "/bff/auth/login", { body: acc.body, ip: acc.ip })));
+  const g = gt.pause("/auth/login");
+  const a = env.bff.login(req("POST", "/bff/auth/login", { body: acc.body, ip: acc.ip, cookie: j.header() }));
+  await g.reached;
+  const b = await env.bff.login(req("POST", "/bff/auth/login", { body: acc.body, ip: acc.ip, cookie: j.header() }));
+  assert.equal(b.status, 200);
+  j.apply(b);
+  const winner = j.header();
+  g.go();
+  const ra = await a;
+  assert.equal(ra.status, 409);
+  j.apply(ra);
+  assert.equal(j.header(), winner);
+  const s = await env.bff.session(req("GET", "/bff/session", { ip: acc.ip, cookie: j.header() }));
+  assert.equal((await s.json()).authenticated, true);
+});
+
+test("real v3: cookie encerrado não é reabilitado por logouts com IDs arbitrários", async () => {
+  const env = setup();
+  const acc = await newAccount(env);
+  const j = jar().apply(await env.bff.login(req("POST", "/bff/auth/login", { body: acc.body, ip: acc.ip })));
+  const old = j.header();
+  await env.bff.logout(req("POST", "/bff/auth/logout", { ip: acc.ip, cookie: old }));
+  for (let i = 0; i < 20; i++) {
+    await env.bff.logout(req("POST", "/bff/auth/logout", { ip: acc.ip, cookie: `prazoai_sid_${String(i).padStart(10, "b")}=${randomBytes(32).toString("base64url")}` }));
+  }
+  const r = await env.bff.login(req("POST", "/bff/auth/login", { body: acc.body, ip: acc.ip, cookie: old }));
+  assert.equal(r.status, 409);
+  assert.equal((await r.json()).error.code, "session_resync_required");
+  assert.equal(env.store.size, 0);
+});
+
 // Deve ser o ÚLTIMO: derruba o backend.
 test("real: backend fora do ar → 503 sem logout nem dados demonstrativos", async () => {
   const env = setup();

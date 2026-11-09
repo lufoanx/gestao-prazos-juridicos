@@ -110,12 +110,16 @@ test("controlador: avisos de outras abas limpam o estado (não são autorizaçã
   const user = { id: "u1", name: "Ana", email: "a@b.com", createdAt: "x" };
   const other = { id: "u2", name: "Bia", email: "b@b.com", createdAt: "x" };
   let current = user;
-  const ctx = controllerWith((url) => url.endsWith("/session") ? json(200, { authenticated: true, user: current }) : json(200, {}));
+  const ctx = controllerWith((url) => url.endsWith("/session")
+    ? json(200, current ? { authenticated: true, user: current } : { authenticated: false }) : json(200, {}));
   await ctx.ctl.restore();
   const r0 = ctx.resets();
+  current = null;                                                // o servidor já não tem sessão
   ctx.ctl.onMessage({ type: "logout" });
-  assert.equal(ctx.ctl.state.status, "anonymous");
+  assert.equal(ctx.ctl.state.status, "loading");                 // limpa e ressincroniza (aviso não é autoridade)
   assert.ok(ctx.resets() > r0);
+  await ctx.ctl.restore();
+  assert.equal(ctx.ctl.state.status, "anonymous");
   current = other;
   ctx.ctl.onMessage({ type: "login", userId: "u2" });
   await new Promise((r) => setTimeout(r, 0));

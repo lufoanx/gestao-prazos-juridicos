@@ -71,7 +71,6 @@ export function loadBffConfig(env = process.env) {
       maxAgeSeconds: int(env, "PRAZOAI_BFF_SESSION_MAX_AGE_SECONDS", 7 * 24 * 3600, 300, 30 * 24 * 3600),
       sweepIntervalSeconds: int(env, "PRAZOAI_BFF_SWEEP_INTERVAL_SECONDS", 60, 1, 3600),
       refreshSkewSeconds: accessTtlHint,
-      logoutMemorySeconds: int(env, "PRAZOAI_BFF_LOGOUT_MEMORY_SECONDS", 120, 10, 3600),
     }),
     timeoutMs: int(env, "PRAZOAI_BFF_TIMEOUT_MS", 10000, 100, 60000),
     maxBodyBytes: int(env, "PRAZOAI_BFF_MAX_BODY_BYTES", 64 * 1024, 1024, 1024 * 1024),

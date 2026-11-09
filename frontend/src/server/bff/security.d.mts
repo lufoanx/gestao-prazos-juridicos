@@ -1,7 +1,12 @@
 import type { BffConfig } from "./config.d.mts";
 export const CSRF_HEADER: string;
 export function checkCsrf(method: string, headers: Headers, config: BffConfig): null | { status: number; code: string; message: string };
-export function sessionCookie(config: BffConfig, value: string, maxAgeSeconds: number): string;
-export function clearSessionCookie(config: BffConfig): string;
-export function readSessionId(cookieHeader: string | null, config: BffConfig): string | null;
+export function newCookieName(config: BffConfig): string;
+export function sessionCookie(config: BffConfig, name: string, value: string, maxAgeSeconds: number): string;
+export function clearCookie(config: BffConfig, name: string): string;
+export function readSessionCookies(cookieHeader: string | null, config: BffConfig): Array<{ name: string; value: string; wellFormed: boolean }>;
 export const NO_STORE: Record<string, string>;
+export function browserCookieName(config: BffConfig): string;
+export function newBrowserId(): string;
+export function browserCookie(config: BffConfig, value: string): string;
+export function readBrowserId(cookieHeader: string | null, config: BffConfig): string | null;

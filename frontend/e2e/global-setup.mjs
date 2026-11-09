@@ -20,14 +20,16 @@ export default async function globalSetup() {
   });
   writeFileSync(fileURLToPath(new URL("./.backend.pid", import.meta.url)), String(proc.pid));
 
-  let holdLogin = false;
+  // Segura UMA única próxima chamada ao caminho pedido (one-shot); libera tudo em /__e2e/release.
+  const holds = new Set();
   const held = [];
   const proxy = createServer((req, res) => {
     if (req.url?.startsWith("/__e2e/")) {
-      if (req.url === "/__e2e/hold-login") holdLogin = true;
-      if (req.url === "/__e2e/release-login") { holdLogin = false; held.splice(0).forEach((go) => go()); }
+      const url = new URL(req.url, "http://x");
+      if (url.pathname === "/__e2e/hold") holds.add(url.searchParams.get("path"));
+      if (url.pathname === "/__e2e/release") { holds.clear(); held.splice(0).forEach((go) => go()); }
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ held: held.length, holdLogin }));
+      res.end(JSON.stringify({ held: held.length }));
       return;
     }
     const forward = () => {
@@ -38,7 +40,7 @@ export default async function globalSetup() {
       upstream.on("error", () => { if (!res.headersSent) res.writeHead(502); res.end(); });
       req.pipe(upstream);
     };
-    if (holdLogin && req.url === "/api/v1/auth/login") held.push(forward);
+    if (holds.has(req.url)) { holds.delete(req.url); held.push(forward); }
     else forward();
   });
   await new Promise((r) => proxy.listen(proxyPort, "127.0.0.1", r));

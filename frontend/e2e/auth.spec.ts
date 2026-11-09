@@ -7,6 +7,11 @@ const TOKEN_LIKE = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/; // JWT
 
 test.describe.configure({ mode: "serial" });
 
+// Controle do proxy de TESTE entre o BFF e o FastAPI (segura uma chamada para reproduzir corridas).
+const CONTROL = `http://127.0.0.1:${Number(process.env.PRAZOAI_E2E_BACKEND_PORT || 18900) + 1}/__e2e`;
+const held = async () => (await (await fetch(`${CONTROL}/status`)).json()).held;
+
+
 test("cadastro, sessão após recarregar, perfil e logout", async ({ page }) => {
   const email = newEmail();
   await signup(page, "Ana Integrada", email);
@@ -36,14 +41,14 @@ test("nenhum token em JSON, storage ou cookies acessíveis ao JavaScript", async
     local: JSON.stringify({ ...localStorage }),
     session: JSON.stringify({ ...sessionStorage }),
   }));
-  expect(visible.cookie).not.toContain("prazoai_sid");                 // HttpOnly
+  expect(visible.cookie).not.toContain("prazoai_");                    // HttpOnly (sessão e navegador)
   expect(visible.local).not.toMatch(TOKEN_LIKE);
   expect(visible.session).not.toMatch(TOKEN_LIKE);
   expect(visible.local).not.toContain("prazoai:demo");                // modo integrado não usa chaves demo
   for (const b of bodies) expect(b).not.toMatch(TOKEN_LIKE);
   expect(bodies.join("")).not.toMatch(/accessToken|refreshToken/);
   const cookies = await context.cookies();
-  const sid = cookies.find((c) => c.name === "prazoai_sid");
+  const sid = cookies.find((c) => /^prazoai_sid_[a-z0-9]{10}$/.test(c.name));
   expect(sid?.httpOnly).toBe(true);
   expect(sid?.sameSite).toBe("Strict");
   expect(sid?.value).toMatch(/^[A-Za-z0-9_-]{43}$/);                  // identificador opaco
@@ -131,27 +136,83 @@ test("credenciais inválidas e validações de senha", async ({ page }) => {
 });
 
 test("login pausado numa aba + logout na outra: a resposta tardia não instala sessão", async ({ context }) => {
-  const control = `http://127.0.0.1:${Number(process.env.PRAZOAI_E2E_BACKEND_PORT || 18900) + 1}/__e2e`;
   const a = await context.newPage();
   const email = newEmail();
   await signup(a, "Jade Abas", email);
   const b = await context.newPage();
   await b.goto("/app");
   await expect(b.getByRole("heading", { name: "Olá, Jade Abas" })).toBeVisible();
-  await fetch(`${control}/hold-login`, { method: "POST" });
+  await fetch(`${CONTROL}/hold?path=/api/v1/auth/login`, { method: "POST" });
   await a.goto("/login");
   await a.getByLabel("E-mail").fill(email);
   await a.locator('input[autocomplete="current-password"]').fill(PASSWORD);
   await a.getByRole("button", { name: "Entrar", exact: true }).click();            // login fica pendente
-  await expect.poll(async () => (await (await fetch(`${control}/status`)).json()).held).toBe(1);
+  await expect.poll(async () => (await (await fetch(`${CONTROL}/status`)).json()).held).toBe(1);
   await logout(b);                                                                   // logout na outra aba
-  await fetch(`${control}/release-login`, { method: "POST" });
+  await fetch(`${CONTROL}/release`, { method: "POST" });
   await expect(a.getByText("O login foi cancelado porque a sessão foi encerrada em outra aba")).toBeVisible();
   await a.goto("/app");
   await expect(a).toHaveURL(/\/login$/);                                            // nenhuma sessão instalada
-  expect((await context.cookies()).some((c) => c.name === "prazoai_sid")).toBe(false);
+  expect((await context.cookies()).some((c) => c.name.startsWith("prazoai_sid_"))).toBe(false);
   await login(a, email);                                                             // login explícito depois funciona
   await expect(a.getByRole("heading", { name: "Olá, Jade Abas" })).toBeVisible();
+  await logout(a);
+  await a.close();
+  await b.close();
+});
+
+
+test("resposta cancelada não apaga o cookie do login vencedor (duas abas reais)", async ({ context }) => {
+  const a = await context.newPage();
+  const email = newEmail();
+  await signup(a, "Lia Vence", email);
+  const b = await context.newPage();
+  await b.goto("/login");
+  await fetch(`${CONTROL}/hold?path=/api/v1/auth/login`, { method: "POST" });       // segura só o login A
+  await a.goto("/login");
+  await a.getByLabel("E-mail").fill(email);
+  await a.locator('input[autocomplete="current-password"]').fill(PASSWORD);
+  await a.getByRole("button", { name: "Entrar", exact: true }).click();               // login A pendente
+  await expect.poll(held).toBe(1);
+  await b.getByLabel("E-mail").fill(email);
+  await b.locator('input[autocomplete="current-password"]').fill(PASSWORD);
+  await b.getByRole("button", { name: "Entrar", exact: true }).click();               // login B conclui
+  await expect(b).toHaveURL(/\/app$/);
+  const winner = (await context.cookies()).filter((c) => c.name.startsWith("prazoai_sid_")).map((c) => `${c.name}=${c.value}`);
+  expect(winner).toHaveLength(1);
+  await fetch(`${CONTROL}/release`, { method: "POST" });                             // resposta tardia de A
+  await expect(a.getByText("O login foi cancelado")).toBeVisible();
+  const after = (await context.cookies()).filter((c) => c.name.startsWith("prazoai_sid_")).map((c) => `${c.name}=${c.value}`);
+  expect(after).toEqual(winner);                                                     // cookie vencedor intacto
+  await b.reload();
+  await expect(b.getByRole("heading", { name: "Olá, Lia Vence" })).toBeVisible();   // continua autenticado
+  await a.goto("/app");
+  await expect(a.getByRole("heading", { name: "Olá, Lia Vence" })).toBeVisible();
+  await logout(a);
+  await a.close();
+  await b.close();
+});
+
+test("logout durante a revogação feita pelo login não é revertido (duas abas reais)", async ({ context }) => {
+  const a = await context.newPage();
+  const email = newEmail();
+  await signup(a, "Mel Revoga", email);
+  const b = await context.newPage();
+  await b.goto("/app");
+  await expect(b.getByRole("heading", { name: "Olá, Mel Revoga" })).toBeVisible();
+  await fetch(`${CONTROL}/hold?path=/api/v1/auth/logout`, { method: "POST" });      // revogação da sessão anterior
+  await a.goto("/login");
+  await a.getByLabel("E-mail").fill(email);
+  await a.locator('input[autocomplete="current-password"]').fill(PASSWORD);
+  await a.getByRole("button", { name: "Entrar", exact: true }).click();
+  await expect.poll(held).toBe(1);                                                   // login já publicou e está revogando
+  await logout(b);
+  await fetch(`${CONTROL}/release`, { method: "POST" });
+  await expect(a.getByText("O login foi cancelado")).toBeVisible();
+  expect((await context.cookies()).some((c) => c.name.startsWith("prazoai_sid_"))).toBe(false);
+  await a.goto("/app");
+  await expect(a).toHaveURL(/\/login$/);
+  await login(a, email);                                                             // login explícito depois funciona
   await logout(a);
   await a.close();
   await b.close();

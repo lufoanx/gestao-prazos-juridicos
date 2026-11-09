@@ -103,8 +103,10 @@ test("login: cookie opaco HttpOnly; nenhum token no JSON, cabeçalhos ou logs", 
   const text = await r.text();
   assert.deepEqual(JSON.parse(text), { user: env.backend.user });
   assert.equal(hasToken(text), false);
-  assert.match(setCookie, /^prazoai_sid=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; SameSite=Strict; Max-Age=\d+$/);
-  for (const [, v] of r.headers) assert.equal(hasToken(v.replace(/prazoai_sid=[^;]+/, "")), false);
+  const cookies = r.headers.getSetCookie();
+  assert.match(cookies[0], /^prazoai_sid_[a-z0-9]{10}=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; SameSite=Strict; Max-Age=\d+$/);
+  assert.match(cookies[1], /^prazoai_bid=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; SameSite=Strict; Max-Age=\d+$/);
+  for (const [, v] of r.headers) assert.equal(hasToken(v), false);
   assert.equal(r.headers.get("cache-control"), "no-store, private");
   assert.equal(env.logs.some(hasToken), false);
   assert.equal(env.logs.some((l) => l.includes(setCookie.split("=")[1].split(";")[0])), false);

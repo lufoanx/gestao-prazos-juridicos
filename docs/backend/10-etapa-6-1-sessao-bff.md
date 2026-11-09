@@ -59,24 +59,44 @@ Navegador ──(cookie HttpOnly com ID opaco)──▶ Next.js (BFF /bff/*) ─
   `outcome: "unknown"`.
 
 ## 4. Login, logout e troca de usuário
-- **Login com coordenação no servidor** (correção da auditoria; várias abas compartilham o mesmo
-  cookie, então a fila do navegador não basta):
-  - sem cookie (primeiro login): não há sessão a encerrar nem a coordenar; conclui normalmente;
-  - com cookie de sessão ativa: um **bilhete de login pendente** fica na própria sessão (um único
-    campo). Logout dessa sessão, em qualquer aba, ou um novo login com o mesmo cookie cancelam o
-    bilhete. Ao terminar, um login cancelado **não cria sessão**, revoga no backend os tokens que
-    acabou de receber e responde 409 `login_cancelled` limpando o cookie;
-  - com cookie de sessão encerrada por logout há pouco: o login é recusado (409) sem chamar o
-    backend. Cobre o login que chega ao servidor depois do logout. Usa um registro **limitado**
-    (hash do id, TTL `PRAZOAI_BFF_LOGOUT_MEMORY_SECONDS` = 120 s, teto = `PRAZOAI_BFF_MAX_SESSIONS`,
-    descarte do mais antigo); nada cresce indefinidamente. Se uma entrada for descartada antes do
-    TTL (inundação de logouts), um login tardio com esse cookie volta a ser tratado como normal;
-  - a sessão anterior só é encerrada quando o novo login dá certo; **falha de login preserva a
-    sessão anterior** (o cliente ressincroniza com `GET /bff/session`);
-  - só login emite cookie; logout, sessão encerrada e login cancelado o limpam (`Max-Age=0`);
-    respostas comuns do proxy **não** emitem cookies.
-- **Logout:** invalida a sessão local **primeiro** (nenhuma operação autenticada nova), depois
-  tenta revogar no backend; sempre 204 (idempotente), mesmo com o backend fora do ar.
+- **Protocolo de cookies e login (auditoria 6.1, v3)** — várias abas compartilham o mesmo pote de
+  cookies e o navegador aplica `Set-Cookie` mesmo de respostas que o React descarta; por isso a
+  coordenação é feita no servidor:
+  1. **Cookie com nome exclusivo por sessão** (`prazoai_sid_<slot>` / `__Host-prazoai_sid_<slot>`,
+     slot aleatório de 10 caracteres). Toda resposta só apaga cookies que a própria requisição
+     trouxe, pelo nome. Uma tentativa obsoleta **nunca** apaga nem sobrescreve o cookie de uma
+     tentativa mais nova, que sempre tem outro nome.
+  2. **Cookie sem sessão viva nunca é reabilitado.** Login com cookie(s) de sessão, mas nenhum vivo,
+     recebe 409 `session_resync_required`, sem chamar o backend. `GET /bff/session` apaga os cookies
+     mortos (ressincronização, feita ao carregar a página) e o usuário tenta de novo explicitamente.
+     Não existe registro de logouts: nada depende de TTL, capacidade ou expulsão, e logouts com IDs
+     arbitrários não afetam outras sessões.
+  3. **Bilhete de login pendente** na sessão viva atual (um único campo). Logout dessa sessão ou um
+     novo login com o mesmo cookie cancelam o bilhete.
+  4. **Finalização atômica.** Depois da resposta do backend, validar (bilhete não cancelado e sessão
+     anterior ainda viva) e publicar (criar a sessão nova e encerrar a anterior) acontece numa
+     sequência **síncrona, sem espera de rede entre os passos**. A revogação no backend (da sessão
+     anterior, ou do par recém-emitido quando a tentativa perde) acontece **depois** da decisão e
+     não reabre a janela. Se a sessão nova for encerrada durante essa revogação, o login responde
+     409 sem instalar cookie.
+  5. **Identificador do navegador** (`prazoai_bid`, `HttpOnly`, estável, criado no primeiro login).
+     Não é credencial. O logout encerra **todas** as sessões vivas desse navegador (varredura das
+     próprias sessões, sem índice extra), inclusive a que um login concorrente acabou de publicar.
+     Assim, um **logout concluído nunca é revertido** por um login iniciado antes dele.
+  6. **Primeiro login** (sem cookie de sessão): não há o que encerrar nem coordenar; conclui
+     normalmente. Dois primeiros logins concorrentes: vale a sessão mais nova; a outra é encerrada
+     na próxima ressincronização.
+  7. Falha de login preserva a sessão anterior (o cliente ressincroniza). Login explícito depois do
+     logout funciona normalmente.
+  8. Só login emite cookies novos; logout, sessão encerrada e ressincronização só apagam cookies
+     observados; respostas comuns do proxy não mexem em cookies.
+- **Aviso entre abas:** ao receber "logout" de outra aba, o cliente limpa os dados locais e
+  ressincroniza com o servidor (a sessão pode já ter sido substituída por um login mais novo). O
+  aviso não é autoridade.
+- **Logout:** encerra **primeiro**, de forma síncrona, as sessões vivas do navegador (as dos
+  cookies enviados e as do identificador do navegador), cancelando logins pendentes associados.
+  Depois tenta revogar no backend. Responde sempre 204 (idempotente), mesmo com o backend fora do
+  ar, e apaga só os cookies observados.
 - **No navegador** (`auth-controller.mjs`): login, cadastro, restauração e logout são
   serializados — um logout pedido durante um login espera e encerra, então uma resposta atrasada
   de login não ressuscita a sessão. Cada transição incrementa a **época** do cliente: respostas
@@ -86,7 +106,7 @@ Navegador ──(cookie HttpOnly com ID opaco)──▶ Next.js (BFF /bff/*) ─
 ## 5. Erros distintos
 `session_expired`/`session_refresh_uncertain` (401: pedir login) · `backend_unavailable` (503:
 tela de indisponibilidade, **sem logout e sem dados demonstrativos**) · `rate_limited` (429 com
-`Retry-After` preservado) · `upstream_timeout` (504, resultado desconhecido) · `csrf_rejected`
+`Retry-After` preservado) · `upstream_timeout` (504, resultado desconhecido) · `login_cancelled` (409: logout ou login mais novo venceu) · `session_resync_required` (409: cookie sem sessão viva; ressincronizar e tentar de novo) · `csrf_rejected`
 (403) · `payload_too_large` (413) · `not_found`/`method_not_allowed` (proxy).
 
 ## 6. Proxy restrito
@@ -153,7 +173,8 @@ cd frontend && cp .env.example .env.local && npm run build && npm run start
 No E2E, o BFF fala com um **proxy HTTP de teste** (porta do backend + 1) que só repassa ao
 FastAPI real; ele pode segurar o próximo login para reproduzir de forma determinística o cenário
 "login pendente numa aba + logout na outra". As rotas de controle `/__e2e/*` existem apenas nesse
-proxy de teste. O E2E usa access token de 60 s e margem de 59 s, de modo que praticamente toda requisição
+proxy de teste. O proxy segura uma única chamada do caminho pedido (`/__e2e/hold?path=…`) e libera
+tudo em `/__e2e/release`. O E2E usa access token de 60 s e margem de 59 s, de modo que praticamente toda requisição
 renova — exercitando a rotação real com duas abas. No CI, o job `integration` instala o Chromium
 do Playwright; localmente, `PLAYWRIGHT_CHROMIUM_EXECUTABLE` permite usar outro binário.
 
