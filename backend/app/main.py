@@ -30,6 +30,7 @@ from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging, get_logger
 from app.security.passwords import PasswordHasher
 from app.services.auth_container import build_auth_container
+from app.services.deadline_service import DeadlineService
 from app.services.org_container import build_org_container, ensure_offices_allowed
 from app.services.password_reset_delivery import PasswordResetDelivery
 from app.services.prazo_service import calcular_prazo
@@ -120,6 +121,13 @@ def create_app(
     if settings.offices_active and app.state.auth is not None:
         app.state.org = build_org_container(
             settings, users=app.state.auth.users, clock=app.state.auth.clock, responsibilities=responsibility_port
+        )
+    # Prazos (Etapa 4): mesma unidade de trabalho (ordem de locks escritórios → prazos).
+    app.state.deadlines = None
+    if app.state.org is not None:
+        app.state.deadlines = DeadlineService(
+            unit_of_work=app.state.org.unit_of_work, clock=app.state.auth.clock,
+            timezone=settings.deadlines_timezone, soon_days=settings.deadlines_soon_days,
         )
 
     # API versionada: contrato canônico sob /api/v1.

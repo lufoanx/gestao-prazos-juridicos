@@ -133,8 +133,16 @@ def test_promover_a_si_mesmo_ou_externo(team, org):
     assert o.http.post(f"{API}/offices/{oid}/members/nao-membro/promote", headers=ana.headers).status_code == 404
 
 
-def test_remocao_e_saida_bloqueadas_sem_modulo_de_prazos(team):
-    o, oid, ana, gil, bia, _ = team
+def test_remocao_e_saida_bloqueadas_sem_modulo_de_prazos(org):
+    """Modo indisponível (porta injetada explicitamente): 409 sem nenhum efeito."""
+    from app.services.responsibility_port import UnavailableResponsibilityPort
+
+    o = org(responsibility_port=UnavailableResponsibilityPort())
+    ana, gil, bia = o.person("ana"), o.person("gil"), o.person("bia")
+    oid = o.office(ana)
+    o.join(ana, oid, gil)
+    o.join(ana, oid, bia)
+    assert o.set_perms(ana, oid, gil, MANAGER).status_code == 200
     snapshot = dict(o.store.membership_by_user)
     for who, path, body in [
         (ana, f"/offices/{oid}/members/{bia.id}/remove", {"reassignTo": gil.id}),

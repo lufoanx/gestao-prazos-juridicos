@@ -4,7 +4,8 @@
 > **Implementados:** `GET /api/v1/health` (Etapa 1) e os grupos **`/auth`** e **`/users/me`**
 > (Etapa 2 — armazenamento em memória, ver `06-etapa-2-autenticacao.md`).
 > e, na Etapa 3, **escritórios, equipe, convites e solicitações** (`07-etapa-3-escritorios-rbac.md`).
-> **Planejados:** prazos, intimações, notificações, anexos, auditoria e IA.
+> e, na Etapa 4, **prazos, comentários, histórico, calendário e transferência** (`08-etapa-4-prazos.md`).
+> **Planejados:** intimações, notificações, anexos, auditoria e IA.
 
 ## Convenções
 - Base canônica: `/api/v1` (prefixo `/api` + versão `/v1`). JSON em UTF-8.
@@ -75,7 +76,8 @@ Contratos completos, matriz de autorização e códigos de erro em
   `POST .../members/:userId/promote`. **Substitui** `PATCH /memberships/:userId`.
 - Remoção: `POST /api/v1/offices/:id/members/:userId/remove` `{ reassignTo? }` e saída
   `POST /api/v1/offices/:id/leave` `{ successorUserId?, reassignTo? }` — **substituem**
-  `DELETE` com corpo; **bloqueadas até a Etapa 4** (409 `responsibility_module_unavailable`).
+  `DELETE` com corpo; **desde a Etapa 4** reatribuem os prazos em aberto (`reassignTo`
+  obrigatório se houver) numa única transação.
 - Convites: `POST /api/v1/offices/:id/invitations` → 201 com `token` (única vez);
   `GET .../invitations`; `POST .../invitations/:invitationId/revoke`.
   **Token no corpo:** `POST /api/v1/invitations/lookup` `{ token }` → `{ state, officeName? }`
@@ -90,18 +92,17 @@ Contratos completos, matriz de autorização e códigos de erro em
 - `GET /api/v1/roles` — auth → 200 catálogo de permissões conhecidas.
 - (Cargos são rótulos + conjunto de permissões no Membership; CRUD via /memberships.)
 
-## /deadlines (futuro)
-- `GET /api/v1/deadlines` — auth; query `scope`, `q`, `status`, `urgency`, `area`, `page`, `perPage` → 200 (isolamento + visibilidade). 
-- `POST /api/v1/deadlines` — auth + `deadline.create` → 201.
-- `GET /api/v1/deadlines/:id` — auth + leitura permitida → 200; 403/404.
-- `PATCH /api/v1/deadlines/:id` — auth + `deadline.edit` → 200.
-- `POST /api/v1/deadlines/:id/status` — auth + `deadline.complete`; body `{ status }` → 200 (concluir/cancelar/reabrir).
-- `POST /api/v1/deadlines/:id/transfer` — auth + `deadline.transfer`; body `{ officeId }` → 200 (preserva registro; sem duplicar).
-- `POST /api/v1/deadlines/:id/comments` — auth + `deadline.create` → 201.
-- `GET /api/v1/deadlines/:id/history` — auth + leitura → 200.
-
-## /calendar (futuro)
-- `GET /api/v1/calendar` — auth; query `year`, `month`, `scope` → 200 (vencimentos do ambiente).
+## /deadlines e /calendar — IMPLEMENTADO (Etapa 4, em memória)
+Contratos completos em `08-etapa-4-prazos.md`. Mudanças em relação ao planejado:
+- `GET /api/v1/deadlines` exige `scope=personal|office` e aceita também `responsibleId`,
+  `dueFrom`, `dueTo`, `sort`, `dir`; resposta paginada `{ items, page, perPage, total, pageCount }`.
+- `POST /api/v1/deadlines` → 201 (`scope` no corpo; `officeId` vem do vínculo atual).
+- `PATCH`, `POST .../status` e `POST .../transfer` exigem `version` (409 `version_conflict`).
+- `POST /api/v1/deadlines/:id/transfer` `{ version, officeId, confirmSharing: true }` → `{ deadline, notice }`.
+- Comentários: `GET|POST /api/v1/deadlines/:id/comments`; histórico: `GET .../history`.
+- `GET /api/v1/calendar` com `scope`, `year`, `month`, `status?`, `page`, `perPage` (até 500) e
+  `hasNextPage`/`nextPage`.
+- Sem exclusão de prazos (cancelamento).
 
 ## /intimations (futuro)
 - `GET /api/v1/intimations` — auth; query `scope`, `status`, `q` → 200 (isolamento + permissão + visibilidade; autor vê o próprio pendente).

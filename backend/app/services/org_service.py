@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import secrets
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import timedelta
 
@@ -34,7 +36,10 @@ from app.domain.org import (
 )
 from app.policies import org as policy
 from app.repositories.auth import UserRepository
+from app.repositories.deadlines import UnitTransaction
+from app.repositories.deadlines_memory import CapacityError
 from app.repositories.org import OrgRepository, OrgTransaction
+from app.repositories.unit_of_work import MemoryUnitOfWork, MemoryUnitTransaction
 from app.security.rate_limit import RateLimiter
 from app.security.tokens import hash_opaque_token, new_opaque_token
 from app.services.responsibility_port import ResponsibilityModuleUnavailableError, ResponsibilityPort
@@ -83,6 +88,7 @@ class OrgService:
         self,
         *,
         repo: OrgRepository,
+        unit_of_work: MemoryUnitOfWork,
         users: UserRepository,
         clock: Clock,
         responsibilities: ResponsibilityPort,
@@ -93,6 +99,7 @@ class OrgService:
         join_request_limiter: RateLimiter,
     ) -> None:
         self._repo = repo
+        self._uow = unit_of_work  # transações compostas escritórios + prazos (remoção/saída)
         self._users = users
         self._clock = clock
         self._resp = responsibilities
@@ -250,31 +257,49 @@ class OrgService:
             raise AppError(409, "reassign_required", "Indique outro membro para receber as responsabilidades.")
         return to_user
 
-    def _responsibilities(self, office_id: str, user_id: str, tx: OrgTransaction, reassign_to: str | None) -> None:
-        """Consulta e, se preciso, reatribui. Chamado APÓS as verificações e ANTES das escritas."""
+    def _responsibilities(
+        self, unit: UnitTransaction, office_id: str, user_id: str, reassign_to: str | None, actor_id: str, reason: str
+    ) -> None:
+        """Consulta e, se preciso, reatribui (escritas PREPARADAS na mesma unidade).
+
+        Chamado APÓS as verificações de autorização/invariantes e ANTES das escritas de vínculo.
+        """
         try:
-            open_count = self._resp.count_open(office_id, user_id)
+            open_count = self._resp.count_open(unit, office_id, user_id)
             if open_count > 0:
-                dest = self._check_reassign_target(tx, office_id, user_id, reassign_to)
-                self._resp.reassign_open(office_id, user_id, dest)
+                dest = self._check_reassign_target(unit.org, office_id, user_id, reassign_to)
+                self._resp.reassign_open(unit, office_id, user_id, dest, actor_id, reason)
         except ResponsibilityModuleUnavailableError:
             raise AppError(
                 409, "responsibility_module_unavailable",
                 "Operação indisponível até a integração com o módulo de prazos.",
             ) from None
 
+    @contextmanager
+    def _unit(self) -> Iterator[MemoryUnitTransaction]:
+        try:
+            with self._uow.unit(self._clock) as unit:
+                yield unit
+        except CapacityError as exc:
+            raise AppError(409, exc.code, exc.message) from None
+
     def remove_member(self, actor_id: str, office_id: str, target_id: str, reassign_to: str | None) -> None:
-        with self._repo.transaction(self._clock) as tx:
+        # Unidade composta: autorização, reatribuição + histórico e remoção numa só transação.
+        with self._unit() as unit:
+            tx = unit.org
             _, actor = self._actor_in(tx, actor_id, office_id)
             target = self._target_in(tx, office_id, target_id)
             if (d := policy.check_remove(actor, target, tx.count_admins(office_id))):
                 _raise(d)
-            self._responsibilities(office_id, target_id, tx, reassign_to)
+            self._responsibilities(unit, office_id, target_id, reassign_to, actor_id, "member_removed")
+            unit.checkpoint("remove:before_delete")
             tx.delete_membership(target_id)  # dados pessoais do usuário não são tocados
+            unit.checkpoint("remove:after_delete")
         logger.info("org_member_removed office_id=%s target=%s actor=%s", office_id, target_id, actor_id)
 
     def leave(self, actor_id: str, office_id: str, successor_id: str | None, reassign_to: str | None) -> None:
-        with self._repo.transaction(self._clock) as tx:
+        with self._unit() as unit:
+            tx = unit.org
             _, actor = self._actor_in(tx, actor_id, office_id)
             last_admin = actor.is_admin and tx.count_admins(office_id) <= 1
             successor: Membership | None = None
@@ -282,12 +307,14 @@ class OrgService:
                 successor = tx.membership_of_user(successor_id) if successor_id else None
                 if successor is None or successor.office_id != office_id or successor.user_id == actor_id:
                     raise AppError(409, "successor_required", "Indique um membro como novo administrador.")
-            self._responsibilities(office_id, actor_id, tx, reassign_to)
+            self._responsibilities(unit, office_id, actor_id, reassign_to, actor_id, "member_left")
             if successor is not None:
                 tx.put_membership(
                     replace(successor, permissions=frozenset(successor.permissions | {"team.manage", "office.manage"}))
                 )
+                unit.checkpoint("leave:after_promote")
             tx.delete_membership(actor_id)
+            unit.checkpoint("leave:after_delete")
         logger.info("org_member_left office_id=%s actor=%s", office_id, actor_id)
 
     # ---------------------------------------------------------- código de ingresso

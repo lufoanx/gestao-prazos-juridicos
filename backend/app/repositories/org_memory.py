@@ -1,27 +1,40 @@
-"""Repositório de escritórios EM MEMÓRIA (Etapa 3).
+"""Repositório de escritórios EM MEMÓRIA (Etapas 3 e 4).
 
 Mesmas ressalvas da Etapa 2: perde tudo ao reiniciar, um estado por processo (não use
-múltiplos workers) e bloqueado em production. O estado pertence à instância de
-`MemoryOrgStore`, criada por `create_app`.
+múltiplos workers) e bloqueado em production.
 
-Transação: `transaction()` mantém o `RLock` da instância durante todo o bloco, de modo
-que leitura da autorização, verificação de invariantes e escrita são uma unidade. O
-serviço valida tudo antes de escrever (nenhuma escrita parcial em caso de erro).
-Nenhuma operação cara (hash de senha etc.) acontece dentro do lock.
+Transações (Etapa 4): ESCRITAS PREPARADAS com copy-on-write (`memory_tx.Fork`). O
+`RLock` garante exclusão mútua; o rollback é real: nada do estado confirmado muda até a
+publicação, que troca uma única referência. Operações que também tocam prazos usam a
+unidade de trabalho (`unit_of_work.MemoryUnitOfWork`), com ordem de locks fixa
+escritórios → prazos.
 
 Retenção: convites aceitos/revogados/expirados e solicitações encerradas são removidos
 quando passam de `closed_retention` (varredura no início das transações, no máximo a
-cada `purge_interval`). Registros pendentes são limitados por tetos no serviço.
+cada `purge_interval`; a varredura também é confirmada só no commit).
 """
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterator
-from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from app.core.clock import Clock
 from app.domain.org import Invitation, JoinRequest, Membership, Office
+from app.repositories.memory_tx import Fork, add_to_index, empty_state, remove_from_index
+
+
+@dataclass(frozen=True)
+class OrgState:
+    offices: dict[str, Office]
+    office_by_code: dict[str, str]
+    membership_by_user: dict[str, Membership]
+    members_by_office: dict[str, frozenset[str]]
+    invitations: dict[str, Invitation]
+    invitation_by_hash: dict[str, str]
+    invitations_by_office: dict[str, frozenset[str]]
+    requests: dict[str, JoinRequest]
+    requests_by_office: dict[str, frozenset[str]]
+    requests_by_user: dict[str, frozenset[str]]
 
 
 class MemoryOrgStore:
@@ -32,139 +45,170 @@ class MemoryOrgStore:
         self.closed_retention = timedelta(seconds=closed_retention_seconds)
         self.purge_interval = timedelta(seconds=purge_interval_seconds)
         self.last_purge: datetime | None = None
-        self.offices: dict[str, Office] = {}
-        self.office_by_code: dict[str, str] = {}
-        self.membership_by_user: dict[str, Membership] = {}
-        self.members_by_office: dict[str, set[str]] = {}
-        self.invitations: dict[str, Invitation] = {}
-        self.invitation_by_hash: dict[str, str] = {}
-        self.invitations_by_office: dict[str, set[str]] = {}
-        self.requests: dict[str, JoinRequest] = {}
-        self.requests_by_office: dict[str, set[str]] = {}
-        self.requests_by_user: dict[str, set[str]] = {}
+        self.state: OrgState = empty_state(OrgState)
 
-    # ---- retenção (com lock) ----
-    def purge_locked(self, now: datetime) -> int:
-        removed = 0
-        for inv_id in list(self.invitations):
-            inv = self.invitations[inv_id]
-            closed_since = inv.closed_at if inv.status != "pending" and inv.closed_at else inv.expires_at
-            if (inv.status != "pending" or now >= inv.expires_at) and now - closed_since >= self.closed_retention:
-                del self.invitations[inv_id]
-                self.invitation_by_hash.pop(inv.token_hash, None)
-                self.invitations_by_office.get(inv.office_id, set()).discard(inv_id)
-                removed += 1
-        for req_id in list(self.requests):
-            req = self.requests[req_id]
-            if req.status != "pending" and req.decided_at is not None and now - req.decided_at >= self.closed_retention:
-                del self.requests[req_id]
-                self.requests_by_office.get(req.office_id, set()).discard(req_id)
-                self.requests_by_user.get(req.user_id, set()).discard(req_id)
-                removed += 1
-        for index in (self.invitations_by_office, self.requests_by_office, self.requests_by_user):
-            for key in [k for k, v in index.items() if not v]:
-                del index[key]
-        self.last_purge = now
-        return removed
+    # Acesso de leitura ao estado CONFIRMADO (diagnóstico e testes).
+    @property
+    def offices(self) -> dict[str, Office]:
+        return self.state.offices
+
+    @property
+    def office_by_code(self) -> dict[str, str]:
+        return self.state.office_by_code
+
+    @property
+    def membership_by_user(self) -> dict[str, Membership]:
+        return self.state.membership_by_user
+
+    @property
+    def members_by_office(self) -> dict[str, frozenset[str]]:
+        return self.state.members_by_office
+
+    @property
+    def invitations(self) -> dict[str, Invitation]:
+        return self.state.invitations
+
+    @property
+    def invitations_by_office(self) -> dict[str, frozenset[str]]:
+        return self.state.invitations_by_office
+
+    @property
+    def requests(self) -> dict[str, JoinRequest]:
+        return self.state.requests
+
+    @property
+    def requests_by_office(self) -> dict[str, frozenset[str]]:
+        return self.state.requests_by_office
+
+    @property
+    def requests_by_user(self) -> dict[str, frozenset[str]]:
+        return self.state.requests_by_user
 
 
 class MemoryOrgTransaction:
-    """Visão transacional do store (só existe enquanto o lock está adquirido)."""
+    """Visão transacional (escritas preparadas) — só existe com o lock de escritórios adquirido."""
 
-    def __init__(self, store: MemoryOrgStore, now: datetime) -> None:
-        self._s = store
+    def __init__(self, store: MemoryOrgStore, now: datetime, *, allow_membership_delete: bool) -> None:
+        self._store = store
+        self._f: Fork[OrgState] = Fork(store.state)
         self.now = now
+        self._allow_delete = allow_membership_delete
+        self.removed_memberships: list[Membership] = []
+        self.purged = False
 
-    # Escritórios
+    # ---- ciclo de vida ----
+    @property
+    def changed(self) -> bool:
+        return self._f.changed
+
+    def build(self) -> OrgState:
+        return self._f.build()
+
+    def maybe_purge(self) -> None:
+        s = self._store
+        if s.last_purge is None or self.now - s.last_purge >= s.purge_interval:
+            self.purge()
+
+    def purge(self) -> int:
+        removed = 0
+        retention = self._store.closed_retention
+        for inv in list(self._f.r("invitations").values()):
+            closed_since = inv.closed_at if inv.status != "pending" and inv.closed_at else inv.expires_at
+            if (inv.status != "pending" or self.now >= inv.expires_at) and self.now - closed_since >= retention:
+                del self._f.w("invitations")[inv.id]
+                self._f.w("invitation_by_hash").pop(inv.token_hash, None)
+                remove_from_index(self._f.w("invitations_by_office"), inv.office_id, inv.id)
+                removed += 1
+        for req in list(self._f.r("requests").values()):
+            if req.status != "pending" and req.decided_at is not None and self.now - req.decided_at >= retention:
+                del self._f.w("requests")[req.id]
+                remove_from_index(self._f.w("requests_by_office"), req.office_id, req.id)
+                remove_from_index(self._f.w("requests_by_user"), req.user_id, req.id)
+                removed += 1
+        self.purged = True
+        return removed
+
+    # ---- escritórios ----
     def get_office(self, office_id: str) -> Office | None:
-        return self._s.offices.get(office_id)
+        return self._f.r("offices").get(office_id)
 
     def get_office_by_code(self, code: str) -> Office | None:
-        oid = self._s.office_by_code.get(code)
-        return self._s.offices.get(oid) if oid else None
+        oid = self._f.r("office_by_code").get(code)
+        return self.get_office(oid) if oid else None
 
     def code_in_use(self, code: str) -> bool:
-        return code in self._s.office_by_code
+        return code in self._f.r("office_by_code")
 
     def put_office(self, office: Office) -> None:
-        previous = self._s.offices.get(office.id)
-        if previous is not None and previous.join_code != office.join_code:
-            self._s.office_by_code.pop(previous.join_code, None)
-        if self._s.office_by_code.get(office.join_code, office.id) != office.id:
+        previous = self.get_office(office.id)
+        owner = self._f.r("office_by_code").get(office.join_code, office.id)
+        if owner != office.id:
             raise ValueError("código de ingresso já em uso")
-        self._s.offices[office.id] = office
-        self._s.office_by_code[office.join_code] = office.id
+        if previous is not None and previous.join_code != office.join_code:
+            self._f.w("office_by_code").pop(previous.join_code, None)
+        self._f.w("offices")[office.id] = office
+        self._f.w("office_by_code")[office.join_code] = office.id
 
-    # Vínculos
+    # ---- vínculos ----
     def membership_of_user(self, user_id: str) -> Membership | None:
-        return self._s.membership_by_user.get(user_id)
+        return self._f.r("membership_by_user").get(user_id)
 
     def members_of(self, office_id: str) -> list[Membership]:
-        ids = self._s.members_by_office.get(office_id, set())
-        return [self._s.membership_by_user[u] for u in ids]
+        ids = self._f.r("members_by_office").get(office_id, frozenset())
+        by_user = self._f.r("membership_by_user")
+        return [by_user[u] for u in ids]
 
     def count_admins(self, office_id: str) -> int:
         return sum(1 for m in self.members_of(office_id) if m.is_admin)
 
     def put_membership(self, membership: Membership) -> None:
-        current = self._s.membership_by_user.get(membership.user_id)
+        current = self.membership_of_user(membership.user_id)
         if current is not None and current.office_id != membership.office_id:
             # Invariante de escritório único: nunca troca vínculo silenciosamente.
             raise ValueError("pessoa já possui vínculo com outro escritório")
-        self._s.membership_by_user[membership.user_id] = membership
-        self._s.members_by_office.setdefault(membership.office_id, set()).add(membership.user_id)
+        self._f.w("membership_by_user")[membership.user_id] = membership
+        add_to_index(self._f.w("members_by_office"), membership.office_id, membership.user_id)
 
     def delete_membership(self, user_id: str) -> None:
-        m = self._s.membership_by_user.pop(user_id, None)
-        if m is not None:
-            ids = self._s.members_by_office.get(m.office_id)
-            if ids is not None:
-                ids.discard(user_id)
+        if not self._allow_delete:
+            raise RuntimeError("remoção de vínculo exige a unidade de trabalho com prazos")
+        m = self.membership_of_user(user_id)
+        if m is None:
+            return
+        del self._f.w("membership_by_user")[user_id]
+        remove_from_index(self._f.w("members_by_office"), m.office_id, user_id)
+        self.removed_memberships.append(m)
 
-    # Convites
+    # ---- convites ----
     def get_invitation(self, invitation_id: str) -> Invitation | None:
-        return self._s.invitations.get(invitation_id)
+        return self._f.r("invitations").get(invitation_id)
 
     def get_invitation_by_hash(self, token_hash: str) -> Invitation | None:
-        iid = self._s.invitation_by_hash.get(token_hash)
-        return self._s.invitations.get(iid) if iid else None
+        iid = self._f.r("invitation_by_hash").get(token_hash)
+        return self.get_invitation(iid) if iid else None
 
     def invitations_of(self, office_id: str) -> list[Invitation]:
-        return [self._s.invitations[i] for i in self._s.invitations_by_office.get(office_id, set())]
+        invs = self._f.r("invitations")
+        return [invs[i] for i in self._f.r("invitations_by_office").get(office_id, frozenset())]
 
     def put_invitation(self, invitation: Invitation) -> None:
-        self._s.invitations[invitation.id] = invitation
-        self._s.invitation_by_hash[invitation.token_hash] = invitation.id
-        self._s.invitations_by_office.setdefault(invitation.office_id, set()).add(invitation.id)
+        self._f.w("invitations")[invitation.id] = invitation
+        self._f.w("invitation_by_hash")[invitation.token_hash] = invitation.id
+        add_to_index(self._f.w("invitations_by_office"), invitation.office_id, invitation.id)
 
-    # Solicitações
+    # ---- solicitações ----
     def get_request(self, request_id: str) -> JoinRequest | None:
-        return self._s.requests.get(request_id)
+        return self._f.r("requests").get(request_id)
 
     def requests_of_office(self, office_id: str) -> list[JoinRequest]:
-        return [self._s.requests[r] for r in self._s.requests_by_office.get(office_id, set())]
+        reqs = self._f.r("requests")
+        return [reqs[r] for r in self._f.r("requests_by_office").get(office_id, frozenset())]
 
     def requests_of_user(self, user_id: str) -> list[JoinRequest]:
-        return [self._s.requests[r] for r in self._s.requests_by_user.get(user_id, set())]
+        reqs = self._f.r("requests")
+        return [reqs[r] for r in self._f.r("requests_by_user").get(user_id, frozenset())]
 
     def put_request(self, request: JoinRequest) -> None:
-        self._s.requests[request.id] = request
-        self._s.requests_by_office.setdefault(request.office_id, set()).add(request.id)
-        self._s.requests_by_user.setdefault(request.user_id, set()).add(request.id)
-
-
-class InMemoryOrgRepository:
-    def __init__(self, store: MemoryOrgStore) -> None:
-        self._s = store
-
-    @contextmanager
-    def transaction(self, clock: Clock) -> Iterator[MemoryOrgTransaction]:
-        with self._s.lock:
-            now = clock.now()  # lido DEPOIS de adquirir o lock
-            if self._s.last_purge is None or now - self._s.last_purge >= self._s.purge_interval:
-                self._s.purge_locked(now)
-            yield MemoryOrgTransaction(self._s, now)
-
-    def purge(self, now: datetime) -> int:
-        with self._s.lock:
-            return self._s.purge_locked(now)
+        self._f.w("requests")[request.id] = request
+        add_to_index(self._f.w("requests_by_office"), request.office_id, request.id)
+        add_to_index(self._f.w("requests_by_user"), request.user_id, request.id)

@@ -53,6 +53,11 @@ Permissões referenciadas: `deadline.read`, `deadline.create`, `deadline.edit`,
 - **CRUD:** criar (solicitante); aprovar/rejeitar (requer `team.manage`).
 
 ## Deadline
+> **Implementado na Etapa 4** (`app/domain/deadlines.py`): acrescenta `createdBy`, `createdAt`,
+> `updatedAt` e `version` (controle otimista); `agendaTime` opcional; `duration` 1–3650;
+> transições de status explícitas; comentários e histórico (`DeadlineHistory`) implementados.
+> Detalhes em `08-etapa-4-prazos.md`.
+
 - **Responsabilidade:** prazo jurídico (pessoal ou de escritório).
 - **Campos:** id, scope(personal{ownerId}|office{officeId}), title, caseNumber, court, practiceArea,
   responsibleId, status(`open`|`completed`|`cancelled`), priority, startDate, dueDate,
