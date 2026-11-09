@@ -2,7 +2,7 @@
 
 Interface web do **PrazoAI**, plataforma de **gestão de prazos jurídicos**. Este
 diretório contém o **protótipo de frontend** — totalmente navegável e
-**100% demonstrativo**: não há integração com o backend, banco de dados, IA, OCR,
+**Modo demo (padrão)** — 100% demonstrativo: não há integração com o backend, banco de dados, IA, OCR,
 envio de e-mail nem cálculo processual oficial. Todos os dados são simulados e persistidos apenas
 no navegador (localStorage).
 
@@ -92,3 +92,16 @@ frontend/
 - Sem Tailwind: estilos em `src/app/globals.css` com design tokens.
 - Acessibilidade: navegação por teclado, foco visível, `skip link`, rótulos, `aria-live` no assistente e respeito a `prefers-reduced-motion`.
 - Não commitar `node_modules/`, `.next/`, caches ou `.env*` (ver `.gitignore`).
+
+## Modo integrado (Etapa 6.1)
+Com `NEXT_PUBLIC_PRAZOAI_MODE=integrated` (fixado no build), o frontend fala com o FastAPI por um
+**BFF no próprio Next.js** (`/bff/*`): o navegador recebe só um identificador de sessão em cookie
+HttpOnly; access e refresh tokens ficam no servidor. Integrados: cadastro, login, sessão após
+recarregar, logout, proteção de `/app` e perfil. Demais módulos aparecem como "ainda não
+integrados", sem dados demonstrativos. Configuração em `.env.example`; detalhes e limitações em
+`docs/backend/10-etapa-6-1-sessao-bff.md`.
+
+- `npm run test:integration` — BFF contra FastAPI real (`PRAZOAI_TEST_PYTHON`).
+- `npm run test:e2e` — navegador (Playwright) + Next integrado + FastAPI real.
+- Sessões do BFF ficam em memória: um processo Node, perdidas ao reiniciar; não publicar em
+  ambiente distribuído/serverless (ex.: Vercel) nesta fase.

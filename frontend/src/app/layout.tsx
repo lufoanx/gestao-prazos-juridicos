@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { SessionProvider } from "@/context/SessionContext";
 import { OrgProvider } from "@/context/OrgContext";
+import { AuthProvider } from "@/integrated/AuthProvider";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 
 export const metadata: Metadata = {
   title: "PrazoAI — Gestão de prazos jurídicos",
@@ -13,7 +15,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="pt-BR">
       <body>
         <a href="#conteudo" className="skip-link">Pular para o conteúdo</a>
-        <SessionProvider><OrgProvider>{children}</OrgProvider></SessionProvider>
+        {APP_MODE === "integrated"
+          ? <AuthProvider>{children}</AuthProvider>             /* não lê chaves demonstrativas */
+          : <SessionProvider><OrgProvider>{children}</OrgProvider></SessionProvider>}
       </body>
     </html>
   );

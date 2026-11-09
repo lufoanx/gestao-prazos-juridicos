@@ -1,4 +1,6 @@
 "use client";
+import { IntegratedProfile } from "@/integrated/IntegratedProfile";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import { useEffect, useState } from "react";
 import { UserCircle, Info, ShieldAlert } from "lucide-react";
 import { useSession } from "@/context/SessionContext";
@@ -7,7 +9,7 @@ import { Input, Select, Button, EmptyState, Badge, useToast } from "@/components
 
 const AREAS = ["", "Cível", "Trabalhista", "Criminal", "Tributário", "Família", "Previdenciário", "Empresarial", "Outros"];
 
-export default function PerfilPage() {
+function DemoPerfilPage() {
   const { session, hydrated, updateProfile, updatePreferences } = useSession();
   const { user, scopeKind, membership } = useScope();
   const toast = useToast();
@@ -110,4 +112,9 @@ export default function PerfilPage() {
       </div>
     </div>
   );
+}
+
+// Modo integrado (Etapa 6.1): formulário real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedProfile /> : <DemoPerfilPage />;
 }

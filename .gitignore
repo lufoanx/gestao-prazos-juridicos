@@ -233,3 +233,9 @@ yarn-error.log*
 *.orig
 !*.env.example
 !.env.example
+
+# Etapa 6.1 — artefatos de E2E (Playwright) e build integrado isolado
+frontend/.next-e2e/
+frontend/test-results/
+frontend/playwright-report/
+frontend/e2e/.backend.pid

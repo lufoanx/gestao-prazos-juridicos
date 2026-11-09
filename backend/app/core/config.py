@@ -167,6 +167,24 @@ class Settings(BaseSettings):
     def offices_active(self) -> bool:
         return self.auth_enabled if self.offices_enabled is None else self.offices_enabled
 
+    # --- IP do cliente via intermediário confiável (Etapa 6.1; DESATIVADO por padrão) ---
+    # Quando definido, o backend aceita `X-PrazoAI-Client-IP` SOMENTE se a requisição trouxer
+    # `X-PrazoAI-Proxy-Secret` igual a este segredo (comparação em tempo constante). O
+    # `X-Forwarded-For` continua ignorado. Mínimo de 32 bytes. Nunca exponha ao navegador.
+    trusted_proxy_secret: SecretStr | None = Field(default=None, alias="TRUSTED_PROXY_SECRET")
+
+    @field_validator("trusted_proxy_secret")
+    @classmethod
+    def _valid_proxy_secret(cls, v: SecretStr | None) -> SecretStr | None:
+        if v is None:
+            return None
+        raw = v.get_secret_value().strip()
+        if raw == "":
+            return None
+        if len(raw.encode("utf-8")) < 32:
+            raise ValueError("TRUSTED_PROXY_SECRET deve ter pelo menos 32 bytes.")
+        return SecretStr(raw)
+
     @field_validator("auth_jwt_secret")
     @classmethod
     def _valid_jwt_secret(cls, v: SecretStr | None) -> SecretStr | None:

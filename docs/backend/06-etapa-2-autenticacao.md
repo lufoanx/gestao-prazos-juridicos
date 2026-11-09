@@ -129,7 +129,7 @@ Todas publicadas há mais de duas semanas da data de integração.
 ```bash
 cd backend
 pip install -r requirements-dev.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000 --no-proxy-headers
 ```
 ```bash
 curl -X POST localhost:8000/api/v1/auth/register -H 'content-type: application/json' \

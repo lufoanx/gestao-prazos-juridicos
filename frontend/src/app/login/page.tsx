@@ -1,4 +1,6 @@
 "use client";
+import { IntegratedLogin } from "@/integrated/IntegratedLogin";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -19,7 +21,7 @@ function nameFromEmail(email: string): string {
   return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
 }
 
-export default function LoginPage() {
+function DemoLoginPage() {
   const router = useRouter();
   const { signIn } = useSession();
   const [email, setEmail] = useState("");
@@ -75,4 +77,9 @@ export default function LoginPage() {
       </p>
     </AuthShell>
   );
+}
+
+// Modo integrado (Etapa 6.1): formulário real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedLogin /> : <DemoLoginPage />;
 }

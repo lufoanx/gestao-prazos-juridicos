@@ -1,6 +1,8 @@
 """Dependências de API: serviço de autenticação da instância e usuário autenticado."""
 from __future__ import annotations
 
+import hmac
+import ipaddress
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -42,6 +44,33 @@ OrgServiceDep = Annotated[OrgService, Depends(get_org_service)]
 CurrentUser = Annotated[AuthenticatedUser, Depends(get_current_user)]
 
 
+PROXY_SECRET_HEADER = "x-prazoai-proxy-secret"
+CLIENT_IP_HEADER = "x-prazoai-client-ip"
+
+
 def client_ip(request: Request) -> str:
-    # Sem confiar em X-Forwarded-For (cabeçalho controlado pelo cliente).
-    return request.client.host if request.client else "unknown"
+    """IP usado nos limites de taxa.
+
+    Padrão: o IP observado na conexão (X-Forwarded-For é SEMPRE ignorado). Somente se
+    `TRUSTED_PROXY_SECRET` estiver configurado e a requisição trouxer o segredo correto
+    (comparação em tempo constante) é aceito `X-PrazoAI-Client-IP`, validado como UM endereço
+    IPv4/IPv6. Qualquer falha cai no IP observado. O segredo autentica o intermediário; a
+    veracidade do IP encaminhado é responsabilidade da infraestrutura que o intermediário usa.
+    """
+    observed = request.client.host if request.client else "unknown"
+    secret: str | None = getattr(request.app.state, "trusted_proxy_secret", None)
+    if not secret:
+        return observed
+    provided = request.headers.get(PROXY_SECRET_HEADER)
+    forwarded = request.headers.get(CLIENT_IP_HEADER)
+    if provided is None or forwarded is None:
+        return observed
+    if not hmac.compare_digest(provided.encode("utf-8"), secret.encode("utf-8")):
+        return observed
+    value = forwarded.strip()
+    if not value or len(value) > 45:
+        return observed
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return observed

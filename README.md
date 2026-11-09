@@ -149,13 +149,14 @@ O backend FastAPI já tem a fundação versionada (`/api/v1/health`), autentica�
 (**Etapa 2**), escritórios, equipe, permissões, convites e solicitações (**Etapa 3**) e prazos,
 comentários, histórico, calendário e transferência (**Etapa 4**) e intimações com revisão
 humana e notificações internas (**Etapa 5**, sem arquivos nem IA), com armazenamento **em
-memória** — não é persistente nem está pronto para produção. O frontend **ainda não**
-está integrado ao backend. Ver o [README do backend](backend/README.md).
+memória** — não é persistente nem está pronto para produção. Na **Etapa 6.1**, o frontend
+ganhou um **modo integrado** (BFF no Next.js) para cadastro, login, sessão, logout e perfil; os
+demais módulos seguem em integração. Ver o [README do backend](backend/README.md).
 
 ### Ainda são etapas futuras
 - Armazenamento real de arquivos e processamento de intimações (IA/OCR)
 - Banco de dados e persistência real
-- Integração frontend–backend
+- Integração frontend–backend dos demais módulos (onboarding/escritório, prazos, intimações, notificações)
 - IA/OCR para análise de intimações em PDF
 - Cálculo de prazos processuais oficial
 - Integrações externas (tribunais, e-mail, Google, etc.)
@@ -167,7 +168,7 @@ está integrado ao backend. Ver o [README do backend](backend/README.md).
 ## Status do projeto
 
 Projeto acadêmico da disciplina PAC Extensionista VII. O **protótipo de frontend está
-concluído e navegável** (demonstrativo, ainda não integrado ao backend). O backend tem a
+concluído e navegável** (modo demo); o **modo integrado** (Etapa 6.1) já conecta cadastro, login, sessão, logout e perfil ao backend. O backend tem a
 fundação, a autenticação (Etapa 2), escritórios/equipe/permissões (Etapa 3) prazos (Etapa 4) e intimações/notificações (Etapa 5), em memória. Requisitos e validação do problema
 foram levantados nas etapas anteriores.
 
