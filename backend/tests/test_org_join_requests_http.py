@@ -129,7 +129,7 @@ def test_aprovacao_encontra_conflito_e_cancela(org):
     with o.store.lock:   # vínculo criado por outro caminho, sem passar pelo cancelamento automático
         m = Membership(bia.id, zid, "Membro", (), MEMBER_PERMISSIONS, "assigned", o.store.offices[zid].created_at)
         o.store.membership_by_user[bia.id] = m
-        o.store.members_by_office[zid].add(bia.id)
+        o.store.members_by_office[zid] = o.store.members_by_office[zid] | {bia.id}
     assert o.store.requests[rid].status == "pending"
     r = o.http.post(f"{API}/offices/{oid}/join-requests/{rid}/approve", headers=ana.headers)
     assert r.status_code == 409 and r.json()["error"]["code"] == "already_in_office"

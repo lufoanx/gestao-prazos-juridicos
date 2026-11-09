@@ -1,9 +1,8 @@
-"""Etapa 3 — políticas de remoção/saída com ADAPTADORES CONTROLADOS de responsabilidades.
+"""Remoção/saída com ADAPTADORES CONTROLADOS de responsabilidades (regras do lado do escritório).
 
-ATENÇÃO: estes testes NÃO são integração com o módulo de prazos (Etapa 4). Eles usam
-adaptadores falsos para verificar as regras do lado do escritório: ordem das
-verificações, sucessor, reatribuição obrigatória e ausência de efeitos parciais.
-Em execução real, o adaptador padrão bloqueia (409 responsibility_module_unavailable).
+Estes testes usam dublês da porta para verificar ordem das verificações, sucessor,
+reatribuição obrigatória e ausência de efeitos parciais. A integração REAL com prazos
+(Etapa 4) é testada em `test_deadlines_members.py`.
 """
 import pytest
 
@@ -16,11 +15,11 @@ class ControlledPort:
         self.fail = fail_on_reassign
         self.calls = []
 
-    def count_open(self, office_id, user_id):
+    def count_open(self, tx, office_id, user_id):
         self.calls.append(("count", user_id))
         return self.open.get(user_id, 0)
 
-    def reassign_open(self, office_id, from_user_id, to_user_id):
+    def reassign_open(self, tx, office_id, from_user_id, to_user_id, actor_id, reason):
         self.calls.append(("reassign", from_user_id, to_user_id))
         if self.fail:
             raise RuntimeError("falha simulada na reatribuição")

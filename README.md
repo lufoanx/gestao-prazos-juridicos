@@ -146,12 +146,13 @@ funcionalidades e limitações estão no [README do frontend](frontend/README.md
 
 ### Backend (em andamento)
 O backend FastAPI já tem a fundação versionada (`/api/v1/health`), autenticação e perfil
-(**Etapa 2**) e escritórios, equipe, permissões, convites e solicitações (**Etapa 3**), com
-armazenamento **em memória** — não é persistente nem está pronto para produção. O frontend **ainda não**
+(**Etapa 2**), escritórios, equipe, permissões, convites e solicitações (**Etapa 3**) e prazos,
+comentários, histórico, calendário e transferência (**Etapa 4**), com armazenamento **em
+memória** — não é persistente nem está pronto para produção. O frontend **ainda não**
 está integrado ao backend. Ver o [README do backend](backend/README.md).
 
 ### Ainda são etapas futuras
-- Regras de negócio de prazos e intimações no servidor (inclui reatribuição ao remover membro)
+- Intimações, arquivos e notificações no servidor
 - Banco de dados e persistência real
 - Integração frontend–backend
 - IA/OCR para análise de intimações em PDF
@@ -166,11 +167,11 @@ está integrado ao backend. Ver o [README do backend](backend/README.md).
 
 Projeto acadêmico da disciplina PAC Extensionista VII. O **protótipo de frontend está
 concluído e navegável** (demonstrativo, ainda não integrado ao backend). O backend tem a
-fundação, a autenticação (Etapa 2) e escritórios/equipe/permissões (Etapa 3), em memória. Requisitos e validação do problema
+fundação, a autenticação (Etapa 2), escritórios/equipe/permissões (Etapa 3) e prazos (Etapa 4), em memória. Requisitos e validação do problema
 foram levantados nas etapas anteriores.
 
 Próximos passos:
-- banco de dados e regras de negócio de prazos e intimações no backend (Etapa 4)
+- banco de dados e intimações/arquivos no backend
 - integração frontend–backend e testes de segurança
 - motor de cálculo de prazos e análise de intimações com IA/OCR
 - integrações externas e infraestrutura (CI/CD, deploy)

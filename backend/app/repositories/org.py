@@ -23,7 +23,8 @@ from app.domain.org import Invitation, JoinRequest, Membership, Office
 class OrgTransaction(Protocol):
     # Instante lido do relógio DEPOIS de obtido o lock/início da transação; todas as
     # validações temporais e carimbos da transação usam este mesmo valor.
-    now: datetime
+    @property
+    def now(self) -> datetime: ...
 
     # Escritórios
     def get_office(self, office_id: str) -> Office | None: ...

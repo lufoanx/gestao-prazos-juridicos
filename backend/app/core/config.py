@@ -124,6 +124,27 @@ class Settings(BaseSettings):
         default=30 * 24 * 3600, alias="ORG_CLOSED_RETENTION_SECONDS", ge=24 * 3600, le=365 * 24 * 3600
     )
 
+    # --- Prazos (Etapa 4: EM MEMÓRIA; ativo junto com escritórios) ---
+    deadlines_timezone: str = Field(default="America/Sao_Paulo", alias="DEADLINES_TIMEZONE")
+    deadlines_soon_days: int = Field(default=3, alias="DEADLINES_SOON_DAYS", ge=0, le=30)
+    deadlines_max_per_scope: int = Field(default=10_000, alias="DEADLINES_MAX_PER_SCOPE", ge=1, le=1_000_000)
+    deadlines_max_comments: int = Field(default=1_000, alias="DEADLINES_MAX_COMMENTS", ge=1, le=100_000)
+    deadlines_max_history: int = Field(default=2_000, alias="DEADLINES_MAX_HISTORY", ge=10, le=100_000)
+
+    @field_validator("deadlines_timezone")
+    @classmethod
+    def _valid_timezone(cls, v: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        value = (v or "").strip()
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(
+                f"DEADLINES_TIMEZONE inválido: {v!r} (use um nome IANA, ex.: America/Sao_Paulo)."
+            ) from None
+        return value
+
     @field_validator("offices_enabled", mode="before")
     @classmethod
     def _empty_offices_enabled(cls, v: object) -> object:

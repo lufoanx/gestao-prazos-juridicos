@@ -6,3 +6,5 @@ pydantic-settings==2.16.1
 argon2-cffi==25.1.0
 PyJWT==2.15.1
 email-validator==2.3.0
+# Etapa 4 — base IANA de fusos para zoneinfo (Windows não traz a base no sistema)
+tzdata==2026.5

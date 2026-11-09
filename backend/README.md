@@ -4,9 +4,10 @@ API do PrazoAI em **FastAPI (Python)**. Expõe `GET /api/v1/health` (com `GET /a
 apenas como alias legado), os endpoints legados preservados, **autenticação e perfil**
 (Etapa 2: `/api/v1/auth/*`, `/api/v1/users/me`) e **escritórios, equipe, permissões,
 convites e solicitações** (Etapa 3: `/api/v1/offices/*`, `/api/v1/memberships/me`,
-`/api/v1/invitations/*`, `/api/v1/join-requests/*`), tudo com armazenamento **em memória**.
-**Não há banco de dados, ORM, prazos no servidor, envio de e-mail nem integração com o
-frontend** — as telas continuam demonstrativas.
+`/api/v1/invitations/*`, `/api/v1/join-requests/*`) e **prazos, comentários, histórico,
+calendário e transferência** (Etapa 4: `/api/v1/deadlines/*`, `/api/v1/calendar`), tudo com
+armazenamento **em memória**. **Não há banco de dados, ORM, intimações, arquivos, envio de
+e-mail nem integração com o frontend** — as telas continuam demonstrativas.
 
 > **Stack oficial: Python/FastAPI.** Decisão do projeto é preservar o backend
 > Python existente; não há migração para NestJS. Ver
@@ -107,8 +108,8 @@ Detalhes, decisões e limitações: `docs/backend/06-etapa-2-autenticacao.md`; c
 
 ## Escritórios e equipe (Etapa 3 — em memória)
 > ⚠️ Mesmas ressalvas da Etapa 2 (memória, um worker, bloqueado em production — inclusive
-> com `AUTH_ENABLED=false` se `OFFICES_ENABLED=true`). **Remoção de membro e saída do
-> escritório respondem 409 `responsibility_module_unavailable` até a Etapa 4.**
+> com `AUTH_ENABLED=false` se `OFFICES_ENABLED=true`). Desde a Etapa 4, remoção de membro e
+> saída reatribuem os prazos em aberto (`reassignTo`) numa única transação.
 
 - Criar escritório cria o vínculo administrativo do criador; no máximo um vínculo por pessoa.
 - Matriz de autorização: só administrador (`office.manage`) concede/retira `team.manage` e
@@ -123,6 +124,18 @@ Detalhes, decisões e limitações: `docs/backend/06-etapa-2-autenticacao.md`; c
 - Outro escritório ou recurso inexistente → 404 `not_found`.
 
 Detalhes, matriz completa, exemplos e limites: `docs/backend/07-etapa-3-escritorios-rbac.md`.
+
+## Prazos (Etapa 4 — em memória)
+- `POST|GET /api/v1/deadlines`, `GET|PATCH /api/v1/deadlines/{id}`, `POST .../status`,
+  `POST .../transfer`, `GET|POST .../comments`, `GET .../history`, `GET /api/v1/calendar`.
+- Pessoal: só o dono. Escritório: vínculo atual + `deadline.read` + (`all` ou responsável) e a
+  permissão da operação; `assigned` só cria/atribui para si. Gestão de equipe não dá acesso.
+- `version` obrigatório em `PATCH`/status/transferência (409 `version_conflict`).
+- Vencimento informado pelo usuário; `duration`/`countingMode` são referências organizacionais
+  (sem cálculo processual oficial). Urgência é visual, no fuso `DEADLINES_TIMEZONE`.
+- Transações com escritas preparadas e rollback real; ordem de locks escritórios → prazos.
+
+Detalhes, matriz, exemplos e limites: `docs/backend/08-etapa-4-prazos.md`.
 
 ## Configuração (variáveis de ambiente)
 Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigatório; nunca versione o `.env`):
@@ -140,6 +153,7 @@ Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigató
 - `AUTH_LOGIN_MAX_FAILURES` (5) / `AUTH_LOGIN_WINDOW_SECONDS` (300), `AUTH_FORGOT_MAX_REQUESTS` (3) / `AUTH_FORGOT_WINDOW_SECONDS` (900)
 - `AUTH_REGISTER_MAX_REQUESTS` (10) / `AUTH_REGISTER_WINDOW_SECONDS` (3600), `AUTH_RESET_MAX_REQUESTS` (10) / `AUTH_RESET_WINDOW_SECONDS` (900)
 - `AUTH_RATE_LIMIT_MAX_KEYS` (10000; chaves além do teto compartilham um balde de transbordo) e `AUTH_MAX_SESSIONS_PER_USER` (10)
+- `DEADLINES_TIMEZONE` (America/Sao_Paulo), `DEADLINES_SOON_DAYS` (3) e tetos `DEADLINES_MAX_*` — ver doc 08
 - `OFFICES_ENABLED` (vazio = acompanha `AUTH_ENABLED`) e `ORG_*` (validade de convite, limites de taxa, tetos de pendências e retenção — ver doc 07)
 - `AUTH_MAX_REFRESH_ROTATIONS_PER_SESSION` (1000, entre 10 e 100000): rotações de refresh por sessão; ao atingir o teto, o próximo refresh encerra a sessão (401 `session_rotation_limit_reached`)
 

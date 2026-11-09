@@ -1,5 +1,9 @@
 # 07 — Etapa 3: Escritórios, equipe, permissões e isolamento
 
+> **Atualização Etapa 4:** remoção e saída deixaram de ser bloqueadas — agora reatribuem os
+> prazos em aberto com a porta real (`08-etapa-4-prazos.md`). As transações passaram a usar
+> escritas preparadas com rollback real.
+>
 > **Estado:** implementado no backend (FastAPI) com armazenamento **em memória**, sem banco,
 > sem integração com as telas. O frontend continua demonstrativo.
 > Distinção usada neste documento: **implementado** (funciona e tem testes), **testado com
@@ -18,9 +22,9 @@
 | Código de ingresso (consultar, girar) | implementado |
 | Convites (criar, listar, revogar, consultar, aceitar) | implementado |
 | Solicitações (criar, listar próprias, cancelar, listar/aprovar/rejeitar) | implementado |
-| **Remover membro** | **bloqueado até a Etapa 4** (409 `responsibility_module_unavailable`); regras testadas com adaptador |
-| **Sair do escritório** (inclusive com sucessor) | **bloqueado até a Etapa 4**; regras testadas com adaptador |
-| Reatribuição real de prazos | planejado (Etapa 4) |
+| Remover membro | implementado na Etapa 4 (reatribuição real; ver doc 08) |
+| Sair do escritório (inclusive com sucessor) | implementado na Etapa 4 (reatribuição real; ver doc 08) |
+| Reatribuição real de prazos | implementado na Etapa 4 |
 
 Fora do escopo: CRUD de prazos/intimações, arquivos, IA, e-mail real, PostgreSQL/ORM,
 integração com as telas, mudanças visuais.
@@ -52,7 +56,8 @@ A autoridade é o vínculo ATUAL, lido no servidor **dentro da transação** de 
 | Solicitações: **aprovar** | 404 | 403 | ✔ só com o conjunto de ingresso† | ✔ só com o conjunto de ingresso† |
 | Sair | — | bloqueado* | bloqueado* | bloqueado* (último admin indica sucessor) |
 
-\* 409 `responsibility_module_unavailable` até a Etapa 4, sem nenhum efeito.
+\* Até a Etapa 3: 409 `responsibility_module_unavailable`. Desde a Etapa 4: reatribuição real
+dos prazos em aberto (`reassignTo`), numa única transação (doc 08).
 
 † **Autorização para conceder o conjunto de ingresso.** Emitir convite ou aprovar
 solicitação concede ao novo membro `MEMBER_PERMS` (`deadline.read`, `deadline.create`,
