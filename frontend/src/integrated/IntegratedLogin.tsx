@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { AuthShell } from "@/components/public/AuthShell";
 import { PasswordInput } from "@/components/public/PasswordInput";
 import { Input, Button } from "@/components/ui";
-import { ApiError } from "@/lib/integration/api-client.mjs";
+import { ApiError, StaleResponseError } from "@/lib/integration/api-client.mjs";
 import { useAuth } from "./AuthProvider";
 import { errorMessage } from "./messages";
 import { UnavailableNote } from "./Unavailable";
@@ -33,8 +33,13 @@ export function IntegratedLogin() {
       setPw("");
       router.push("/app");
     } catch (err) {
+      // login_cancelled (servidor) ou resposta descartada porque outra aba encerrou a sessão.
+      const cancelled = (err instanceof ApiError && err.code === "login_cancelled") || err instanceof StaleResponseError;
       const msg = err instanceof ApiError && err.code === "invalid_credentials"
-        ? "E-mail ou senha inválidos." : errorMessage(err);
+        ? "E-mail ou senha inválidos."
+        : cancelled
+          ? "O login foi cancelado porque a sessão foi encerrada em outra aba. Entre novamente."
+          : errorMessage(err);
       setErrors({ form: msg });
     } finally {
       setLoading(false);

@@ -6,7 +6,12 @@ import { defineConfig } from "@playwright/test";
 
 const PORT = Number(process.env.PRAZOAI_E2E_PORT || 3100);
 const BACKEND_PORT = Number(process.env.PRAZOAI_E2E_BACKEND_PORT || 18900);
-export const E2E = { origin: `http://localhost:${PORT}`, backend: `http://127.0.0.1:${BACKEND_PORT}` };
+// O BFF fala com o proxy de TESTE (porta do backend + 1), que repassa ao FastAPI real.
+export const E2E = {
+  origin: `http://localhost:${PORT}`,
+  backend: `http://127.0.0.1:${BACKEND_PORT + 1}`,
+  control: `http://127.0.0.1:${BACKEND_PORT + 1}/__e2e`,
+};
 
 const appEnv = {
   NEXT_PUBLIC_PRAZOAI_MODE: "integrated",

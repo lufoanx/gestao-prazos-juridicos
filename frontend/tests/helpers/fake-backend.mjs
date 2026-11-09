@@ -1,5 +1,8 @@
 // Dublê do FastAPI para testes UNITÁRIOS do BFF (não é integração real).
-// Emite tokens a1/r1, gira a cada refresh e detecta reutilização como o backend real.
+// Emite tokens a<n>-…/r<n>-… (com tamanho realista), gira a cada refresh e detecta
+// reutilização como o backend real.
+
+export const tok = (kind, n) => `${kind}${n}-${"x".repeat(24)}`;
 
 export function deferred() {
   let resolve; let reject;
@@ -44,14 +47,14 @@ export function createFakeBackend() {
       if (!fb.current || body.refreshToken !== fb.current.refresh) return res(401, { error: { code: "invalid_refresh_token", message: "x" } });
       fb.usedRefresh.add(body.refreshToken);
       fb.seq += 1;
-      fb.current = { access: `a${fb.seq}`, refresh: `r${fb.seq}` };
+      fb.current = { access: tok("a", fb.seq), refresh: tok("r", fb.seq) };
       return res(200, { accessToken: fb.current.access, refreshToken: fb.current.refresh, tokenType: "Bearer", expiresIn: 900 });
     }
     if (fb.failNext) { const k = fb.failNext; fb.failNext = null; if (k === "500") return res(500, {}); if (k === "429") return res(429, { error: { code: "rate_limited", message: "x" } }, { "retry-after": "60" }); if (k === "redirect") return new Response(null, { status: 302, headers: { location: "http://evil.example/" } }); fail(k); }
     if (path === "/auth/login") {
       if (fb.loginStatus !== 200) return res(fb.loginStatus, { error: { code: fb.loginStatus === 429 ? "rate_limited" : "invalid_credentials", message: "x" } }, fb.loginStatus === 429 ? { "retry-after": "300" } : {});
       fb.seq += 1;
-      fb.current = { access: `a${fb.seq}`, refresh: `r${fb.seq}` };
+      fb.current = { access: tok("a", fb.seq), refresh: tok("r", fb.seq) };
       fb.revoked = false;
       return res(200, { accessToken: fb.current.access, refreshToken: fb.current.refresh, tokenType: "Bearer", expiresIn: 900, user: fb.user });
     }

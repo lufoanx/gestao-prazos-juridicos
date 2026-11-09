@@ -7,8 +7,14 @@
 // - Ao terminar, os tokens são apagados do objeto antes da remoção.
 // - Um único Map (id → sessão); a renovação em andamento fica NA PRÓPRIA sessão (sem mapas
 //   auxiliares).
+// - Coordenação login × logout entre abas (correção da auditoria 6.1):
+//   * a sessão guarda UM bilhete de login pendente (`pendingLogin`); um novo login com o mesmo
+//     cookie substitui (e cancela) o anterior; logout cancela o bilhete;
+//   * registro LIMITADO de sessões encerradas por logout (só o hash do id), com TTL curto e teto
+//     fixo, para recusar logins que chegam ao servidor depois do logout carregando o cookie antigo.
+//     Nada cresce indefinidamente: entradas expiram e as mais antigas são descartadas no teto.
 // Limitações: perde tudo ao reiniciar; não funciona com várias instâncias nem serverless.
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 export class SessionCapacityError extends Error {}
 
@@ -23,7 +29,20 @@ export function newSessionId() {
 export function createMemorySessionStore(limits, now = () => Date.now()) {
   /** @type {Map<string, any>} */
   const sessions = new Map();
+  /** @type {Map<string, number>} hash(id) → expira em (ms); ordem de inserção = mais antigo primeiro */
+  const loggedOut = new Map();
+  const loggedOutTtlMs = (limits.logoutMemorySeconds ?? 120) * 1000;
+  const loggedOutMax = limits.maxSessions;
   let lastSweep = 0;
+  const digest = (id) => createHash("sha256").update(id).digest("base64url");
+
+  function pruneLoggedOut() {
+    const t = now();
+    for (const [k, exp] of loggedOut) {
+      if (exp > t) break;              // inserção em ordem crescente de expiração
+      loggedOut.delete(k);
+    }
+  }
 
   const expired = (s, t) =>
     t - s.lastSeenAt >= limits.idleSeconds * 1000 || t - s.createdAt >= limits.maxAgeSeconds * 1000;
@@ -51,6 +70,7 @@ export function createMemorySessionStore(limits, now = () => Date.now()) {
     for (const [id, s] of sessions) {
       if (expired(s, t)) { remove(id); n++; }
     }
+    pruneLoggedOut();
     return n;
   }
 
@@ -67,7 +87,7 @@ export function createMemorySessionStore(limits, now = () => Date.now()) {
       const t = now();
       sessions.set(id, {
         id, userId, accessToken, refreshToken, accessExpiresAt,
-        createdAt: t, lastSeenAt: t, generation: 1, refreshing: null, ended: false,
+        createdAt: t, lastSeenAt: t, generation: 1, refreshing: null, ended: false, pendingLogin: null,
       });
       return id;
     },
@@ -97,6 +117,39 @@ export function createMemorySessionStore(limits, now = () => Date.now()) {
     delete(id) { return remove(id); },
 
     sweep,
+
+    /** Associa um login pendente à sessão do cookie atual; cancela o pendente anterior (se houver). */
+    attachPendingLogin(id, ticket) {
+      const s = id ? sessions.get(id) : undefined;
+      if (!s || s.ended) return false;
+      if (s.pendingLogin && s.pendingLogin !== ticket) s.pendingLogin.cancelled = true;
+      s.pendingLogin = ticket;
+      return true;
+    },
+
+    detachPendingLogin(id, ticket) {
+      const s = id ? sessions.get(id) : undefined;
+      if (s && s.pendingLogin === ticket) s.pendingLogin = null;
+    },
+
+    /** Logout: cancela o login pendente desta sessão e registra o id (hash) por tempo limitado. */
+    markLoggedOut(id) {
+      const s = sessions.get(id);
+      if (s?.pendingLogin) s.pendingLogin.cancelled = true;
+      pruneLoggedOut();
+      const key = digest(id);
+      loggedOut.delete(key);
+      loggedOut.set(key, now() + loggedOutTtlMs);
+      while (loggedOut.size > loggedOutMax) loggedOut.delete(loggedOut.keys().next().value);
+    },
+
+    wasLoggedOut(id) {
+      if (!id) return false;
+      pruneLoggedOut();
+      return loggedOut.has(digest(id));
+    },
+
+    get loggedOutSize() { return loggedOut.size; },
 
     remainingSeconds(s) {
       const t = now();

@@ -38,7 +38,7 @@ async function login(env) {
   return { r, cookie: setCookie.split(";")[0], setCookie };
 }
 
-const hasToken = (text) => /\b[ar]\d+\b/.test(text);
+const hasToken = (text) => /\b[ar]\d+-x{24}/.test(text);
 
 // ---------------------------------------------------------------- configuração
 test("config: segurança dos cookies independe de NODE_ENV e de cabeçalhos", () => {

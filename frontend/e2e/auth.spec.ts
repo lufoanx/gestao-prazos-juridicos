@@ -1,6 +1,6 @@
 // E2E 6.1 — navegador real + Next (build integrado) + FastAPI real.
 import { expect, test } from "@playwright/test";
-import { captureBffBodies, login, logout, newEmail, signup } from "./helpers";
+import { PASSWORD, captureBffBodies, login, logout, newEmail, signup } from "./helpers";
 
 const DEMO_TEXTS = ["Contestação — locação residencial", "Paula Andrade", "Rafael Neves"];
 const TOKEN_LIKE = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/; // JWT
@@ -128,6 +128,33 @@ test("credenciais inválidas e validações de senha", async ({ page }) => {
   await page.locator('input[autocomplete="new-password"]').nth(1).fill("curta");
   await page.getByRole("button", { name: "Criar conta", exact: true }).click();
   await expect(page.getByText("A senha deve ter pelo menos 8 caracteres.")).toBeVisible();
+});
+
+test("login pausado numa aba + logout na outra: a resposta tardia não instala sessão", async ({ context }) => {
+  const control = `http://127.0.0.1:${Number(process.env.PRAZOAI_E2E_BACKEND_PORT || 18900) + 1}/__e2e`;
+  const a = await context.newPage();
+  const email = newEmail();
+  await signup(a, "Jade Abas", email);
+  const b = await context.newPage();
+  await b.goto("/app");
+  await expect(b.getByRole("heading", { name: "Olá, Jade Abas" })).toBeVisible();
+  await fetch(`${control}/hold-login`, { method: "POST" });
+  await a.goto("/login");
+  await a.getByLabel("E-mail").fill(email);
+  await a.locator('input[autocomplete="current-password"]').fill(PASSWORD);
+  await a.getByRole("button", { name: "Entrar", exact: true }).click();            // login fica pendente
+  await expect.poll(async () => (await (await fetch(`${control}/status`)).json()).held).toBe(1);
+  await logout(b);                                                                   // logout na outra aba
+  await fetch(`${control}/release-login`, { method: "POST" });
+  await expect(a.getByText("O login foi cancelado porque a sessão foi encerrada em outra aba")).toBeVisible();
+  await a.goto("/app");
+  await expect(a).toHaveURL(/\/login$/);                                            // nenhuma sessão instalada
+  expect((await context.cookies()).some((c) => c.name === "prazoai_sid")).toBe(false);
+  await login(a, email);                                                             // login explícito depois funciona
+  await expect(a.getByRole("heading", { name: "Olá, Jade Abas" })).toBeVisible();
+  await logout(a);
+  await a.close();
+  await b.close();
 });
 
 // Deve ser o ÚLTIMO: derruba o backend.

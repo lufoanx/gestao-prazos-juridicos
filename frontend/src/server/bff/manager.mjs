@@ -18,6 +18,15 @@ import { SessionCapacityError } from "./session-store.mjs";
 
 const PASS_HEADERS = ["retry-after", "x-current-version"];
 
+/** Par de tokens válido (refresh ou login)? Campos obrigatórios e `expiresIn` coerente. */
+export function validTokenPair(json) {
+  if (!json || typeof json !== "object") return false;
+  const { accessToken, refreshToken, expiresIn } = json;
+  return typeof accessToken === "string" && accessToken.length >= 16 && accessToken.length <= 8192
+    && typeof refreshToken === "string" && refreshToken.length >= 16 && refreshToken.length <= 1024
+    && Number.isInteger(expiresIn) && expiresIn >= 1 && expiresIn <= 24 * 3600;
+}
+
 function json(status, body, extra = {}) {
   const headers = new Headers({ ...NO_STORE, "content-type": "application/json; charset=utf-8" });
   for (const [k, v] of Object.entries(extra)) {
@@ -29,8 +38,10 @@ function json(status, body, extra = {}) {
 
 const err = (status, code, message, extra) => json(status, { error: { code, message } }, extra);
 
-export function createBff({ config, store, fetchImpl = fetch, logger = console, now = () => Date.now() }) {
-  const ctx = { config, fetchImpl };
+export function createBff({
+  config, store, fetchImpl = fetch, logger = console, now = () => Date.now(), maxResponseBytes,
+}) {
+  const ctx = { config, fetchImpl, maxResponseBytes };
   const log = (event, fields = {}) => logger.info?.(`bff_${event}`, fields); // nunca tokens ou ids de sessão
 
   function clientIp(request) {
@@ -111,11 +122,17 @@ export function createBff({ config, store, fetchImpl = fetch, logger = console, 
         log("refresh_uncertain", { reason: r.reason });
         return { state: "invalid", code: "session_refresh_uncertain" };
       }
-      if (r.status === 200 && r.json?.accessToken && r.json?.refreshToken) {
+      if (r.status === 200 && !validTokenPair(r.json)) {
+        // 200 com par incompleto/inválido: a rotação pode ter ocorrido → incerto (não reenviar).
+        store.delete(sessionId);
+        log("refresh_uncertain", { reason: "invalid_token_pair" });
+        return { state: "invalid", code: "session_refresh_uncertain" };
+      }
+      if (r.status === 200) {
         const ok = store.updateTokens(sessionId, generation, {
           accessToken: r.json.accessToken,
           refreshToken: r.json.refreshToken,
-          accessExpiresAt: now() + Number(r.json.expiresIn || 0) * 1000,
+          accessExpiresAt: now() + r.json.expiresIn * 1000,
         });
         if (!ok) { log("refresh_discarded"); return { state: "invalid", code: "session_expired" }; }
         log("refresh_ok");
@@ -155,35 +172,63 @@ export function createBff({ config, store, fetchImpl = fetch, logger = console, 
     return passthrough(r);
   }
 
+  /**
+   * Login com coordenação no SERVIDOR (várias abas compartilham o mesmo cookie):
+   * - se a requisição traz o cookie de uma sessão encerrada por logout há pouco, é recusada (409
+   *   `login_cancelled`) — cobre o login que chega ao servidor depois do logout de outra aba;
+   * - se traz o cookie de uma sessão ativa, um bilhete de login pendente é associado a ela; um
+   *   logout dessa sessão (de qualquer aba) ou um novo login com o mesmo cookie cancela o bilhete;
+   *   ao terminar, um login cancelado NÃO cria sessão, revoga os tokens recém-emitidos e limpa o
+   *   cookie;
+   * - sem cookie (primeiro login): não há sessão a encerrar nem a coordenar; conclui normalmente
+   *   (ação explícita do usuário);
+   * - a sessão anterior só é encerrada quando o novo login dá certo; falha preserva a anterior.
+   */
   async function login(request) {
     const denied = guard(request);
     if (denied) return err(denied.status, denied.code, denied.message);
     const body = await readJson(request);
     if (body.error) return body.error;
-    // Troca de usuário/novo login: a sessão anterior deste navegador é encerrada antes.
     const previous = readSessionId(request.headers.get("cookie"), config);
-    if (previous) await endSession(previous);
-    const r = await callBackend(ctx, { method: "POST", path: "/auth/login", body: body.value ?? {}, clientIp: clientIp(request) });
-    if (r.kind === "unreachable") return err(503, "backend_unavailable", "Serviço indisponível. Tente novamente.");
-    if (r.kind === "uncertain") return err(504, "upstream_timeout", "Sem confirmação do servidor. Tente entrar novamente.");
-    if (r.status !== 200) return passthrough(r);
-    const { accessToken, refreshToken, expiresIn, user } = r.json ?? {};
-    if (!accessToken || !refreshToken || !user?.id) return err(502, "upstream_error", "Resposta inválida do servidor.");
-    let id;
+    const cancelled = () => err(409, "login_cancelled",
+      "A sessão foi encerrada em outra aba durante o login. Entre novamente.",
+      { "set-cookie": clearSessionCookie(config) });
+    if (previous && store.wasLoggedOut(previous)) return cancelled();
+    const ticket = { cancelled: false };
+    const attached = previous ? store.attachPendingLogin(previous, ticket) : false;
     try {
-      id = store.create({ userId: user.id, accessToken, refreshToken, accessExpiresAt: now() + Number(expiresIn) * 1000 });
-    } catch (e) {
-      if (e instanceof SessionCapacityError) {
-        await callBackend(ctx, { method: "POST", path: "/auth/logout", token: accessToken });
-        return err(503, "session_capacity_reached", "Muitas sessões ativas no momento. Tente novamente mais tarde.");
+      const r = await callBackend(ctx, { method: "POST", path: "/auth/login", body: body.value ?? {}, clientIp: clientIp(request) });
+      if (r.kind === "unreachable") return err(503, "backend_unavailable", "Serviço indisponível. Tente novamente.");
+      if (r.kind === "uncertain") return err(504, "upstream_timeout", "Sem confirmação do servidor. Tente entrar novamente.");
+      if (r.status !== 200) return passthrough(r);
+      const user = r.json?.user;
+      if (!validTokenPair(r.json) || !user?.id) return err(502, "upstream_error", "Resposta inválida do servidor.");
+      const { accessToken, refreshToken, expiresIn } = r.json;
+      if (ticket.cancelled || (previous && store.wasLoggedOut(previous))) {
+        await callBackend(ctx, { method: "POST", path: "/auth/logout", token: accessToken });   // revoga o par novo
+        log("login_cancelled");
+        return cancelled();
       }
-      throw e;
+      if (previous) await endSession(previous, { logout: false });   // troca de usuário: encerra a anterior
+      let id;
+      try {
+        id = store.create({ userId: user.id, accessToken, refreshToken, accessExpiresAt: now() + expiresIn * 1000 });
+      } catch (e) {
+        if (e instanceof SessionCapacityError) {
+          await callBackend(ctx, { method: "POST", path: "/auth/logout", token: accessToken });
+          return err(503, "session_capacity_reached", "Muitas sessões ativas no momento. Tente novamente mais tarde.");
+        }
+        throw e;
+      }
+      log("login_ok");
+      return json(200, { user }, { "set-cookie": sessionCookie(config, id, config.session.maxAgeSeconds) });
+    } finally {
+      if (attached) store.detachPendingLogin(previous, ticket);
     }
-    log("login_ok");
-    return json(200, { user }, { "set-cookie": sessionCookie(config, id, config.session.maxAgeSeconds) });
   }
 
-  async function endSession(sessionId) {
+  async function endSession(sessionId, { logout = true } = {}) {
+    if (logout) store.markLoggedOut(sessionId);        // cancela login pendente; lembra por pouco tempo
     const snapshot = store.delete(sessionId);          // 1º: invalida localmente (sem novas operações)
     if (snapshot?.accessToken) {                       // 2º: tenta revogar no backend
       const r = await callBackend(ctx, { method: "POST", path: "/auth/logout", token: snapshot.accessToken });

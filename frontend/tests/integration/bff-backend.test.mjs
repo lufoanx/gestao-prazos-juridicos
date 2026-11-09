@@ -157,6 +157,59 @@ test("real: segredo incorreto direto no backend → IP forjado ignorado", async 
   assert.ok(codes.includes(429), JSON.stringify(codes));             // todos contaram no IP observado
 });
 
+// ---------------------------------------------------------------- auditoria 6.1
+test("real (auditoria): login pausado + logout em outra aba não instala sessão", async () => {
+  let release;
+  let hold = false;
+  const gate = new Promise((r) => { release = r; });
+  const env = setup({ wrapFetch: (f) => async (url, init) => {
+    if (hold && String(url).endsWith("/auth/login")) await gate;
+    return f(url, init);
+  } });
+  const a = await account(env);
+  hold = true;
+  const pending = env.bff.login(req("POST", "/bff/auth/login", { cookie: a.cookie, ip: a.ip, body: { email: a.email, password: a.password } }));
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal((await env.bff.logout(req("POST", "/bff/auth/logout", { cookie: a.cookie, ip: a.ip }))).status, 204);
+  release();
+  const late = await pending;
+  assert.equal(late.status, 409);
+  assert.equal(env.store.size, 0);
+  hold = false;
+  const fresh = await env.bff.login(req("POST", "/bff/auth/login", { ip: a.ip, body: { email: a.email, password: a.password } }));
+  assert.equal(fresh.status, 200);                                     // login explícito depois do logout
+});
+
+test("real (auditoria): corpo do refresh 200 interrompido → sessão invalidada, sem reenviar o refresh", async () => {
+  let refreshes = 0;
+  const env = setup({ wrapFetch: (f) => async (url, init) => {
+    const res = await f(url, init);
+    if (String(url).endsWith("/auth/refresh")) {
+      refreshes++;
+      if (res.status === 200) {
+        await res.text();                                              // o backend JÁ girou o token
+        return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{"access')); c.error(new Error("caiu")); } }),
+          { status: 200, headers: { "content-type": "application/json" } });
+      }
+    }
+    return res;
+  } });
+  const a = await account(env);
+  const sid = a.cookie.split("=")[1];
+  const oldRefresh = env.store.get(sid).refreshToken;
+  env.clock.advance(890_000);
+  const r1 = await env.bff.session(req("GET", "/bff/session", { cookie: a.cookie, ip: a.ip }));
+  assert.equal(r1.status, 401);
+  assert.equal((await r1.json()).error.code, "session_refresh_uncertain");
+  const r2 = await env.bff.proxy(req("GET", "/bff/api/users/me", { cookie: a.cookie, ip: a.ip }), "/users/me");
+  assert.equal(r2.status, 401);
+  assert.equal(refreshes, 1);                                          // nunca reenviado
+  const replay = await fetch(`${BASE}/api/v1/auth/refresh`, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ refreshToken: oldRefresh }) });
+  assert.equal(replay.status, 401);                                    // confirma que a rotação ocorreu no backend
+});
+
+// Deve ser o ÚLTIMO: derruba o backend.
 test("real: backend fora do ar → 503 sem logout nem dados demonstrativos", async () => {
   const env = setup();
   const a = await account(env);

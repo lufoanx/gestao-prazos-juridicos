@@ -45,15 +45,36 @@ Navegador ──(cookie HttpOnly com ID opaco)──▶ Next.js (BFF /bff/*) ─
 | 401 do backend | sessão local removida; 401 `session_expired` + cookie limpo |
 | Conexão recusada (requisição não saiu) / 5xx / 429 | 503 `backend_unavailable`; **sessão mantida** (o backend reverte a transação em 5xx) |
 | Timeout, erro de rede após envio, redirecionamento | **resultado incerto**: sessão local invalidada, 401 `session_refresh_uncertain`; o refresh antigo **não** é repetido |
+| 200 com corpo interrompido, JSON inválido, vazio, grande demais ou par de tokens inválido | **resultado incerto** (a rotação pode ter ocorrido): igual à linha anterior |
+
+- O par de tokens só é aceito se `accessToken` e `refreshToken` forem textos com tamanho
+  plausível e `expiresIn` for inteiro entre 1 e 86.400.
+- O corpo das respostas do backend é lido **em fluxo**, com teto de bytes (1 MB) conferido a cada
+  bloco e o **mesmo prazo** da requisição (timer explícito, que também interrompe a leitura).
+  Uma resposta só é considerada válida se o corpo inteiro chegou e, havendo conteúdo, é JSON
+  válido. Em erros HTTP (4xx/5xx), um corpo ilegível não torna o resultado incerto.
 
 - Após 401 do backend numa chamada do proxy não há nova tentativa (sessão revogada em outro lugar).
 - **Mutações nunca são repetidas.** Timeout numa mutação → 504 `upstream_timeout` com
   `outcome: "unknown"`.
 
 ## 4. Login, logout e troca de usuário
-- **Login:** se o navegador já tem sessão, ela é encerrada antes (troca de usuário); cria um
-  identificador novo e emite o cookie. Só login emite cookie; logout e sessão encerrada o limpam
-  (`Max-Age=0`); respostas comuns do proxy **não** emitem cookies.
+- **Login com coordenação no servidor** (correção da auditoria; várias abas compartilham o mesmo
+  cookie, então a fila do navegador não basta):
+  - sem cookie (primeiro login): não há sessão a encerrar nem a coordenar; conclui normalmente;
+  - com cookie de sessão ativa: um **bilhete de login pendente** fica na própria sessão (um único
+    campo). Logout dessa sessão, em qualquer aba, ou um novo login com o mesmo cookie cancelam o
+    bilhete. Ao terminar, um login cancelado **não cria sessão**, revoga no backend os tokens que
+    acabou de receber e responde 409 `login_cancelled` limpando o cookie;
+  - com cookie de sessão encerrada por logout há pouco: o login é recusado (409) sem chamar o
+    backend. Cobre o login que chega ao servidor depois do logout. Usa um registro **limitado**
+    (hash do id, TTL `PRAZOAI_BFF_LOGOUT_MEMORY_SECONDS` = 120 s, teto = `PRAZOAI_BFF_MAX_SESSIONS`,
+    descarte do mais antigo); nada cresce indefinidamente. Se uma entrada for descartada antes do
+    TTL (inundação de logouts), um login tardio com esse cookie volta a ser tratado como normal;
+  - a sessão anterior só é encerrada quando o novo login dá certo; **falha de login preserva a
+    sessão anterior** (o cliente ressincroniza com `GET /bff/session`);
+  - só login emite cookie; logout, sessão encerrada e login cancelado o limpam (`Max-Age=0`);
+    respostas comuns do proxy **não** emitem cookies.
 - **Logout:** invalida a sessão local **primeiro** (nenhuma operação autenticada nova), depois
   tenta revogar no backend; sempre 204 (idempotente), mesmo com o backend fora do ar.
 - **No navegador** (`auth-controller.mjs`): login, cadastro, restauração e logout são
@@ -124,12 +145,15 @@ cd frontend && cp .env.example .env.local && npm run build && npm run start
 ## 11. Testes
 | Tipo | Onde | Executa |
 |---|---|---|
-| Unitários com **dublês** | `frontend/tests/bff-core.test.mjs`, `tests/integration-client.test.mjs` | `npm test` |
+| Unitários com **dublês** | `frontend/tests/bff-core.test.mjs`, `tests/bff-audit-fixes.test.mjs`, `tests/integration-client.test.mjs` | `npm test` |
 | **Integração real** BFF ↔ FastAPI (uvicorn iniciado pelo teste) | `frontend/tests/integration/bff-backend.test.mjs` | `PRAZOAI_TEST_PYTHON=… npm run test:integration` |
 | **E2E** navegador + Next (build integrado) + FastAPI | `frontend/e2e/auth.spec.ts` | `PRAZOAI_TEST_PYTHON=… npm run test:e2e` |
 | Backend (IP confiável) | `backend/tests/test_trusted_client_ip.py` | `pytest` |
 
-O E2E usa access token de 60 s e margem de 59 s, de modo que praticamente toda requisição
+No E2E, o BFF fala com um **proxy HTTP de teste** (porta do backend + 1) que só repassa ao
+FastAPI real; ele pode segurar o próximo login para reproduzir de forma determinística o cenário
+"login pendente numa aba + logout na outra". As rotas de controle `/__e2e/*` existem apenas nesse
+proxy de teste. O E2E usa access token de 60 s e margem de 59 s, de modo que praticamente toda requisição
 renova — exercitando a rotação real com duas abas. No CI, o job `integration` instala o Chromium
 do Playwright; localmente, `PLAYWRIGHT_CHROMIUM_EXECUTABLE` permite usar outro binário.
 

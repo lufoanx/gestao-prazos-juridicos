@@ -26,6 +26,18 @@ export function createAuthController({ api, channel = null, onReset = () => {} }
   const reset = () => { api.bumpEpoch(); onReset(); };
   const announce = (type, userId) => { try { channel?.postMessage({ type, userId }); } catch { /* aba fechada */ } };
 
+  async function resync() {
+    try {
+      const data = await api.request("GET", "/bff/session");
+      if (data?.authenticated && data.user) set({ status: "authenticated", user: data.user, error: null });
+      else set({ status: "anonymous", user: null, error: null });
+    } catch (e) {
+      if (e instanceof StaleResponseError) return;
+      if (e instanceof ApiError && e.status === 401) set({ status: "anonymous", user: null, error: null });
+      else set({ status: "unavailable", error: e instanceof ApiError ? e.code : "network_error" });
+    }
+  }
+
   function restore() {
     return serialize(async () => {
       try {
@@ -49,8 +61,9 @@ export function createAuthController({ api, channel = null, onReset = () => {} }
         announce("login", data.user.id);
         return data.user;
       } catch (e) {
-        // O BFF encerra a sessão anterior deste navegador antes de tentar o novo login.
-        if (!(e instanceof StaleResponseError)) set({ status: "anonymous", user: null, error: null });
+        // Falha comum preserva a sessão anterior no servidor; login cancelado (logout em outra aba)
+        // limpa. Em vez de supor, ressincroniza com o servidor.
+        if (!(e instanceof StaleResponseError)) await resync();
         throw e;
       }
     });
