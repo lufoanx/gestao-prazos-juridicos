@@ -20,6 +20,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
+from app.core.clock import Clock
 from app.domain.org import Invitation, JoinRequest, Membership, Office
 
 
@@ -157,8 +158,9 @@ class InMemoryOrgRepository:
         self._s = store
 
     @contextmanager
-    def transaction(self, now: datetime) -> Iterator[MemoryOrgTransaction]:
+    def transaction(self, clock: Clock) -> Iterator[MemoryOrgTransaction]:
         with self._s.lock:
+            now = clock.now()  # lido DEPOIS de adquirir o lock
             if self._s.last_purge is None or now - self._s.last_purge >= self._s.purge_interval:
                 self._s.purge_locked(now)
             yield MemoryOrgTransaction(self._s, now)

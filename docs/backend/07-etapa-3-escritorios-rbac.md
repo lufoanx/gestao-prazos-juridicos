@@ -45,12 +45,25 @@ A autoridade é o vínculo ATUAL, lido no servidor **dentro da transação** de 
 | Promover sucessor | 404 | 403 | 403 | ✔ |
 | Remover membro comum | 404 | 403 | bloqueado* | bloqueado* |
 | Remover gestor/admin | 404 | 403 | 403 | bloqueado* |
-| Convites: criar/listar/revogar | 404 | 403 | ✔ | ✔ |
+| Convites: **criar** | 404 | 403 | ✔ só com o conjunto de ingresso† | ✔ só com o conjunto de ingresso† |
+| Convites: listar/revogar | 404 | 403 | ✔ | ✔ |
 | Código de ingresso: ver/girar | 404 | 403 | ✔ | ✔ |
-| Solicitações: listar/aprovar/rejeitar | 404 | 403 | ✔ | ✔ |
+| Solicitações: listar/rejeitar | 404 | 403 | ✔ | ✔ |
+| Solicitações: **aprovar** | 404 | 403 | ✔ só com o conjunto de ingresso† | ✔ só com o conjunto de ingresso† |
 | Sair | — | bloqueado* | bloqueado* | bloqueado* (último admin indica sucessor) |
 
 \* 409 `responsibility_module_unavailable` até a Etapa 4, sem nenhum efeito.
+
+† **Autorização para conceder o conjunto de ingresso.** Emitir convite ou aprovar
+solicitação concede ao novo membro `MEMBER_PERMS` (`deadline.read`, `deadline.create`,
+`deadline.edit`, `deadline.complete`) com `visibility=assigned`. Pela mesma regra de
+delegação do `PATCH` de membros, o ator precisa de `team.manage` **e** de todas essas
+permissões (visibilidade `assigned` não exige `all`). Sem elas: 403
+`delegation_not_allowed`, sem efeito (convite não emitido, solicitação continua pendente,
+nenhum vínculo). O conjunto do novo membro **nunca** é reduzido em silêncio. A verificação
+ocorre na mesma transação da emissão/aprovação. Rejeitar não concede nada e exige só
+`team.manage`. Um convite emitido legitimamente continua válido se o emissor perder
+permissões depois (decisão aprovada): a aceitação não reavalia o emissor.
 
 **Regras e invariantes** (`app/policies/org.py`, funções puras):
 - `office.manage` exige `team.manage`; conjunto não vazio; permissões desconhecidas ou
@@ -63,6 +76,8 @@ A autoridade é o vínculo ATUAL, lido no servidor **dentro da transação** de 
   (salvo privilégio administrativo de gestor e último admin).
 - O escritório nunca fica sem administrador.
 - Cargo (`roleLabel`) e `createdBy` não concedem poderes; não há exceção por "dono".
+- Ingresso (convite/aprovação) exige autoridade para conceder o conjunto de ingresso
+  (`can_grant_entry`): `team.manage` + todo `MEMBER_PERMS`.
 
 **Respostas:** recurso de outro escritório ou inexistente → **404 `not_found`** (mesmo
 corpo); **403 `forbidden`** só dentro do próprio escritório quando falta permissão.
@@ -72,6 +87,7 @@ corpo); **403 `forbidden`** só dentro do próprio escritório quando falta perm
 | Protótipo (`org-ops.mjs`) | Backend |
 |---|---|
 | Só impede autoescalada | Também bloqueia escalada indireta: só admin mexe em privilégios administrativos; delegação limitada ao que o ator tem |
+| Qualquer `team.manage` convida/aprova | Convidar/aprovar exige possuir todo o conjunto de ingresso |
 | `team.manage` concede `office.manage` e altera admins | Exige `office.manage` |
 | Visibilidade sem restrição de delegação | Só concede `all` quem tem `all` |
 | Entradas inválidas descartadas em silêncio | 422 |
@@ -163,9 +179,12 @@ pessoa já tiver vínculo em outro escritório, a solicitação passa a `cancell
 vínculo com cargo "Membro", `MEMBER_PERMS` e `assigned`.
 
 ## 7. Garantias de concorrência
-Toda operação protegida roda em `OrgRepository.transaction()`: em memória, um `RLock` por
-instância durante o bloco inteiro; o serviço lê o vínculo do ator e do alvo, aplica as
-políticas e só então escreve. Não há checagem fora da transação (nem no JWT). Garantias
+Toda operação protegida roda em `OrgRepository.transaction(clock)`: em memória, um `RLock`
+por instância durante o bloco inteiro; **o relógio é lido depois de obtido o lock**
+(`tx.now`) e esse mesmo instante é usado em todas as validações temporais (expiração de
+convite, teto de pendentes, limpeza) e carimbos (criação, aceitação, revogação, decisão)
+da transação. O serviço lê o vínculo do ator e do alvo, aplica as políticas e só então
+escreve. Não há checagem fora da transação (nem no JWT). Garantias
 testadas com `Barrier`/`Event`:
 - criação concorrente pelo mesmo usuário → um escritório;
 - ingresso concorrente em dois escritórios → um vínculo; o outro convite não é gasto;
@@ -173,7 +192,11 @@ testadas com `Barrier`/`Event`:
 - aceitação × revogação, aprovação × aceitação de convite → estados coerentes;
 - rebaixamentos concorrentes dos dois últimos admins → sempre ≥ 1 admin;
 - alteração administrativa × perda de autoridade → a alteração tardia recebe 403;
-- aprovações/rejeição concorrentes da mesma solicitação → uma decisão.
+- aprovações/rejeição concorrentes da mesma solicitação → uma decisão;
+- perda de permissão × emissão de convite/aprovação → 403 sem efeito;
+- convite que expira **durante a espera pelo lock** (inclusive no instante exato) → 410,
+  sem consumo e sem vínculo; consulta, revogação, teto de pendentes, carimbos e limpeza
+  também usam o instante pós-lock.
 Escritório único também é defendido no próprio repositório (`put_membership`).
 PostgreSQL: mesma transação com `SELECT ... FOR UPDATE` e restrições únicas (ver
 `app/repositories/org.py`).
@@ -212,7 +235,8 @@ Também caberá à Etapa 4 aplicar `deadline.*` e `visibility` às consultas de 
 ## 10. Testes
 `test_org_policies.py` (matriz pura), `test_org_offices_http.py`, `test_org_team_http.py`,
 `test_org_invitations_http.py`, `test_org_join_requests_http.py`, `test_org_concurrency.py`,
-`test_org_responsibilities.py` (adaptador controlado), `test_org_retention.py`.
+`test_org_responsibilities.py` (adaptador controlado), `test_org_retention.py` e
+`test_org_entry_and_time.py` (delegação no ingresso e horário pós-lock).
 Fixture `org` em `tests/org_utils.py`; usa Argon2id real com parâmetros mínimos para
 acelerar (a autenticação não é o objeto desses testes; os testes da Etapa 2 seguem com os
 parâmetros padrão).

@@ -16,10 +16,13 @@ from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Protocol
 
+from app.core.clock import Clock
 from app.domain.org import Invitation, JoinRequest, Membership, Office
 
 
 class OrgTransaction(Protocol):
+    # Instante lido do relógio DEPOIS de obtido o lock/início da transação; todas as
+    # validações temporais e carimbos da transação usam este mesmo valor.
     now: datetime
 
     # Escritórios
@@ -49,8 +52,13 @@ class OrgTransaction(Protocol):
 
 
 class OrgRepository(Protocol):
-    def transaction(self, now: datetime) -> AbstractContextManager[OrgTransaction]:
-        """Abre uma transação; nada fora dela pode decidir autorização."""
+    def transaction(self, clock: Clock) -> AbstractContextManager[OrgTransaction]:
+        """Abre uma transação e só ENTÃO lê o relógio (`tx.now`).
+
+        Um horário capturado antes de esperar pelo lock ficaria obsoleto (ex.: convite que
+        expira durante a espera). Em PostgreSQL: usar o instante obtido após o BEGIN/lock
+        (ou `now()` da transação) para validar e carimbar.
+        """
         ...
 
     def purge(self, now: datetime) -> int:

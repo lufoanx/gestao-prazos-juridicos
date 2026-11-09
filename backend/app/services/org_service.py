@@ -152,8 +152,8 @@ class OrgService:
     def create_office(
         self, actor_id: str, name: str, role_label: str, practice_areas: tuple[str, ...]
     ) -> tuple[Office, Membership]:
-        now = self._clock.now()
-        with self._repo.transaction(now) as tx:
+        with self._repo.transaction(self._clock) as tx:
+            now = tx.now  # instante obtido após o lock
             if tx.membership_of_user(actor_id) is not None:
                 raise AppError(409, "already_in_office", "Você já participa de um escritório.")
             office = Office(
@@ -170,17 +170,17 @@ class OrgService:
         return office, membership
 
     def current(self, actor_id: str) -> tuple[Office | None, Membership | None]:
-        with self._repo.transaction(self._clock.now()) as tx:
+        with self._repo.transaction(self._clock) as tx:
             m = tx.membership_of_user(actor_id)
             return (tx.get_office(m.office_id), m) if m else (None, None)
 
     def get_office(self, actor_id: str, office_id: str) -> Office:
-        with self._repo.transaction(self._clock.now()) as tx:
+        with self._repo.transaction(self._clock) as tx:
             office, _ = self._actor_in(tx, actor_id, office_id)
             return office
 
     def update_office(self, actor_id: str, office_id: str, name: str) -> Office:
-        with self._repo.transaction(self._clock.now()) as tx:
+        with self._repo.transaction(self._clock) as tx:
             office, actor = self._actor_in(tx, actor_id, office_id)
             if (d := policy.can_manage_office(actor)):
                 _raise(d)
@@ -190,7 +190,7 @@ class OrgService:
 
     # -------------------------------------------------------------------- equipe
     def list_members(self, actor_id: str, office_id: str) -> tuple[Membership, list[MemberEntry]]:
-        with self._repo.transaction(self._clock.now()) as tx:
+        with self._repo.transaction(self._clock) as tx:
             _, actor = self._actor_in(tx, actor_id, office_id)
             members = sorted(tx.members_of(office_id), key=lambda m: (m.joined_at, m.user_id))
         return actor, [MemberEntry(m, self.user_of(m.user_id)) for m in members]
@@ -206,7 +206,7 @@ class OrgService:
         visibility: str | None = None,
         permissions: frozenset[str] | None = None,
     ) -> tuple[Membership, MemberEntry]:
-        with self._repo.transaction(self._clock.now()) as tx:
+        with self._repo.transaction(self._clock) as tx:
             _, actor = self._actor_in(tx, actor_id, office_id)
             target = self._target_in(tx, office_id, target_id)
             denial = policy.check_member_change(
@@ -228,7 +228,7 @@ class OrgService:
         return actor_after, MemberEntry(updated, self.user_of(target_id))
 
     def promote(self, actor_id: str, office_id: str, target_id: str) -> tuple[Membership, MemberEntry]:
-        with self._repo.transaction(self._clock.now()) as tx:
+        with self._repo.transaction(self._clock) as tx:
             _, actor = self._actor_in(tx, actor_id, office_id)
             target = self._target_in(tx, office_id, target_id)
             if (d := policy.check_promote(actor, target)):
@@ -264,7 +264,7 @@ class OrgService:
             ) from None
 
     def remove_member(self, actor_id: str, office_id: str, target_id: str, reassign_to: str | None) -> None:
-        with self._repo.transaction(self._clock.now()) as tx:
+        with self._repo.transaction(self._clock) as tx:
             _, actor = self._actor_in(tx, actor_id, office_id)
             target = self._target_in(tx, office_id, target_id)
             if (d := policy.check_remove(actor, target, tx.count_admins(office_id))):
@@ -274,7 +274,7 @@ class OrgService:
         logger.info("org_member_removed office_id=%s target=%s actor=%s", office_id, target_id, actor_id)
 
     def leave(self, actor_id: str, office_id: str, successor_id: str | None, reassign_to: str | None) -> None:
-        with self._repo.transaction(self._clock.now()) as tx:
+        with self._repo.transaction(self._clock) as tx:
             _, actor = self._actor_in(tx, actor_id, office_id)
             last_admin = actor.is_admin and tx.count_admins(office_id) <= 1
             successor: Membership | None = None
@@ -292,14 +292,14 @@ class OrgService:
 
     # ---------------------------------------------------------- código de ingresso
     def get_join_code(self, actor_id: str, office_id: str) -> str:
-        with self._repo.transaction(self._clock.now()) as tx:
+        with self._repo.transaction(self._clock) as tx:
             office, actor = self._actor_in(tx, actor_id, office_id)
             if (d := policy.can_manage_team(actor)):
                 _raise(d)
             return office.join_code
 
     def rotate_join_code(self, actor_id: str, office_id: str) -> str:
-        with self._repo.transaction(self._clock.now()) as tx:
+        with self._repo.transaction(self._clock) as tx:
             office, actor = self._actor_in(tx, actor_id, office_id)
             if (d := policy.can_manage_team(actor)):
                 _raise(d)
@@ -311,11 +311,12 @@ class OrgService:
     # ------------------------------------------------------------------ convites
     def create_invitation(self, actor_id: str, office_id: str, role_label: str) -> tuple[Invitation, str]:
         self._limit(self._invite_create_limiter, f"user:{actor_id}")
-        now = self._clock.now()
         token = new_opaque_token()
-        with self._repo.transaction(now) as tx:
+        with self._repo.transaction(self._clock) as tx:
+            now = tx.now  # instante obtido após o lock
             _, actor = self._actor_in(tx, actor_id, office_id)
-            if (d := policy.can_manage_team(actor)):
+            # Autoridade para conceder o conjunto de ingresso, verificada nesta transação.
+            if (d := policy.can_grant_entry(actor)):
                 _raise(d)
             pending = sum(1 for i in tx.invitations_of(office_id) if i.state(now) == "valid")
             if pending >= self._limits.max_pending_invites_per_office:
@@ -334,15 +335,15 @@ class OrgService:
         return invitation, token
 
     def list_invitations(self, actor_id: str, office_id: str) -> list[Invitation]:
-        with self._repo.transaction(self._clock.now()) as tx:
+        with self._repo.transaction(self._clock) as tx:
             _, actor = self._actor_in(tx, actor_id, office_id)
             if (d := policy.can_manage_team(actor)):
                 _raise(d)
             return sorted(tx.invitations_of(office_id), key=lambda i: (i.created_at, i.id), reverse=True)
 
     def revoke_invitation(self, actor_id: str, office_id: str, invitation_id: str) -> Invitation:
-        now = self._clock.now()
-        with self._repo.transaction(now) as tx:
+        with self._repo.transaction(self._clock) as tx:
+            now = tx.now  # instante obtido após o lock
             _, actor = self._actor_in(tx, actor_id, office_id)
             inv = tx.get_invitation(invitation_id)
             if inv is None or inv.office_id != office_id:
@@ -359,8 +360,8 @@ class OrgService:
 
     def lookup_invitation(self, token: str, client_ip: str) -> tuple[InvitationState, str | None]:
         self._limit(self._invite_lookup_limiter, f"ip:{client_ip}")
-        now = self._clock.now()
-        with self._repo.transaction(now) as tx:
+        with self._repo.transaction(self._clock) as tx:
+            now = tx.now  # instante obtido após o lock
             inv = tx.get_invitation_by_hash(hash_opaque_token(token))
             if inv is None:
                 return "invalid", None
@@ -372,8 +373,8 @@ class OrgService:
 
     def accept_invitation(self, actor_id: str, token: str, client_ip: str) -> tuple[Office, Membership]:
         self._limit(self._invite_accept_limiter, f"ip:{client_ip}", f"user:{actor_id}")
-        now = self._clock.now()
-        with self._repo.transaction(now) as tx:
+        with self._repo.transaction(self._clock) as tx:
+            now = tx.now  # instante obtido após o lock
             inv = tx.get_invitation_by_hash(hash_opaque_token(token))
             office = tx.get_office(inv.office_id) if inv else None
             if inv is None or office is None:
@@ -396,8 +397,8 @@ class OrgService:
     # ------------------------------------------------------------- solicitações
     def create_join_request(self, actor_id: str, code: str, client_ip: str) -> tuple[JoinRequest, Office]:
         self._limit(self._join_request_limiter, f"ip:{client_ip}", f"user:{actor_id}")
-        now = self._clock.now()
-        with self._repo.transaction(now) as tx:
+        with self._repo.transaction(self._clock) as tx:
+            now = tx.now  # instante obtido após o lock
             office = tx.get_office_by_code(code)
             if office is None:
                 raise AppError(404, "join_code_invalid", "Código de ingresso inválido.")
@@ -417,7 +418,7 @@ class OrgService:
         return request, office
 
     def my_requests(self, actor_id: str) -> list[tuple[JoinRequest, str | None]]:
-        with self._repo.transaction(self._clock.now()) as tx:
+        with self._repo.transaction(self._clock) as tx:
             out = []
             for r in sorted(tx.requests_of_user(actor_id), key=lambda r: (r.created_at, r.id), reverse=True):
                 office = tx.get_office(r.office_id)
@@ -425,8 +426,8 @@ class OrgService:
             return out
 
     def cancel_request(self, actor_id: str, request_id: str) -> JoinRequest:
-        now = self._clock.now()
-        with self._repo.transaction(now) as tx:
+        with self._repo.transaction(self._clock) as tx:
+            now = tx.now  # instante obtido após o lock
             req = tx.get_request(request_id)
             if req is None or req.user_id != actor_id:
                 _raise(policy.NOT_FOUND)
@@ -438,7 +439,7 @@ class OrgService:
         return req
 
     def list_office_requests(self, actor_id: str, office_id: str, status: str | None) -> list[RequestEntry]:
-        with self._repo.transaction(self._clock.now()) as tx:
+        with self._repo.transaction(self._clock) as tx:
             _, actor = self._actor_in(tx, actor_id, office_id)
             if (d := policy.can_manage_team(actor)):
                 _raise(d)
@@ -447,15 +448,16 @@ class OrgService:
         return [RequestEntry(r, self.user_of(r.user_id)) for r in reqs]
 
     def approve_request(self, actor_id: str, office_id: str, request_id: str) -> tuple[JoinRequest, Membership]:
-        now = self._clock.now()
         conflict = False
-        with self._repo.transaction(now) as tx:
+        with self._repo.transaction(self._clock) as tx:
+            now = tx.now  # instante obtido após o lock
             _, actor = self._actor_in(tx, actor_id, office_id)
             req = tx.get_request(request_id)
             if req is None or req.office_id != office_id:
                 _raise(policy.NOT_FOUND)
             assert req is not None
-            if (d := policy.can_manage_team(actor)):
+            # Aprovar concede o conjunto de ingresso: mesma autoridade exigida para convidar.
+            if (d := policy.can_grant_entry(actor)):
                 _raise(d)
             if req.status != "pending":
                 raise AppError(409, "request_not_pending", "A solicitação não está mais pendente.")
@@ -480,8 +482,8 @@ class OrgService:
         return req, membership
 
     def reject_request(self, actor_id: str, office_id: str, request_id: str) -> JoinRequest:
-        now = self._clock.now()
-        with self._repo.transaction(now) as tx:
+        with self._repo.transaction(self._clock) as tx:
+            now = tx.now  # instante obtido após o lock
             _, actor = self._actor_in(tx, actor_id, office_id)
             req = tx.get_request(request_id)
             if req is None or req.office_id != office_id:

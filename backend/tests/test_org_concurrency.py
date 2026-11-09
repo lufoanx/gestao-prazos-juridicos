@@ -157,7 +157,7 @@ class GateRepo:
     def purge(self, now):
         return self._inner.purge(now)
 
-    def transaction(self, now):
+    def transaction(self, clock):
         from contextlib import contextmanager
 
         @contextmanager
@@ -165,7 +165,7 @@ class GateRepo:
             name = threading.current_thread().name
             if name == self.waiter:
                 self.about_to_lock.set()
-            with self._inner.transaction(now) as t:
+            with self._inner.transaction(clock) as t:
                 if name == self.hold:
                     self.inside.set()
                     assert self.release.wait(30)

@@ -116,7 +116,9 @@ Detalhes, decisões e limitações: `docs/backend/06-etapa-2-autenticacao.md`; c
   ninguém amplia o próprio acesso; sempre ≥ 1 administrador; cargo não concede poderes.
 - Autorização relida no servidor a cada requisição (redução vale imediatamente).
 - Convite = link portador de uso único (7 dias), só hash guardado; token no corpo de
-  `POST /api/v1/invitations/lookup|accept`.
+  `POST /api/v1/invitations/lookup|accept`. Convidar e aprovar solicitações exigem
+  `team.manage` **e** todas as permissões concedidas no ingresso (`deadline.read`,
+  `create`, `edit`, `complete`).
 - Código de ingresso aleatório (10 caracteres) só permite **solicitar**; aprovação por gestor.
 - Outro escritório ou recurso inexistente → 404 `not_found`.
 

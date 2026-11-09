@@ -12,13 +12,15 @@ Matriz aprovada (ver docs/backend/07-etapa-3-escritorios-rbac.md):
   só concede visibility=all se ele próprio tem all;
 - ninguém amplia a própria visibilidade ou permissões;
 - o escritório nunca fica sem administrador;
-- cargo e created_by não concedem poderes.
+- cargo e created_by não concedem poderes;
+- ingresso (emitir convite / aprovar solicitação) concede MEMBER_PERMISSIONS com
+  visibility=assigned: exige team.manage E posse de todo esse conjunto.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.domain.org import ADMINISTRATIVE, PERMISSIONS, Membership
+from app.domain.org import ADMINISTRATIVE, MEMBER_PERMISSIONS, PERMISSIONS, Membership
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,24 @@ def can_manage_team(actor: Membership) -> Denial | None:
 
 def can_manage_office(actor: Membership) -> Denial | None:
     return None if actor.is_admin else FORBIDDEN
+
+
+def can_grant_entry(actor: Membership) -> Denial | None:
+    """Emitir convite ou aprovar solicitação equivale a conceder o conjunto de ingresso.
+
+    Mesma regra de delegação de `check_member_change`: o ator precisa de team.manage e de
+    TODAS as permissões de MEMBER_PERMISSIONS (visibility=assigned não exige `all`). O
+    conjunto do novo membro nunca é reduzido em silêncio: sem autoridade, a operação é
+    negada.
+    """
+    if (d := can_manage_team(actor)):
+        return d
+    if MEMBER_PERMISSIONS - actor.permissions:
+        return Denial(
+            403, "delegation_not_allowed",
+            "Para admitir membros é preciso possuir todas as permissões concedidas no ingresso.",
+        )
+    return None
 
 
 def can_touch_target(actor: Membership, target: Membership) -> Denial | None:
