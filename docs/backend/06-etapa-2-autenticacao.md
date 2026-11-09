@@ -56,6 +56,7 @@ app/
 | Erros | `AppError` → `{"error": {"code", "message"}}`; 401 com `WWW-Authenticate: Bearer`; 429 com `Retry-After` |
 | Versão da credencial | `User.credential_version` sobe atomicamente na redefinição. Sessão guarda a versão do login; criação de sessão, rehash, refresh e autenticação conferem a versão |
 | Custo (Argon2) | Limites checados antes de qualquer hash; cadastro com e-mail já existente e redefinição com token inativo não calculam hash; nenhum lock é mantido durante o Argon2 |
+| Histórico de rotações | Teto configurável por sessão (`AUTH_MAX_REFRESH_ROTATIONS_PER_SESSION`, padrão 1000); ao atingir, o próximo refresh encerra a sessão. Hashes antigos nunca são descartados enquanto a família existe |
 | Retenção | Limitadores com varredura de chaves expiradas e teto de chaves (transbordo compartilhado); sessões expiradas e tokens de recuperação inativos removidos periodicamente; máximo de sessões por usuário |
 
 **Dependências novas (fixadas):** `argon2-cffi==25.1.0` (Argon2id mantido, sem
@@ -96,6 +97,33 @@ Todas publicadas há mais de duas semanas da data de integração.
    limpeza periódica (a cada 60 s de relógio, em escritas) de sessões expiradas e tokens
    inativos; limite de sessões por usuário. Sessões revogadas ficam até a expiração
    absoluta, preservando a detecção de reuso de refresh tokens durante a validade.
+
+5. **Histórico de rotações sem limite (auditoria v2).** Causa: cada refresh acrescentava
+   um hash ao histórico da sessão e ao índice global, sem teto; 500 refreshes deixavam 500
+   hashes até a expiração, e `get`/`rotate_refresh` copiavam o conjunto inteiro.
+   Solução: teto configurável de rotações por sessão. Ao apresentar o token atual de uma
+   sessão que já girou o teto, a sessão é **encerrada** (revogada) dentro do mesmo lock da
+   rotação e o cliente recebe 401 `session_rotation_limit_reached`. O repositório agora
+   devolve `SessionView` (sem hashes), sem copiar o histórico.
+   **Por que encerrar a sessão** (e não descartar hashes antigos ou "compactar"): descartar
+   hashes de uma família ainda viva faria um token antigo roubado parecer apenas
+   "desconhecido" (INVALID), sem revogar a família — enfraquece a detecção de reuso. Encerrar
+   mantém a detecção intacta, limita a memória a `teto + 1` hashes por sessão (≈
+   `AUTH_MAX_SESSIONS_PER_USER × (teto + 1)` por usuário) e custa só um novo login. O padrão
+   1000 fica acima das ~672 rotações de uma sessão de 7 dias renovada a cada 15 min; na
+   prática, a vida absoluta da sessão costuma terminar antes do teto.
+
+### Orientações para a futura integração do frontend
+- Fazer refresh **um de cada vez** por sessão (fila/mutex no cliente); duas chamadas
+  simultâneas com o mesmo refresh token são tratadas como reutilização e encerram a sessão.
+- Sempre substituir o refresh token guardado pelo novo devolvido em cada refresh.
+- Tratar **qualquer 401 no refresh** como fim da sessão: limpar o estado e mandar para o
+  login. Os códigos distinguem a causa para mensagens/telemetria:
+  `invalid_refresh_token` (expirado, revogado, reutilizado, credencial alterada) e
+  `session_rotation_limit_reached` (limite de renovações; mensagem amigável "faça login
+  novamente").
+- Não guardar senhas; o armazenamento dos tokens no navegador será definido na etapa de
+  integração (o frontend atual continua demonstrativo).
 
 ## 4. Uso
 ```bash

@@ -38,8 +38,37 @@ class AuthSession:
     def revoked(self) -> bool:
         return self.revoked_at is not None
 
+    @property
+    def rotation_count(self) -> int:
+        return len(self.used_refresh_hashes)
+
+    def view(self) -> SessionView:
+        """Projeção sem o histórico de hashes (o serviço não precisa dele)."""
+        return SessionView(
+            id=self.id,
+            user_id=self.user_id,
+            created_at=self.created_at,
+            expires_at=self.expires_at,
+            credential_version=self.credential_version,
+            rotation_count=self.rotation_count,
+            revoked=self.revoked,
+        )
+
     def __repr__(self) -> str:
         return f"AuthSession(id={self.id!r}, user_id={self.user_id!r}, revoked={self.revoked})"
+
+
+@dataclass(frozen=True)
+class SessionView:
+    """Dados de uma sessão expostos pelo repositório ao serviço (sem tokens nem histórico)."""
+
+    id: str
+    user_id: str
+    created_at: datetime
+    expires_at: datetime
+    credential_version: int
+    rotation_count: int
+    revoked: bool
 
 
 @dataclass

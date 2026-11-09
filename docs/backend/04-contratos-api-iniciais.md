@@ -37,7 +37,9 @@ Usuário público (`PublicUser`): `{ id, name, email, createdAt }` — nunca sen
 - `POST /api/v1/auth/refresh` — body `{ refreshToken }` → **200**
   `{ accessToken, refreshToken, tokenType, expiresIn }`. **Evolução do contrato:** devolve um
   novo `refreshToken` (rotação a cada uso); o anterior deixa de valer e sua reutilização revoga
-  a sessão inteira. 401 `invalid_refresh_token`.
+  a sessão inteira. 401 `invalid_refresh_token`. Cada sessão aceita no máximo
+  `AUTH_MAX_REFRESH_ROTATIONS_PER_SESSION` rotações (padrão 1000); o refresh seguinte encerra
+  a sessão com 401 `session_rotation_limit_reached` (novo login obrigatório).
 - `POST /api/v1/auth/logout` — auth → **204** sem corpo; revoga a sessão atual (access e
   refresh deixam de valer imediatamente). 401 sem token.
 - `GET /api/v1/auth/me` — auth → **200** `{ user }` (sem `membership`: escritórios na próxima

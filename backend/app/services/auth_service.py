@@ -187,6 +187,11 @@ class AuthService:
         if result is RotationResult.REUSED:
             logger.warning("auth_refresh_reuse_detected session_revoked=true")
             raise _unauthorized("invalid_refresh_token", "Refresh token inválido.")
+        if result is RotationResult.LIMIT_REACHED:
+            logger.info("auth_refresh_rotation_limit session_revoked=true")
+            raise _unauthorized(
+                "session_rotation_limit_reached", "Sessão encerrada por limite de renovações. Faça login novamente."
+            )
         if result is not RotationResult.ROTATED or session is None:
             raise _unauthorized("invalid_refresh_token", "Refresh token inválido.")
         return TokenPair(self._tokens.issue(session.user_id, session.id), new_refresh, self._tokens.ttl_seconds)

@@ -98,7 +98,8 @@ validado também contra a sessão no servidor e a versão da credencial (sessõe
 uma redefinição deixam de valer). Limites (429 + `Retry-After`, verificados antes de
 qualquer Argon2): login 5 tentativas por IP+e-mail em 5 min; recuperação 3 pedidos por
 e-mail em 15 min; cadastro 10 por IP por hora; redefinição 10 por IP em 15 min. No máximo
-10 sessões por usuário e um token de recuperação ativo por usuário.
+10 sessões por usuário, 1000 rotações de refresh por sessão (depois, novo login) e um
+token de recuperação ativo por usuário.
 Detalhes, decisões e limitações: `docs/backend/06-etapa-2-autenticacao.md`; contratos:
 `docs/backend/04-contratos-api-iniciais.md`.
 
@@ -118,6 +119,7 @@ Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigató
 - `AUTH_LOGIN_MAX_FAILURES` (5) / `AUTH_LOGIN_WINDOW_SECONDS` (300), `AUTH_FORGOT_MAX_REQUESTS` (3) / `AUTH_FORGOT_WINDOW_SECONDS` (900)
 - `AUTH_REGISTER_MAX_REQUESTS` (10) / `AUTH_REGISTER_WINDOW_SECONDS` (3600), `AUTH_RESET_MAX_REQUESTS` (10) / `AUTH_RESET_WINDOW_SECONDS` (900)
 - `AUTH_RATE_LIMIT_MAX_KEYS` (10000; chaves além do teto compartilham um balde de transbordo) e `AUTH_MAX_SESSIONS_PER_USER` (10)
+- `AUTH_MAX_REFRESH_ROTATIONS_PER_SESSION` (1000, entre 10 e 100000): rotações de refresh por sessão; ao atingir o teto, o próximo refresh encerra a sessão (401 `session_rotation_limit_reached`)
 
 ## Observações
 - **Sem banco/ORM**: nenhuma dependência de persistência foi instalada.

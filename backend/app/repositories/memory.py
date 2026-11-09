@@ -16,6 +16,12 @@ Retenção: sessões expiradas e tokens de recuperação inativos são removidos
 periodicamente (a cada `purge_interval` do relógio) e sob demanda (`purge_expired`).
 Sessões revogadas permanecem até a expiração absoluta, para que a reutilização de um
 refresh token girado continue sendo reconhecida durante toda a validade da sessão.
+
+Histórico de rotações finito: cada sessão gira no máximo `max_rotations_per_session`
+vezes. Depois disso, o próximo refresh ENCERRA a sessão (novo login obrigatório). Assim,
+o histórico de hashes usados de uma sessão — e sua parcela do índice global — nunca
+passa do teto, e nenhum hash é descartado enquanto a família existir.
+Memória máxima de hashes por usuário ≈ max_sessions_per_user × (max_rotations + 1).
 """
 from __future__ import annotations
 
@@ -23,18 +29,27 @@ import threading
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from app.domain.auth import AuthSession, PasswordResetToken, User
+from app.domain.auth import AuthSession, PasswordResetToken, SessionView, User
 from app.repositories.auth import EmailAlreadyRegisteredError, RotationResult
 
 
 class MemoryAuthStore:
     """Agrupa o estado e o lock de uma instância da aplicação."""
 
-    def __init__(self, *, max_sessions_per_user: int = 10, purge_interval_seconds: int = 60) -> None:
+    def __init__(
+        self,
+        *,
+        max_sessions_per_user: int = 10,
+        max_rotations_per_session: int = 1000,
+        purge_interval_seconds: int = 60,
+    ) -> None:
         if max_sessions_per_user < 1:
             raise ValueError("max_sessions_per_user deve ser >= 1")
+        if max_rotations_per_session < 1:
+            raise ValueError("max_rotations_per_session deve ser >= 1")
         self.lock = threading.RLock()
         self.max_sessions_per_user = max_sessions_per_user
+        self.max_rotations_per_session = max_rotations_per_session
         self.purge_interval = timedelta(seconds=purge_interval_seconds)
         self.last_purge: datetime | None = None
         self.users_by_id: dict[str, User] = {}
@@ -159,14 +174,14 @@ class InMemorySessionRepository:
             s.session_by_current_hash[session.current_refresh_hash] = session.id
             return True
 
-    def get(self, session_id: str) -> AuthSession | None:
+    def get(self, session_id: str) -> SessionView | None:
         with self._s.lock:
             s = self._s.sessions.get(session_id)
-            return replace(s, used_refresh_hashes=set(s.used_refresh_hashes)) if s else None
+            return s.view() if s else None  # sem copiar o histórico de hashes
 
     def rotate_refresh(
         self, refresh_hash: str, new_refresh_hash: str, now: datetime
-    ) -> tuple[RotationResult, AuthSession | None]:
+    ) -> tuple[RotationResult, SessionView | None]:
         s = self._s
         with s.lock:
             sid = s.session_by_current_hash.get(refresh_hash)
@@ -186,12 +201,17 @@ class InMemorySessionRepository:
             if user is None or user.credential_version != session.credential_version:
                 s.revoke_session_locked(sid, now)
                 return RotationResult.INVALID, None
+            if session.rotation_count >= s.max_rotations_per_session:
+                # Teto atingido: encerra a família (exige novo login). O histórico é mantido
+                # até a expiração para continuar detectando reutilização de tokens antigos.
+                s.revoke_session_locked(sid, now)
+                return RotationResult.LIMIT_REACHED, None
             del s.session_by_current_hash[refresh_hash]
             session.used_refresh_hashes.add(refresh_hash)
             s.session_by_used_hash[refresh_hash] = sid
             session.current_refresh_hash = new_refresh_hash
             s.session_by_current_hash[new_refresh_hash] = sid
-            return RotationResult.ROTATED, replace(session, used_refresh_hashes=set(session.used_refresh_hashes))
+            return RotationResult.ROTATED, session.view()
 
     def revoke(self, session_id: str, now: datetime) -> bool:
         with self._s.lock:

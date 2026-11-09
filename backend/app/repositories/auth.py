@@ -16,7 +16,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Protocol
 
-from app.domain.auth import AuthSession, PasswordResetToken, User
+from app.domain.auth import AuthSession, PasswordResetToken, SessionView, User
 
 
 class EmailAlreadyRegisteredError(Exception):
@@ -46,6 +46,7 @@ class RotationResult(Enum):
     ROTATED = "rotated"
     INVALID = "invalid"   # desconhecido, expirado, sessão revogada ou credencial alterada
     REUSED = "reused"     # token já utilizado: família revogada
+    LIMIT_REACHED = "limit_reached"  # teto de rotações da sessão atingido: sessão encerrada
 
 
 class SessionRepository(Protocol):
@@ -54,12 +55,23 @@ class SessionRepository(Protocol):
         do usuário (verificação e inserção atômicas). Aplica o limite de sessões por usuário."""
         ...
 
-    def get(self, session_id: str) -> AuthSession | None: ...
+    def get(self, session_id: str) -> SessionView | None:
+        """Dados públicos da sessão, SEM copiar o histórico de hashes."""
+        ...
 
     def rotate_refresh(
         self, refresh_hash: str, new_refresh_hash: str, now: datetime
-    ) -> tuple[RotationResult, AuthSession | None]:
-        """Troca atomicamente o refresh token atual por um novo; detecta reutilização."""
+    ) -> tuple[RotationResult, SessionView | None]:
+        """Troca atomicamente o refresh token atual por um novo; detecta reutilização.
+
+        Política de histórico finito: cada sessão aceita no máximo `max_rotations`
+        rotações. Ao apresentar o token atual de uma sessão que já girou esse número de
+        vezes, a sessão é ENCERRADA (revogada) e o resultado é LIMIT_REACHED — o cliente
+        precisa fazer novo login. Nenhum hash de token antigo é descartado enquanto a
+        família existir; o histórico (≤ teto) é liberado só quando a sessão expira.
+        Em banco: contador de rotações na própria linha da sessão, atualizado na mesma
+        transação da troca de token (UPDATE ... WHERE rotation_count < :max).
+        """
         ...
 
     def revoke(self, session_id: str, now: datetime) -> bool: ...

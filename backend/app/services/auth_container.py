@@ -55,7 +55,10 @@ def build_auth_container(
         raise ValueError(f"AUTH_JWT_SECRET é obrigatório em ENVIRONMENT={settings.environment}.")
 
     clock = clock or SystemClock()
-    store = MemoryAuthStore(max_sessions_per_user=settings.auth_max_sessions_per_user)
+    store = MemoryAuthStore(
+        max_sessions_per_user=settings.auth_max_sessions_per_user,
+        max_rotations_per_session=settings.auth_max_refresh_rotations_per_session,
+    )
 
     def limiter(max_events: int, window: int) -> RateLimiter:
         return RateLimiter(max_events, window, clock, max_keys=settings.auth_rate_limit_max_keys)

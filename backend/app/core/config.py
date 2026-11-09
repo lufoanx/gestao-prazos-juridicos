@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     auth_rate_limit_max_keys: int = Field(default=10_000, alias="AUTH_RATE_LIMIT_MAX_KEYS", ge=10, le=1_000_000)
     # Sessões simultâneas por usuário; ao exceder, as mais antigas são removidas.
     auth_max_sessions_per_user: int = Field(default=10, alias="AUTH_MAX_SESSIONS_PER_USER", ge=1, le=100)
+    # Rotações de refresh por sessão. Padrão 1000 > ~672 rotações de uma sessão de 7 dias
+    # renovada a cada 15 min. Ao atingir o teto, o próximo refresh encerra a sessão.
+    auth_max_refresh_rotations_per_session: int = Field(
+        default=1000, alias="AUTH_MAX_REFRESH_ROTATIONS_PER_SESSION", ge=10, le=100_000
+    )
 
     @field_validator("auth_jwt_secret")
     @classmethod
