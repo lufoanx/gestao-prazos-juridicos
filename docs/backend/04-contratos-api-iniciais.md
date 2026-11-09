@@ -5,7 +5,8 @@
 > (Etapa 2 — armazenamento em memória, ver `06-etapa-2-autenticacao.md`).
 > e, na Etapa 3, **escritórios, equipe, convites e solicitações** (`07-etapa-3-escritorios-rbac.md`).
 > e, na Etapa 4, **prazos, comentários, histórico, calendário e transferência** (`08-etapa-4-prazos.md`).
-> **Planejados:** intimações, notificações, anexos, auditoria e IA.
+> e, na Etapa 5, **intimações (metadados e revisão humana) e notificações internas** (`09-…`).
+> **Planejados:** armazenamento de arquivos, processamento, anexos, auditoria e IA.
 
 ## Convenções
 - Base canônica: `/api/v1` (prefixo `/api` + versão `/v1`). JSON em UTF-8.
@@ -98,23 +99,23 @@ Contratos completos em `08-etapa-4-prazos.md`. Mudanças em relação ao planeja
   `dueFrom`, `dueTo`, `sort`, `dir`; resposta paginada `{ items, page, perPage, total, pageCount }`.
 - `POST /api/v1/deadlines` → 201 (`scope` no corpo; `officeId` vem do vínculo atual).
 - `PATCH`, `POST .../status` e `POST .../transfer` exigem `version` (409 `version_conflict`).
-- `POST /api/v1/deadlines/:id/transfer` `{ version, officeId, confirmSharing: true }` → `{ deadline, notice }`.
+- `POST /api/v1/deadlines/:id/transfer` `{ version, officeId, confirmSharing: true, shareLinkedIntimation? }` →
+  `{ deadline, notice }` (Etapa 5: consentimentos booleanos estritos; intimação vinculada exige
+  `shareLinkedIntimation: true`).
 - Comentários: `GET|POST /api/v1/deadlines/:id/comments`; histórico: `GET .../history`.
 - `GET /api/v1/calendar` com `scope`, `year`, `month`, `status?`, `page`, `perPage` (até 500) e
   `hasNextPage`/`nextPage`.
 - Sem exclusão de prazos (cancelamento).
 
-## /intimations (futuro)
-- `GET /api/v1/intimations` — auth; query `scope`, `status`, `q` → 200 (isolamento + permissão + visibilidade; autor vê o próprio pendente).
-- `POST /api/v1/intimations` — auth + `deadline.create` (upload PDF) → 201 `{ id, status: "processing" }`.
-- `POST /api/v1/intimations/:id/retry` — auth + acesso → 200.
-- `DELETE /api/v1/intimations/:id` — auth + acesso (não `reviewed`) → 204.
-- `POST /api/v1/intimations/:id/review` — auth + `deadline.create`; body com dados revisados → 201 `{ deadlineId }` (um único; sem duplicar).
-
-## /notifications (futuro)
-- `GET /api/v1/notifications` — auth; query `scope`, `filter` → 200.
-- `POST /api/v1/notifications/:id/read` — auth → 204.
-- `POST /api/v1/notifications/read-all` — auth; body `{ scope }` → 204.
+## /intimations e /notifications — IMPLEMENTADO (Etapa 5, em memória)
+Contratos completos em `09-etapa-5-intimacoes-notificacoes.md`. Mudanças em relação ao planejado:
+- `POST /api/v1/intimations` registra **metadados declarados** (sem upload; `file.storage = "not_stored"`).
+- Não há processamento: `processing.status = "not_available"`; `retry` responde 409 `processing_unavailable`.
+- `PATCH /api/v1/intimations/:id` (rascunho) e `POST .../confirm` substituem `.../review`; a confirmação
+  exige `version` e todos os dados finais; 201 na primeira, 200 em repetição sem efeito.
+- `POST .../discard` (descarte lógico) substitui a remoção definitiva.
+- Notificações individuais: `GET /api/v1/notifications?scope=`, `.../unread-count`, `.../:id/read`
+  e `.../read-all` (substitui `PATCH /notifications/:id`).
 
 ## /attachments (futuro)
 - `POST /api/v1/deadlines/:id/attachments` — auth + permissão → 201 (storage de objetos no futuro).

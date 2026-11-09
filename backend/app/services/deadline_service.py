@@ -23,12 +23,14 @@ from app.core.clock import Clock
 from app.core.errors import AppError
 from app.core.logging import get_logger
 from app.domain.deadlines import TRANSITIONS, Comment, Deadline, HistoryEvent, Scope, ScopeKind
+from app.domain.intimations import IntimationEvent
 from app.domain.org import Membership
 from app.policies import deadlines as policy
 from app.policies.org import NOT_FOUND, Denial
 from app.repositories.deadlines import UnitTransaction
 from app.repositories.deadlines_memory import CapacityError
 from app.repositories.unit_of_work import MemoryUnitOfWork
+from app.services import deadline_ops as ops
 
 logger = get_logger("prazoai.deadlines")
 
@@ -157,20 +159,11 @@ class DeadlineService:
 
     @staticmethod
     def _active_responsible(tx: UnitTransaction, scope: Scope, user_id: str) -> None:
-        """Responsável válido NESTA transação: dono (pessoal) ou membro ativo do escritório."""
-        if scope.kind == "personal":
-            if user_id != scope.owner_id:
-                _raise(policy.RESPONSIBLE_INVALID)
-            return
-        m = tx.org.membership_of_user(user_id)
-        if m is None or m.office_id != scope.office_id:
-            _raise(policy.RESPONSIBLE_INVALID)
+        ops.active_responsible(tx, scope, user_id)
 
     @staticmethod
     def _event(tx: UnitTransaction, d: Deadline, actor_id: str, action: str, **details: Any) -> None:
-        tx.deadlines.add_history(HistoryEvent(
-            id=uuid.uuid4().hex, deadline_id=d.id, actor_id=actor_id, action=action, at=tx.now, details=details,
-        ))
+        ops.record_event(tx, d, actor_id, action, **details)
 
     @staticmethod
     def _scope_for(tx: UnitTransaction, actor_id: str, kind: ScopeKind) -> tuple[Scope, Membership | None]:
@@ -191,27 +184,8 @@ class DeadlineService:
     # ------------------------------------------------------------------- criar
     def create(self, actor_id: str, kind: ScopeKind, data: dict[str, Any]) -> Deadline:
         with self._unit() as tx:
-            m = self._membership(tx, actor_id)
-            if (d := policy.check_create(actor_id, m, kind)):
-                _raise(d)
-            scope = Scope.personal(actor_id) if kind == "personal" else Scope.office(m.office_id)  # type: ignore[union-attr]
-            responsible = data.get("responsible_id") or actor_id
-            if (d := policy.check_assignment(actor_id, m, kind, responsible)):
-                _raise(d)
-            self._active_responsible(tx, scope, responsible)
-            if data["due_date"] < data["start_date"]:
-                raise AppError(422, "invalid_dates", "O vencimento não pode ser anterior ao início.")
-            deadline = Deadline(
-                id=uuid.uuid4().hex, scope=scope, title=data["title"], case_number=data["case_number"],
-                court=data["court"], practice_area=data["practice_area"], responsible_id=responsible,
-                status="open", priority=data.get("priority", "normal"), start_date=data["start_date"],
-                due_date=data["due_date"], counting_mode=data["counting_mode"], duration=data["duration"],
-                reviewed=data.get("reviewed", True), agenda_time=data.get("agenda_time"),
-                created_by=actor_id, created_at=tx.now, updated_at=tx.now,
-            )
-            tx.deadlines.put(deadline)
-            self._event(tx, deadline, actor_id, "created", responsibleId=responsible)
-        logger.info("deadline_created deadline_id=%s scope=%s", deadline.id, scope.kind)
+            deadline = ops.create_deadline(tx, actor_id, kind, data)
+        logger.info("deadline_created deadline_id=%s scope=%s", deadline.id, deadline.scope.kind)
         return deadline
 
     # ------------------------------------------------------------------ leitura
@@ -296,8 +270,7 @@ class DeadlineService:
             if fields_changed:
                 self._event(tx, updated, actor_id, "updated", changes=fields_changed)
             if "responsible_id" in effective:
-                self._event(tx, updated, actor_id, "reassigned", fromResponsibleId=d.responsible_id,
-                            toResponsibleId=updated.responsible_id, reason="edit")
+                ops.reassign_event(tx, updated, actor_id, d.responsible_id, updated.responsible_id, "edit")
         return updated
 
     # ------------------------------------------------------------------- status
@@ -334,12 +307,13 @@ class DeadlineService:
             tx.deadlines.put(updated)
             self._event(tx, updated, actor_id, "status_changed", **{"from": d.status, "to": status})
             if new_resp != d.responsible_id:
-                self._event(tx, updated, actor_id, "reassigned", fromResponsibleId=d.responsible_id,
-                            toResponsibleId=new_resp, reason="reopen")
+                ops.reassign_event(tx, updated, actor_id, d.responsible_id, new_resp, "reopen")
         return updated
 
     # ------------------------------------------------------------ transferência
-    def transfer(self, actor_id: str, deadline_id: str, version: int, office_id: str) -> Deadline:
+    def transfer(
+        self, actor_id: str, deadline_id: str, version: int, office_id: str, share_linked_intimation: bool = False
+    ) -> Deadline:
         with self._unit() as tx:
             m = self._membership(tx, actor_id)
             d = tx.deadlines.get(deadline_id)
@@ -349,11 +323,24 @@ class DeadlineService:
             if (den := policy.check_transfer(actor_id, m, d, office_id)):
                 _raise(den)
             self._check_version(d, version)
+            linked = tx.intimations.by_deadline(d.id)
+            if linked is not None and share_linked_intimation is not True:
+                raise AppError(409, "linked_intimation_requires_consent",
+                               "O prazo tem intimação vinculada: confirme também o compartilhamento dela.")
             scope = Scope.office(office_id)
             self._active_responsible(tx, scope, d.responsible_id)   # dono é membro ativo do destino
             moved = replace(d, scope=scope, version=d.version + 1, updated_at=tx.now)
             tx.deadlines.put(moved)
-            self._event(tx, moved, actor_id, "transferred", fromScope="personal", toOfficeId=office_id)
+            extra = {"linkedIntimationId": linked.id} if linked else {}
+            self._event(tx, moved, actor_id, "transferred", fromScope="personal", toOfficeId=office_id, **extra)
+            tx.checkpoint("transfer:deadline")
+            if linked is not None:
+                tx.intimations.put(replace(linked, scope=scope, version=linked.version + 1, updated_at=tx.now))
+                tx.intimations.add_event(IntimationEvent(
+                    id=uuid.uuid4().hex, intimation_id=linked.id, actor_id=actor_id, action="transferred",
+                    at=tx.now, details={"fromScope": "personal", "toOfficeId": office_id, "deadlineId": d.id},
+                ))
+                tx.checkpoint("transfer:intimation")
         logger.info("deadline_transferred deadline_id=%s office_id=%s", deadline_id, office_id)
         return moved
 
@@ -376,7 +363,10 @@ class DeadlineService:
 
     def history(self, actor_id: str, deadline_id: str, page: int, per_page: int) -> tuple[list[HistoryEvent], int]:
         with self._unit() as tx:
-            d, _ = self._readable(tx, actor_id, deadline_id)
+            d, m = self._readable(tx, actor_id, deadline_id)
             items = list(tx.deadlines.history(d.id))
-        start = (page - 1) * per_page
-        return items[start:start + per_page], len(items)
+            start = (page - 1) * per_page
+            # Mesma projeção autorizada das intimações (referências a recursos protegidos).
+            page_items = [replace(e, details=ops.project_details(tx, actor_id, m, e.details))
+                          for e in items[start:start + per_page]]
+        return page_items, len(items)

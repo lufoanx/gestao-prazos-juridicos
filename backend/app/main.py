@@ -31,9 +31,12 @@ from app.core.logging import configure_logging, get_logger
 from app.security.passwords import PasswordHasher
 from app.services.auth_container import build_auth_container
 from app.services.deadline_service import DeadlineService
+from app.services.intimation_service import IntimationService
+from app.services.notification_service import NotificationService
 from app.services.org_container import build_org_container, ensure_offices_allowed
 from app.services.password_reset_delivery import PasswordResetDelivery
 from app.services.prazo_service import calcular_prazo
+from app.services.processing_port import ProcessingPort
 from app.services.responsibility_port import ResponsibilityPort
 
 FORMATO_DATA = "%d/%m/%Y"
@@ -61,6 +64,7 @@ def create_app(
     password_reset_delivery: PasswordResetDelivery | None = None,
     password_hasher: PasswordHasher | None = None,
     responsibility_port: ResponsibilityPort | None = None,
+    processing_port: ProcessingPort | None = None,
 ) -> FastAPI:
     """Cria uma instância isolada da aplicação.
 
@@ -124,10 +128,19 @@ def create_app(
         )
     # Prazos (Etapa 4): mesma unidade de trabalho (ordem de locks escritórios → prazos).
     app.state.deadlines = None
+    app.state.intimations = None
+    app.state.notifications = None
     if app.state.org is not None:
         app.state.deadlines = DeadlineService(
             unit_of_work=app.state.org.unit_of_work, clock=app.state.auth.clock,
             timezone=settings.deadlines_timezone, soon_days=settings.deadlines_soon_days,
+        )
+        # Intimações e notificações (Etapa 5): mesma unidade de trabalho; processamento indisponível.
+        app.state.intimations = IntimationService(
+            unit_of_work=app.state.org.unit_of_work, clock=app.state.auth.clock, processing=processing_port,
+        )
+        app.state.notifications = NotificationService(
+            unit_of_work=app.state.org.unit_of_work, clock=app.state.auth.clock,
         )
 
     # API versionada: contrato canônico sob /api/v1.

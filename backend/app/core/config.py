@@ -131,6 +131,19 @@ class Settings(BaseSettings):
     deadlines_max_comments: int = Field(default=1_000, alias="DEADLINES_MAX_COMMENTS", ge=1, le=100_000)
     deadlines_max_history: int = Field(default=2_000, alias="DEADLINES_MAX_HISTORY", ge=10, le=100_000)
 
+    # --- Intimações e notificações (Etapa 5: EM MEMÓRIA; ativas junto com escritórios) ---
+    intimations_max_per_scope: int = Field(default=5_000, alias="INTIMATIONS_MAX_PER_SCOPE", ge=1, le=1_000_000)
+    intimations_max_events: int = Field(default=500, alias="INTIMATIONS_MAX_EVENTS", ge=10, le=100_000)
+    intimations_discard_retention_seconds: int = Field(
+        default=30 * 24 * 3600, alias="INTIMATIONS_DISCARD_RETENTION_SECONDS", ge=24 * 3600, le=365 * 24 * 3600
+    )
+    notifications_max_per_recipient: int = Field(
+        default=1_000, alias="NOTIFICATIONS_MAX_PER_RECIPIENT", ge=10, le=100_000
+    )
+    notifications_read_retention_seconds: int = Field(
+        default=90 * 24 * 3600, alias="NOTIFICATIONS_READ_RETENTION_SECONDS", ge=24 * 3600, le=730 * 24 * 3600
+    )
+
     @field_validator("deadlines_timezone")
     @classmethod
     def _valid_timezone(cls, v: str) -> str:

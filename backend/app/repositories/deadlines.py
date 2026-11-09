@@ -11,10 +11,13 @@ prazo e nos vínculos envolvidos; coluna `version` para o controle otimista
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from app.domain.deadlines import Comment, Deadline, HistoryEvent, Scope
 from app.repositories.org import OrgTransaction
+
+if TYPE_CHECKING:
+    from app.repositories.intimations import IntimationTransaction, NotificationTransaction
 
 
 class DeadlineTransaction(Protocol):
@@ -33,7 +36,7 @@ class DeadlineTransaction(Protocol):
 
 
 class UnitTransaction(Protocol):
-    """Transação composta: escritórios + prazos, com um único instante `now`."""
+    """Transação composta: escritórios, prazos, intimações e notificações, com um único `now`."""
 
     @property
     def now(self) -> datetime: ...
@@ -43,6 +46,12 @@ class UnitTransaction(Protocol):
 
     @property
     def deadlines(self) -> DeadlineTransaction: ...
+
+    @property
+    def intimations(self) -> IntimationTransaction: ...
+
+    @property
+    def notifications(self) -> NotificationTransaction: ...
 
     def checkpoint(self, name: str) -> None:
         """Ponto nomeado da operação (usado para injeção de falhas nos testes)."""

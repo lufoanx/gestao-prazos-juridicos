@@ -1,0 +1,115 @@
+"""Notificações internas (Etapa 5): leitura individual com autorização ATUAL.
+
+- Cada notificação tem um destinatário; não guarda título, processo nem conteúdo.
+- Listagem, contagem, marcação como lida e "ler todas" consideram SOMENTE notificações do
+  próprio destinatário cujo recurso ele ainda pode ler agora; as demais ficam ocultas
+  (não são apagadas; somem pela retenção/política da caixa).
+- O resumo (título, processo, vencimento / nome do arquivo) é projetado no momento da
+  leitura, a partir do recurso autorizado.
+- Ambiente pessoal: endpoints aceitam `scope=personal`, mas esta etapa não gera
+  notificações pessoais. Não é um sistema de alertas de vencimento (sem lembretes agendados).
+"""
+from __future__ import annotations
+
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
+from typing import Any
+
+from app.core.clock import Clock
+from app.domain.deadlines import ScopeKind
+from app.domain.intimations import Notification
+from app.domain.org import Membership
+from app.policies import deadlines as dl_policy
+from app.policies import intimations as in_policy
+from app.policies.org import NOT_FOUND
+from app.repositories.deadlines import UnitTransaction
+from app.repositories.unit_of_work import MemoryUnitOfWork
+from app.services import deadline_ops as ops
+
+
+@dataclass(frozen=True)
+class NotificationItem:
+    notification: Notification
+    summary: dict[str, Any]
+
+
+class NotificationService:
+    def __init__(self, *, unit_of_work: MemoryUnitOfWork, clock: Clock) -> None:
+        self._uow = unit_of_work
+        self._clock = clock
+
+    @contextmanager
+    def _unit(self) -> Iterator[UnitTransaction]:
+        with self._uow.unit(self._clock) as tx:
+            yield tx
+
+    @staticmethod
+    def _summary(tx: UnitTransaction, user_id: str, m: Membership | None, n: Notification) -> dict[str, Any] | None:
+        """Resumo do recurso SE o destinatário ainda pode lê-lo; senão None (oculta)."""
+        if n.resource_type == "deadline":
+            d = tx.deadlines.get(n.resource_id)
+            if d is None or not dl_policy.can_read(user_id, m, d):
+                return None
+            return {"title": d.title, "caseNumber": d.case_number, "dueDate": d.due_date.isoformat()}
+        i = tx.intimations.get(n.resource_id)
+        if i is None:
+            return None
+        linked = tx.deadlines.get(i.deadline_id) if i.deadline_id else None
+        if not in_policy.can_read(user_id, m, i, linked.responsible_id if linked else None):
+            return None
+        return {"fileName": i.file.name, "title": i.draft.title, "status": i.status}
+
+    @staticmethod
+    def _in_scope(n: Notification, user_id: str, kind: ScopeKind, m: Membership | None) -> bool:
+        if kind == "personal":
+            return n.scope.kind == "personal" and n.scope.owner_id == user_id
+        return n.scope.kind == "office" and m is not None and n.scope.office_id == m.office_id
+
+    def _visible(self, tx: UnitTransaction, user_id: str, kind: ScopeKind) -> list[NotificationItem]:
+        m = tx.org.membership_of_user(user_id)
+        out = []
+        for n in tx.notifications.of_recipient(user_id):
+            if not self._in_scope(n, user_id, kind, m):
+                continue
+            summary = self._summary(tx, user_id, m, n)
+            if summary is not None:
+                out.append(NotificationItem(n, summary))
+        out.sort(key=lambda item: item.notification.id, reverse=True)
+        out.sort(key=lambda item: item.notification.created_at, reverse=True)   # instante desc, id desc
+        return out
+
+    def list_notifications(
+        self, user_id: str, kind: ScopeKind, unread_only: bool, page: int, per_page: int
+    ) -> tuple[list[NotificationItem], int, int]:
+        with self._unit() as tx:
+            items = self._visible(tx, user_id, kind)
+        unread = sum(1 for i in items if i.notification.read_at is None)
+        if unread_only:
+            items = [i for i in items if i.notification.read_at is None]
+        start = (page - 1) * per_page
+        return items[start:start + per_page], len(items), unread
+
+    def unread_count(self, user_id: str, kind: ScopeKind) -> int:
+        with self._unit() as tx:
+            return sum(1 for i in self._visible(tx, user_id, kind) if i.notification.read_at is None)
+
+    def mark_read(self, user_id: str, notification_id: str) -> NotificationItem:
+        with self._unit() as tx:
+            n = tx.notifications.get(notification_id)
+            m = tx.org.membership_of_user(user_id)
+            summary = self._summary(tx, user_id, m, n) if n is not None and n.recipient_id == user_id else None
+            if n is None or summary is None:
+                ops.raise_denial(NOT_FOUND)
+            assert n is not None and summary is not None
+            if n.read_at is None:
+                n = replace(n, read_at=tx.now)
+                tx.notifications.put(n)
+            return NotificationItem(n, summary)
+
+    def read_all(self, user_id: str, kind: ScopeKind) -> int:
+        with self._unit() as tx:
+            targets = [i.notification for i in self._visible(tx, user_id, kind) if i.notification.read_at is None]
+            for n in targets:
+                tx.notifications.put(replace(n, read_at=tx.now))
+            return len(targets)
