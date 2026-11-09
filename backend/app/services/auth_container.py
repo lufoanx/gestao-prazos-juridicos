@@ -33,6 +33,7 @@ class AuthContainer:
     store: MemoryAuthStore
     clock: Clock
     ephemeral_secret: bool
+    users: InMemoryUserRepository
 
 
 def build_auth_container(
@@ -63,8 +64,9 @@ def build_auth_container(
     def limiter(max_events: int, window: int) -> RateLimiter:
         return RateLimiter(max_events, window, clock, max_keys=settings.auth_rate_limit_max_keys)
 
+    users = InMemoryUserRepository(store)
     service = AuthService(
-        users=InMemoryUserRepository(store),
+        users=users,
         sessions=InMemorySessionRepository(store),
         resets=InMemoryPasswordResetRepository(store),
         hasher=password_hasher or PasswordHasher(),
@@ -80,4 +82,4 @@ def build_auth_container(
         refresh_ttl_seconds=settings.auth_refresh_token_ttl_seconds,
         reset_ttl_seconds=settings.auth_password_reset_ttl_seconds,
     )
-    return AuthContainer(service=service, store=store, clock=clock, ephemeral_secret=ephemeral)
+    return AuthContainer(service=service, store=store, clock=clock, ephemeral_secret=ephemeral, users=users)

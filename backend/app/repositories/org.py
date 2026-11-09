@@ -1,0 +1,66 @@
+"""Interfaces do repositório de escritórios (contrato para a futura persistência).
+
+Toda operação protegida roda dentro de `transaction()`: a autorização é lida e as
+invariantes são verificadas DENTRO da transação, junto com a escrita.
+
+Mapeamento esperado para PostgreSQL:
+- `transaction()` → BEGIN ... COMMIT, com SELECT ... FOR UPDATE nas linhas do escritório
+  e dos vínculos envolvidos (ou isolamento SERIALIZABLE);
+- UNIQUE(memberships.user_id)  → no máximo um vínculo ativo por pessoa;
+- UNIQUE(offices.join_code), UNIQUE(invitations.token_hash);
+- índice único parcial em join_requests(user_id, office_id) WHERE status = 'pending'.
+"""
+from __future__ import annotations
+
+from contextlib import AbstractContextManager
+from datetime import datetime
+from typing import Protocol
+
+from app.core.clock import Clock
+from app.domain.org import Invitation, JoinRequest, Membership, Office
+
+
+class OrgTransaction(Protocol):
+    # Instante lido do relógio DEPOIS de obtido o lock/início da transação; todas as
+    # validações temporais e carimbos da transação usam este mesmo valor.
+    now: datetime
+
+    # Escritórios
+    def get_office(self, office_id: str) -> Office | None: ...
+    def get_office_by_code(self, code: str) -> Office | None: ...
+    def code_in_use(self, code: str) -> bool: ...
+    def put_office(self, office: Office) -> None: ...
+
+    # Vínculos
+    def membership_of_user(self, user_id: str) -> Membership | None: ...
+    def members_of(self, office_id: str) -> list[Membership]: ...
+    def count_admins(self, office_id: str) -> int: ...
+    def put_membership(self, membership: Membership) -> None: ...
+    def delete_membership(self, user_id: str) -> None: ...
+
+    # Convites
+    def get_invitation(self, invitation_id: str) -> Invitation | None: ...
+    def get_invitation_by_hash(self, token_hash: str) -> Invitation | None: ...
+    def invitations_of(self, office_id: str) -> list[Invitation]: ...
+    def put_invitation(self, invitation: Invitation) -> None: ...
+
+    # Solicitações
+    def get_request(self, request_id: str) -> JoinRequest | None: ...
+    def requests_of_office(self, office_id: str) -> list[JoinRequest]: ...
+    def requests_of_user(self, user_id: str) -> list[JoinRequest]: ...
+    def put_request(self, request: JoinRequest) -> None: ...
+
+
+class OrgRepository(Protocol):
+    def transaction(self, clock: Clock) -> AbstractContextManager[OrgTransaction]:
+        """Abre uma transação e só ENTÃO lê o relógio (`tx.now`).
+
+        Um horário capturado antes de esperar pelo lock ficaria obsoleto (ex.: convite que
+        expira durante a espera). Em PostgreSQL: usar o instante obtido após o BEGIN/lock
+        (ou `now()` da transação) para validar e carimbar.
+        """
+        ...
+
+    def purge(self, now: datetime) -> int:
+        """Remove registros encerrados cuja retenção terminou."""
+        ...

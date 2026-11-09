@@ -1,10 +1,12 @@
 # PrazoAI — Backend (sem banco de dados)
 
 API do PrazoAI em **FastAPI (Python)**. Expõe `GET /api/v1/health` (com `GET /api/health`
-apenas como alias legado), os endpoints legados preservados e, desde a **Etapa 2**,
-**autenticação e perfil** (`/api/v1/auth/*`, `/api/v1/users/me`) com armazenamento
-**em memória**. **Não há banco de dados, ORM, escritórios/RBAC, envio de e-mail nem
-integração com o frontend** — as telas continuam demonstrativas.
+apenas como alias legado), os endpoints legados preservados, **autenticação e perfil**
+(Etapa 2: `/api/v1/auth/*`, `/api/v1/users/me`) e **escritórios, equipe, permissões,
+convites e solicitações** (Etapa 3: `/api/v1/offices/*`, `/api/v1/memberships/me`,
+`/api/v1/invitations/*`, `/api/v1/join-requests/*`), tudo com armazenamento **em memória**.
+**Não há banco de dados, ORM, prazos no servidor, envio de e-mail nem integração com o
+frontend** — as telas continuam demonstrativas.
 
 > **Stack oficial: Python/FastAPI.** Decisão do projeto é preservar o backend
 > Python existente; não há migração para NestJS. Ver
@@ -103,6 +105,25 @@ token de recuperação ativo por usuário.
 Detalhes, decisões e limitações: `docs/backend/06-etapa-2-autenticacao.md`; contratos:
 `docs/backend/04-contratos-api-iniciais.md`.
 
+## Escritórios e equipe (Etapa 3 — em memória)
+> ⚠️ Mesmas ressalvas da Etapa 2 (memória, um worker, bloqueado em production — inclusive
+> com `AUTH_ENABLED=false` se `OFFICES_ENABLED=true`). **Remoção de membro e saída do
+> escritório respondem 409 `responsibility_module_unavailable` até a Etapa 4.**
+
+- Criar escritório cria o vínculo administrativo do criador; no máximo um vínculo por pessoa.
+- Matriz de autorização: só administrador (`office.manage`) concede/retira `team.manage` e
+  `office.manage`; gestor (`team.manage`) só delega o que tem e não altera outros gestores;
+  ninguém amplia o próprio acesso; sempre ≥ 1 administrador; cargo não concede poderes.
+- Autorização relida no servidor a cada requisição (redução vale imediatamente).
+- Convite = link portador de uso único (7 dias), só hash guardado; token no corpo de
+  `POST /api/v1/invitations/lookup|accept`. Convidar e aprovar solicitações exigem
+  `team.manage` **e** todas as permissões concedidas no ingresso (`deadline.read`,
+  `create`, `edit`, `complete`).
+- Código de ingresso aleatório (10 caracteres) só permite **solicitar**; aprovação por gestor.
+- Outro escritório ou recurso inexistente → 404 `not_found`.
+
+Detalhes, matriz completa, exemplos e limites: `docs/backend/07-etapa-3-escritorios-rbac.md`.
+
 ## Configuração (variáveis de ambiente)
 Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigatório; nunca versione o `.env`):
 - `SERVICE_NAME` (padrão `prazoai-backend`)
@@ -119,6 +140,7 @@ Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigató
 - `AUTH_LOGIN_MAX_FAILURES` (5) / `AUTH_LOGIN_WINDOW_SECONDS` (300), `AUTH_FORGOT_MAX_REQUESTS` (3) / `AUTH_FORGOT_WINDOW_SECONDS` (900)
 - `AUTH_REGISTER_MAX_REQUESTS` (10) / `AUTH_REGISTER_WINDOW_SECONDS` (3600), `AUTH_RESET_MAX_REQUESTS` (10) / `AUTH_RESET_WINDOW_SECONDS` (900)
 - `AUTH_RATE_LIMIT_MAX_KEYS` (10000; chaves além do teto compartilham um balde de transbordo) e `AUTH_MAX_SESSIONS_PER_USER` (10)
+- `OFFICES_ENABLED` (vazio = acompanha `AUTH_ENABLED`) e `ORG_*` (validade de convite, limites de taxa, tetos de pendências e retenção — ver doc 07)
 - `AUTH_MAX_REFRESH_ROTATIONS_PER_SESSION` (1000, entre 10 e 100000): rotações de refresh por sessão; ao atingir o teto, o próximo refresh encerra a sessão (401 `session_rotation_limit_reached`)
 
 ## Observações

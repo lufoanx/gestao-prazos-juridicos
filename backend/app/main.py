@@ -30,8 +30,10 @@ from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging, get_logger
 from app.security.passwords import PasswordHasher
 from app.services.auth_container import build_auth_container
+from app.services.org_container import build_org_container, ensure_offices_allowed
 from app.services.password_reset_delivery import PasswordResetDelivery
 from app.services.prazo_service import calcular_prazo
+from app.services.responsibility_port import ResponsibilityPort
 
 FORMATO_DATA = "%d/%m/%Y"
 
@@ -57,6 +59,7 @@ def create_app(
     clock: Clock | None = None,
     password_reset_delivery: PasswordResetDelivery | None = None,
     password_hasher: PasswordHasher | None = None,
+    responsibility_port: ResponsibilityPort | None = None,
 ) -> FastAPI:
     """Cria uma instância isolada da aplicação.
 
@@ -110,8 +113,20 @@ def create_app(
         if container.ephemeral_secret:
             logger.warning("auth_ephemeral_jwt_secret: AUTH_JWT_SECRET ausente; segredo aleatório por instância.")
 
+    # Escritórios/equipe (Etapa 3): mesmo estado por instância e mesmo bloqueio em production.
+    # A verificação ocorre mesmo com a autenticação desligada.
+    ensure_offices_allowed(settings)
+    app.state.org = None
+    if settings.offices_active and app.state.auth is not None:
+        app.state.org = build_org_container(
+            settings, users=app.state.auth.users, clock=app.state.auth.clock, responsibilities=responsibility_port
+        )
+
     # API versionada: contrato canônico sob /api/v1.
-    app.include_router(build_api_v1_router(auth_enabled=settings.auth_enabled), prefix=settings.api_base)
+    app.include_router(
+        build_api_v1_router(auth_enabled=settings.auth_enabled, offices_enabled=app.state.org is not None),
+        prefix=settings.api_base,
+    )
 
     # Alias LEGADO de compatibilidade: SOMENTE /api/health (não expõe /api/auth, /api/users).
     # Documentado como legado; o contrato canônico é /api/v1/health.
