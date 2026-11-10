@@ -1,4 +1,6 @@
 "use client";
+import { IntegratedDeadlineList } from "@/integrated/IntegratedDeadlineList";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -160,10 +162,15 @@ function PrazosInner() {
   );
 }
 
-export default function PrazosPage() {
+function DemoPrazosPage() {
   return (
     <Suspense fallback={null}>
       <PrazosInner />
     </Suspense>
   );
+}
+
+// Modo integrado (Etapa 6.3): tela real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedDeadlineList /> : <DemoPrazosPage />;
 }

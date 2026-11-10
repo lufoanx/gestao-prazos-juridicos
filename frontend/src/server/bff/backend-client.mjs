@@ -13,10 +13,12 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
  *                                            //   corpo interrompido/ilegível/grande demais)
  * >}
  */
-export async function callBackend(ctx, { method, path, token, body, clientIp }) {
+export async function callBackend(ctx, { method, path, token, body, clientIp, query = "" }) {
   const { config } = ctx;
   const maxBytes = ctx.maxResponseBytes ?? MAX_RESPONSE_BYTES;
-  if (!path.startsWith("/") || path.includes("..") || path.includes("//")) throw new Error("caminho inválido");
+  if (!path.startsWith("/") || path.includes("..") || path.includes("//") || /[?#\\]/.test(path)) throw new Error("caminho inválido");
+  // Query já validada e remontada pelo BFF (URLSearchParams): só caracteres de query codificada.
+  if (query && !/^[A-Za-z0-9%=&+._*~-]+$/.test(query)) throw new Error("query inválida");
   const headers = { accept: "application/json" };
   if (body !== undefined) headers["content-type"] = "application/json";
   if (token) headers.authorization = `Bearer ${token}`;
@@ -28,7 +30,7 @@ export async function callBackend(ctx, { method, path, token, body, clientIp }) 
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(new DOMException("tempo esgotado", "TimeoutError")), config.timeoutMs);
   try {
-    return await exchange(ctx, ac.signal, maxBytes, { method, path, headers, body });
+    return await exchange(ctx, ac.signal, maxBytes, { method, path: query ? `${path}?${query}` : path, headers, body });
   } finally {
     clearTimeout(timer);
   }

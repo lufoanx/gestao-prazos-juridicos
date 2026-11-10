@@ -292,8 +292,8 @@ test("proxy: mutação com resultado desconhecido NÃO é repetida", async () =>
 test("proxy: lista explícita de rotas e métodos; caminhos suspeitos recusados", async () => {
   const env = setup();
   const { cookie } = await login(env);
-  // 6.2 ampliou a lista; rotas de módulos futuros continuam fora (404) e métodos não listados dão 405.
-  assert.equal((await env.bff.proxy(req("GET", "/bff/api/deadlines", { cookie }), "/deadlines")).status, 404);
+  // 6.2/6.3 ampliaram a lista; módulos ainda não integrados (intimações) seguem fora (404).
+  assert.equal((await env.bff.proxy(req("GET", "/bff/api/intimations", { cookie }), "/intimations")).status, 404);
   assert.equal((await env.bff.proxy(req("GET", "/bff/api/offices", { cookie }), "/offices")).status, 405);
   assert.equal((await env.bff.proxy(req("DELETE", "/bff/api/users/me", { cookie }), "/users/me")).status, 405);
   assert.equal(matchAllowlist("POST", "/auth/refresh"), "not_found");          // refresh nunca exposto

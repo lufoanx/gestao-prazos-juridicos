@@ -39,6 +39,7 @@ export function Notice({ kind = "info", children }: { kind?: "info" | "error" | 
 export function ResourceState<T>({ res, children }: { res: Resource<T> & { reload: () => void }; children: (data: T) => ReactNode }) {
   if (res.status === "loading") return <p aria-busy="true">Carregando…</p>;
   if (res.status === "forbidden") return <Notice>{res.message}</Notice>;
+  if (res.status === "mismatch") return <Notice>Este conteúdo pertence a outro ambiente.</Notice>;
   if (res.status === "error") {
     return (
       <div role="alert">
@@ -50,7 +51,15 @@ export function ResourceState<T>({ res, children }: { res: Resource<T> & { reloa
   return <>{children(res.data)}</>;
 }
 
-export type MutationResult<T> = { ok: true; value: T } | { ok: false; code: string | null; message: string | null };
+export type MutationResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; code: string | null; message: string | null; unknownOutcome: boolean; error: unknown };
+
+/** Resultado desconhecido: o servidor pode ter aplicado a mutação (timeout/rede após o envio). */
+export function isUnknownOutcome(e: unknown): boolean {
+  const cat = (e as { category?: string })?.category;
+  return cat === "unknown_outcome" || cat === "network";
+}
 
 /** Mutação SEM repetição automática: um envio por clique; erro preservado com o formulário. */
 export function useMutation() {
@@ -58,17 +67,20 @@ export function useMutation() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const run = useCallback(async <T,>(fn: () => Promise<T>): Promise<MutationResult<T>> => {
-    if (busy) return { ok: false, code: "busy", message: null };
+    if (busy) return { ok: false, code: "busy", message: null, unknownOutcome: false, error: null };
     setBusy(true);
     setError(null);
     try {
       return { ok: true, value: await fn() };
     } catch (e) {
       const code = (e as { code?: string })?.code ?? null;
-      if (handle(e)) return { ok: false, code, message: null };
-      const message = orgErrorMessage(e);
+      const unknownOutcome = isUnknownOutcome(e);
+      if (handle(e)) return { ok: false, code, message: null, unknownOutcome, error: e };
+      const message = unknownOutcome
+        ? "Não foi possível confirmar se a operação foi concluída: ela pode ter ocorrido. Confira antes de enviar de novo."
+        : orgErrorMessage(e);
       setError(message);
-      return { ok: false, code, message };
+      return { ok: false, code, message, unknownOutcome, error: e };
     } finally {
       setBusy(false);
     }

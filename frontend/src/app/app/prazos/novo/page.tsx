@@ -1,4 +1,6 @@
 "use client";
+import { IntegratedDeadlineNew } from "@/integrated/IntegratedDeadlineNew";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import { useRouter } from "next/navigation";
 import { useScope } from "@/context/ScopeContext";
 import { useData } from "@/context/DataContext";
@@ -9,7 +11,7 @@ import { Breadcrumb, EmptyState, useToast } from "@/components/ui";
 import { DeadlineForm } from "@/components/deadlines/DeadlineForm";
 import { ShieldAlert } from "lucide-react";
 
-export default function NovoPrazoPage() {
+function DemoNovoPrazoPage() {
   const router = useRouter();
   const { scopeKind, user, office, membership } = useScope();
   const { createDeadline } = useData();
@@ -61,4 +63,9 @@ export default function NovoPrazoPage() {
       )}
     </div>
   );
+}
+
+// Modo integrado (Etapa 6.3): tela real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedDeadlineNew /> : <DemoNovoPrazoPage />;
 }

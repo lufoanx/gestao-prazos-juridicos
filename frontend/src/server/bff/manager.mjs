@@ -12,7 +12,7 @@
 // - mutações nunca são repetidas automaticamente; após 401 do backend não há nova tentativa.
 import { isIP } from "node:net";
 import { callBackend } from "./backend-client.mjs";
-import { matchAllowlist } from "./allowlist.mjs";
+import { buildQuery, findRoute, matchAllowlist } from "./allowlist.mjs";
 import {
   CSRF_HEADER, NO_STORE, browserCookie, checkCsrf, clearCookie, newBrowserId, newCookieName, readBrowserId,
   readSessionCookies, sessionCookie,
@@ -350,6 +350,8 @@ export function createBff({
     if (match === "method_not_allowed") return err(405, "method_not_allowed", "Método não permitido.");
     const denied = guard(request);
     if (denied) return err(denied.status, denied.code, denied.message);
+    const built = buildQuery(findRoute(method, path), new URL(request.url).searchParams);
+    if (!built.ok) return err(422, "validation_error", built.message);
     const { current } = resolveCookies(request);                 // respostas comuns não mexem em cookies
     if (!current) return err(401, "not_authenticated", "Não autenticado.");
     let body;
@@ -360,7 +362,9 @@ export function createBff({
     }
     const outcome = await ensureFresh(current.value);           // renova ANTES do envio
     if (outcome.state !== "ok") return freshFailure(outcome, current.name);
-    const r = await callBackend(ctx, { method, path, token: outcome.session.accessToken, body, clientIp: clientIp(request) });
+    const r = await callBackend(ctx, {
+      method, path, query: built.query, token: outcome.session.accessToken, body, clientIp: clientIp(request),
+    });
     if (r.kind === "unreachable") return err(503, "backend_unavailable", "Serviço indisponível. Tente novamente.");
     if (r.kind === "uncertain") {
       // Mutação com resultado desconhecido: NUNCA repetir automaticamente.

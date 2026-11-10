@@ -2,7 +2,12 @@
 // Integrado: autenticação, sessão, perfil. Os demais módulos mostram "ainda não integrado"
 // (sem dados demonstrativos). Recursos inexistentes mostram "indisponível nesta fase".
 // 6.1: conta/sessão/perfil. 6.2: escritório, equipe, onboarding, convite (#TOKEN) e solicitação.
-export const INTEGRATED_APP_ROUTES = Object.freeze(["/app", "/app/perfil", "/app/escritorio", "/app/escritorio/equipe"]);
+// 6.3: prazos (lista, cadastro, detalhe, edição) e calendário.
+export const INTEGRATED_APP_ROUTES = Object.freeze([
+  "/app", "/app/perfil", "/app/escritorio", "/app/escritorio/equipe", "/app/prazos", "/app/prazos/novo", "/app/calendario",
+]);
+// Rotas dinâmicas integradas (segmento de id validado).
+const INTEGRATED_APP_PATTERNS = Object.freeze([/^\/app\/prazos\/[A-Za-z0-9_-]{1,64}$/, /^\/app\/prazos\/[A-Za-z0-9_-]{1,64}\/editar$/]);
 export const UNAVAILABLE_PUBLIC = Object.freeze(["/esqueci-senha", "/redefinir-senha"]);
 export const PENDING_PUBLIC = Object.freeze([]);
 
@@ -17,7 +22,7 @@ export function routeDecision(pathname, mode) {
   // Convite no formato antigo (/convite/<token>): o token NUNCA é repassado à API.
   if (pathname.startsWith("/convite/")) return { action: "rewrite", to: "/convite-antigo" };
   if (under(pathname, "/app")) {
-    if (INTEGRATED_APP_ROUTES.includes(pathname)) return { action: "allow" };
+    if (INTEGRATED_APP_ROUTES.includes(pathname) || INTEGRATED_APP_PATTERNS.some((re) => re.test(pathname))) return { action: "allow" };
     return { action: "rewrite", to: "/app/nao-integrado" };
   }
   return { action: "allow" };

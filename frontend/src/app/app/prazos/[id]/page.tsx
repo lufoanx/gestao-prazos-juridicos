@@ -1,4 +1,6 @@
 "use client";
+import { IntegratedDeadlineRoute } from "@/integrated/IntegratedDeadlineRoute";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -33,7 +35,7 @@ function formatSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export default function PrazoDetalhePage() {
+function DemoPrazoDetalhePage() {
   const params = useParams<{ id: string }>();
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
   const { scope, scopeKind, user, membership, office } = useScope();
@@ -252,4 +254,9 @@ export default function PrazoDetalhePage() {
       />
     </div>
   );
+}
+
+// Modo integrado (Etapa 6.3): tela real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedDeadlineRoute /> : <DemoPrazoDetalhePage />;
 }

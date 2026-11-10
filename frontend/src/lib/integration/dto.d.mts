@@ -28,3 +28,30 @@ export interface OfficeJoinRequest {
   id: string; requester: { userId: string; name: string; email: string } | null;
   status: "pending" | "approved" | "rejected" | "cancelled"; createdAt: string; decidedAt?: string | null;
 }
+
+// ---- 6.3: prazos e calendário (espelham backend/app/schemas/deadlines.py)
+export type DeadlineStatus = "open" | "completed" | "cancelled";
+export type UrgencyLevel = "overdue" | "today" | "soon" | "upcoming";
+export interface DeadlineScope { kind: "personal" | "office"; ownerId: string | null; officeId: string | null; }
+export interface Deadline {
+  id: string; scope: DeadlineScope; title: string; caseNumber: string; court: string; practiceArea: string;
+  responsibleId: string; status: DeadlineStatus; priority: "normal" | "high"; startDate: string; dueDate: string;
+  countingMode: "business" | "calendar"; duration: number; reviewed: boolean; agendaTime: string | null;
+  createdBy: string; createdAt: string; updatedAt: string; version: number;
+  urgency: { level: UrgencyLevel; days: number } | null;
+}
+export interface DeadlinePage { items: Deadline[]; page: number; perPage: number; total: number; pageCount: number; referenceDate: string; }
+export interface DeadlineComment { id: string; deadlineId: string; authorId: string; text: string; createdAt: string; }
+export interface CommentPage { items: DeadlineComment[]; page: number; perPage: number; total: number; }
+export interface HistoryEvent { id: string; actorId: string; action: string; at: string; details: Record<string, unknown>; }
+export interface HistoryPage { items: HistoryEvent[]; page: number; perPage: number; total: number; }
+export interface CalendarPage {
+  year: number; month: number; referenceDate: string; timezone: string; items: Deadline[];
+  countsByDay: Record<string, number>; page: number; perPage: number; total: number; pageCount: number;
+  hasNextPage: boolean; nextPage: number | null;
+}
+export interface DeadlineInput {
+  title: string; caseNumber: string; court: string; practiceArea: string; responsibleId?: string;
+  priority: "normal" | "high"; startDate: string; dueDate: string; countingMode: "business" | "calendar";
+  duration: number; agendaTime?: string | null; reviewed: boolean;
+}

@@ -1,4 +1,6 @@
 "use client";
+import { IntegratedDeadlineEditRoute } from "@/integrated/IntegratedDeadlineRoute";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useScope } from "@/context/ScopeContext";
@@ -11,7 +13,7 @@ import { Breadcrumb, EmptyState, useToast } from "@/components/ui";
 import { DeadlineForm } from "@/components/deadlines/DeadlineForm";
 import { ShieldAlert } from "lucide-react";
 
-export default function EditarPrazoPage() {
+function DemoEditarPrazoPage() {
   const params = useParams<{ id: string }>();
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
   const router = useRouter();
@@ -81,4 +83,9 @@ export default function EditarPrazoPage() {
       />
     </div>
   );
+}
+
+// Modo integrado (Etapa 6.3): tela real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedDeadlineEditRoute /> : <DemoEditarPrazoPage />;
 }

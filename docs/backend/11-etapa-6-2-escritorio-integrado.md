@@ -15,7 +15,8 @@
 | `/convite/<qualquer coisa>` | formato antigo → página explicativa (`/convite-antigo`), **sem chamar a API** |
 | `/solicitar-ingresso` | pedido por código, lista e cancelamento das próprias solicitações |
 
-Demais rotas de `/app/*` continuam reescritas para "Módulo ainda não integrado". O cadastro
+Demais rotas de `/app/*` continuam reescritas para "Módulo ainda não integrado" (a 6.3 integrou
+prazos e calendário; ver doc 12). O cadastro
 integrado agora leva ao onboarding.
 
 ## 2. Ambientes
@@ -64,7 +65,9 @@ Os controles aparecem conforme as permissões **atuais** do vínculo; o servidor
 ## 5. BFF
 - **Allowlist ampliada só com o necessário** (`src/server/bff/allowlist.mjs`): vínculo,
   escritório, equipe, código de ingresso, convites (lista/criação/revogação/aceite) e solicitações.
-  Segmentos dinâmicos `:id` validados (`[A-Za-z0-9_-]{1,64}`). Query strings não são repassadas.
+  Segmentos dinâmicos `:id` validados (`[A-Za-z0-9_-]{1,64}`). Nas rotas da 6.2, query strings
+  continuam ignoradas; a 6.3 passou a aceitar parâmetros controlados só nas rotas de prazos e
+  calendário (ver doc 12).
   Rotas de módulos futuros continuam fora (404).
 - **Consulta pública de convite** em rota própria (`/bff/public/invitations/lookup`): não usa
   sessão, não altera cookies, exige o cabeçalho próprio e `Origin`, aceita apenas `{ token }` e não

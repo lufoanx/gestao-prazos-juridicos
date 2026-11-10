@@ -1,5 +1,5 @@
 // Deve rodar POR ÚLTIMO (ordem alfabética dos arquivos): derruba o backend do E2E.
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { newEmail, signup } from "./helpers";
 
 const DEMO_TEXTS = ["Contestação — locação residencial", "Paula Andrade", "Rafael Neves"];
