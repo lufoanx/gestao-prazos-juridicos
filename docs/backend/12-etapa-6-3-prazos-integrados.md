@@ -51,6 +51,21 @@ allowlist aceitam parâmetros, cada um com validador próprio:
 - **Chaves de cache:** usuário, escritório, ambiente e revisão, mais o recurso, que inclui a query
   canônica (filtros, ordenação, página), o mês, o id do prazo e a página de comentários/histórico.
 
+### Ambiente do recurso × ambiente selecionado (correção da auditoria)
+- O detalhe consulta o prazo por id, mas **só renderiza dados, formulários e ações se o ambiente
+  real do prazo coincidir com o selecionado** (`scopeMatches`): pessoal → ambiente pessoal e dono
+  atual; escritório → ambiente do escritório e mesmo escritório do vínculo atual.
+- Se houver divergência, a tela mostra "Prazo de outro ambiente", sem título nem dados, e oferece
+  a **troca explícita** ("Abrir no ambiente do escritório" / "Abrir no ambiente pessoal"). A resposta
+  incompatível **não vai para o cache** (`useResource` com `accept`).
+- As capacidades do detalhe vêm do **recurso real + usuário + vínculo atual** (`resourceCaps`), nunca
+  só da preferência de navegação. Um membro só com `deadline.read` não vê Editar, Concluir nem
+  comentário em nenhum ambiente.
+- Trocar de ambiente com detalhe ou formulário aberto remonta o conteúdo (revisão/ambiente na
+  chave): o formulário e o rascunho são descartados.
+- Depois de uma transferência, o prazo passa a ser do escritório: a confirmação continua visível e
+  o detalhe pede a troca explícita para o ambiente do escritório.
+
 ## 4. Concorrência e erros
 - `version` lida é enviada em `PATCH`, `status` e `transfer`.
 - **409 `version_conflict`:**
@@ -79,6 +94,11 @@ allowlist aceitam parâmetros, cada um com validador próprio:
   do contrato), com progresso. **Total e contagens por dia vêm do servidor** (mês inteiro
   autorizado), nunca de uma página parcial. Se um teto de segurança de páginas for atingido, a tela
   avisa que a lista do mês está incompleta.
+- **Todos os prazos do dia são acessíveis** (correção da auditoria): cada dia mostra até 3 links e,
+  quando houver mais (ou a contagem do servidor for maior que os itens carregados), um botão
+  "Ver todos (N)" com nome acessível ("Ver todos os N prazos de dd/mm/aaaa"). Ele abre um diálogo com
+  um link para cada prazo do dia, inclusive os vindos de páginas seguintes, e informa "X de N".
+  Se faltarem itens, o diálogo avisa e indica a lista com filtro de vencimento.
 
 ## 6. Transferência pessoal → escritório
 - Disponível só para prazo pessoal, no ambiente pessoal, com vínculo e `deadline.transfer` +
@@ -106,7 +126,7 @@ vínculo existente ("a partir de uma intimação", "com a intimação vinculada"
 |---|---|
 | Unitários (dublês) | `frontend/tests/deadlines-integration.test.mjs`: allowlist e query, proxy (destino fixo, codificação, 422 sem backend), `X-Current-Version`/`Retry-After`, cliente (query canônica, consentimentos), calendário completo, datas em vários fusos, capacidades, nomes, histórico |
 | Integração real | `frontend/tests/integration/deadlines-backend.test.mjs`: privacidade pessoal, assigned × all, filtros/ordenação/paginação, conflito de versão, transições e responsável inativo, transferência com intimação vinculada, calendário com 3 páginas, comentários/histórico, perda de `deadline.read` |
-| E2E | `frontend/e2e/deadlines.spec.ts`: cadastro/edição/status/comentário e fusos distintos, lista no servidor, assigned × all e isolamento, conflito em duas abas, comentário com resultado desconhecido, calendário com 505 prazos (2 páginas), perda de permissão com resposta pausada, responsável inativo, transferência e consentimentos |
+| E2E | `frontend/e2e/deadlines.spec.ts`: cadastro/edição/status/comentário e fusos distintos, lista no servidor, assigned × all e isolamento, conflito em duas abas, comentário com resultado desconhecido, calendário com 505 prazos (2 páginas, abrindo um item da 2ª página pelo diálogo), perda de permissão com resposta pausada, responsável inativo, transferência e consentimentos; **auditoria:** 5 prazos no mesmo dia (abre um além dos 3 primeiros), membro só leitura no ambiente pessoal abrindo prazo do escritório por URL, cenário inverso com ações funcionando no ambiente correto, troca de ambiente com formulário aberto, detalhe aberto com perda de permissão e resposta pausada |
 
 As fixtures de massa (prazos semeados, prazo com intimação vinculada) usam a **API existente do
 backend**, com contas de teste. Nenhuma rota de módulo futuro foi aberta no BFF.

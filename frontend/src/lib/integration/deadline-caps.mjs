@@ -39,3 +39,29 @@ export function displayName(userId, names, me) {
   if (me && userId === me.id) return `${me.name} (você)`;
   return names?.get?.(userId) ?? "Pessoa fora do escritório";
 }
+
+/**
+ * O prazo pertence ao ambiente SELECIONADO? (pessoal: dono atual; escritório: o escritório do
+ * vínculo atual). Sem correspondência, a tela não renderiza dados, formulários nem ações.
+ */
+export function scopeMatches(deadline, { scope, officeId, userId }) {
+  if (!deadline?.scope) return false;
+  if (deadline.scope.kind === "personal") return scope === "personal" && deadline.scope.ownerId === userId;
+  return scope === "office" && Boolean(officeId) && deadline.scope.officeId === officeId;
+}
+
+/**
+ * Capacidades pelo RECURSO real + usuário + vínculo atual (nunca só pela preferência de navegação).
+ * Pessoal: tudo só para o dono. Escritório: só com vínculo atual NO MESMO escritório do prazo.
+ */
+export function resourceCaps(deadline, membership, userId) {
+  const none = { canRead: false, canCreate: false, canEdit: false, canComplete: false, canComment: false, canTransferOut: false, visibilityAll: false };
+  if (!deadline?.scope) return none;
+  if (deadline.scope.kind === "personal") {
+    return deadline.scope.ownerId === userId
+      ? { ...deadlineCaps("personal", null), canTransferOut: canTransferToOffice(membership) }
+      : none;
+  }
+  if (!membership || membership.officeId !== deadline.scope.officeId) return none;
+  return deadlineCaps("office", membership);
+}

@@ -39,6 +39,7 @@ export function Notice({ kind = "info", children }: { kind?: "info" | "error" | 
 export function ResourceState<T>({ res, children }: { res: Resource<T> & { reload: () => void }; children: (data: T) => ReactNode }) {
   if (res.status === "loading") return <p aria-busy="true">Carregando…</p>;
   if (res.status === "forbidden") return <Notice>{res.message}</Notice>;
+  if (res.status === "mismatch") return <Notice>Este conteúdo pertence a outro ambiente.</Notice>;
   if (res.status === "error") {
     return (
       <div role="alert">

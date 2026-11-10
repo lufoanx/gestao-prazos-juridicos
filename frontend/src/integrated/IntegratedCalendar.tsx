@@ -4,7 +4,7 @@
 // nunca de uma página parcial. Datas civis sem conversão de fuso.
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Button } from "@/components/ui";
+import { Button, Modal } from "@/components/ui";
 import { canonicalQuery, CALENDAR_PARAMS, fetchWholeMonth } from "@/lib/integration/deadlines-client.mjs";
 import { MONTH_NAMES, addMonths, formatCivilDate, monthGrid, parts } from "@/lib/integration/civil-date.mjs";
 import type { CalendarPage, Deadline, DeadlinePage } from "@/lib/integration/dto.d.mts";
@@ -41,7 +41,8 @@ function CalendarView({ initialYear, initialMonth, referenceDate }: { initialYea
     fetchWholeMonth(client, params, { onPage: (page, of) => setProgress({ page, of }) }));
   useEffect(() => { setProgress(null); }, [key]);
 
-  const move = (delta: number) => setYm(addMonths(ym.year, ym.month, delta));
+  const [openDay, setOpenDay] = useState<string | null>(null);
+  const move = (delta: number) => { setOpenDay(null); setYm(addMonths(ym.year, ym.month, delta)); };
   return (
     <div>
       <PageHead title="Calendário">
@@ -85,7 +86,12 @@ function CalendarView({ initialYear, initialMonth, referenceDate }: { initialYea
                                 <Link href={`/app/prazos/${d.id}`} title={`${d.title} · ${nameOf(d.responsibleId)}`}>{d.agendaTime ? `${d.agendaTime} ` : ""}{d.title}</Link>
                               </div>
                             ))}
-                            {(byDay.get(day)?.length ?? 0) > 3 ? <div className="text-muted" style={{ fontSize: "var(--fs-sm)" }}>+{byDay.get(day)!.length - 3}</div> : null}
+                            {(byDay.get(day)?.length ?? 0) > 3 || (data.countsByDay[day] ?? 0) > (byDay.get(day)?.length ?? 0) ? (
+                              <button type="button" className="btn btn--ghost btn--sm" onClick={() => setOpenDay(day)}
+                                aria-label={`Ver todos os ${data.countsByDay[day] ?? byDay.get(day)?.length ?? 0} prazos de ${formatCivilDate(day)}`}>
+                                Ver todos ({data.countsByDay[day] ?? byDay.get(day)?.length ?? 0})
+                              </button>
+                            ) : null}
                           </div>
                         ) : null}
                       </td>
@@ -94,6 +100,25 @@ function CalendarView({ initialYear, initialMonth, referenceDate }: { initialYea
                 ))}
               </tbody>
             </table>
+            {openDay ? (
+              <Modal open title={`Prazos de ${formatCivilDate(openDay)}`} onClose={() => setOpenDay(null)}
+                footer={<Button variant="secondary" onClick={() => setOpenDay(null)}>Fechar</Button>}>
+                <p className="text-muted">
+                  {(byDay.get(openDay) ?? []).length} de {data.countsByDay[openDay] ?? 0} prazo(s) deste dia (contagem do servidor).
+                </p>
+                {(data.countsByDay[openDay] ?? 0) > (byDay.get(openDay) ?? []).length ? (
+                  <Notice kind="error">Nem todos os prazos deste dia puderam ser carregados. Use a lista de prazos com o filtro de vencimento para ver os demais.</Notice>
+                ) : null}
+                <ul aria-label={`Prazos de ${formatCivilDate(openDay)}`} style={{ listStyle: "none", padding: 0, maxHeight: "60vh", overflowY: "auto" }}>
+                  {(byDay.get(openDay) ?? []).map((d) => (
+                    <li key={d.id} style={{ padding: "4px 0" }}>
+                      <Link href={`/app/prazos/${d.id}`}>{d.agendaTime ? `${d.agendaTime} · ` : ""}{d.title}</Link>
+                      <span className="text-muted"> · {nameOf(d.responsibleId)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Modal>
+            ) : null}
           </>
         );
       }}</ResourceState>

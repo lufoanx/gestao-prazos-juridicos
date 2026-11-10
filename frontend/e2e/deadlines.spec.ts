@@ -185,10 +185,24 @@ test("calendário: mês do servidor com mais resultados que uma página (todas a
   await seedDeadlines(ana.email, 505, { dueDate: day, startDate: `${ref.slice(0, 8)}01` });   // > 500 por página
   const pages: string[] = [];
   ana.page.on("request", (r) => { if (r.url().includes("/bff/api/calendar?")) pages.push(new URL(r.url()).searchParams.get("page") ?? ""); });
+  const secondPage: Array<{ id: string; title: string }> = [];
+  ana.page.on("response", async (r) => {
+    if (r.url().includes("/bff/api/calendar?") && new URL(r.url()).searchParams.get("page") === "2") secondPage.push(...(await r.json()).items);
+  });
   await ana.page.goto("/app/calendario");
   await expect(ana.page.getByTestId("calendar-total")).toContainText("505 prazo(s) no mês · 2 páginas carregadas");
   await expect(ana.page.getByTestId(`count-${day}`)).toHaveText("505");
   expect(pages).toEqual(["1", "2"]);
+  // Auditoria 6.3: um item que veio da SEGUNDA página é acessível pela interface.
+  expect(secondPage.length).toBe(5);
+  const fromPage2 = secondPage[0];
+  await ana.page.getByTestId(`day-${day}`).getByRole("button", { name: /Ver todos os 505 prazos/ }).click();
+  const dialog = ana.page.getByRole("dialog");
+  await expect(dialog.getByText("505 de 505 prazo(s) deste dia")).toBeVisible();
+  await dialog.getByRole("link", { name: fromPage2.title, exact: true }).click();
+  await expect(ana.page).toHaveURL(new RegExp(`/app/prazos/${fromPage2.id}$`));
+  await expect(ana.page.getByRole("heading", { name: fromPage2.title })).toBeVisible();
+  await ana.page.goto("/app/calendario");
   await ana.page.getByRole("button", { name: "Próximo mês" }).click();
   await expect(ana.page.getByTestId("calendar-total")).toContainText("0 prazo(s) no mês");
   await ana.context.close();
@@ -269,6 +283,8 @@ test("transferência: consentimento de compartilhamento e confirmação específ
   await ana.page.getByLabel(/Entendo e quero compartilhar/).check();
   await ana.page.getByRole("button", { name: "Transferir", exact: true }).click();
   await expect(ana.page.getByText(/Prazo transferido ao escritório/)).toBeVisible();
+  // Auditoria 6.3: agora o prazo é do escritório; no ambiente pessoal, pede troca explícita.
+  await expect(ana.page.getByRole("heading", { name: "Prazo de outro ambiente" })).toBeVisible();
   expect(id).toBeTruthy();
 
   // Fixture: prazo pessoal criado a partir de intimação, pela API EXISTENTE do backend.
@@ -281,6 +297,7 @@ test("transferência: consentimento de compartilhamento e confirmação específ
       startDate: "2026-11-01", dueDate: "2026-11-24", countingMode: "business", duration: 10 }) })).json();
   const bodies: string[] = [];
   ana.page.on("request", (r) => { if (r.url().endsWith("/transfer")) bodies.push(r.postData() ?? ""); });
+  await ana.page.getByLabel("Ambiente").selectOption("personal");
   await ana.page.goto(`/app/prazos/${conf.deadline.id}`);
   await ana.page.getByRole("button", { name: "Transferir…" }).click();
   await ana.page.getByLabel(/Entendo e quero compartilhar/).check();
@@ -291,6 +308,131 @@ test("transferência: consentimento de compartilhamento e confirmação específ
   await ana.page.getByRole("button", { name: "Transferir", exact: true }).click();
   await expect(ana.page.getByText(/Prazo transferido ao escritório/)).toBeVisible();
   expect(bodies[1]).toContain('"shareLinkedIntimation":true');
+  await ana.page.getByRole("button", { name: "Abrir no ambiente do escritório" }).click();
   await expect(ana.page.getByText("com a intimação vinculada")).toBeVisible();              // histórico sem ids
   await ana.context.close();
+});
+
+// ---------------------------------------------------------------- auditoria da 6.3
+test("auditoria 6.3: cinco prazos no mesmo dia — um além dos três primeiros é aberto pela interface", async ({ browser }) => {
+  const ana = await personIn(browser, "Ana Dia Cheio");
+  await ana.page.getByRole("button", { name: "Usar ambiente pessoal" }).click();
+  const ref: string = await ana.page.evaluate(async () =>
+    (await (await fetch("/bff/api/deadlines?scope=personal&perPage=1", { headers: { "x-prazoai-csrf": "1" } })).json()).referenceDate);
+  const day = `${ref.slice(0, 8)}10`;
+  await seedDeadlines(ana.email, 5, { dueDate: day, startDate: `${ref.slice(0, 8)}01` });
+  await ana.page.goto("/app/calendario");
+  const cell = ana.page.getByTestId(`day-${day}`);
+  await expect(cell.getByRole("link")).toHaveCount(3);
+  const shown = await cell.getByRole("link").allInnerTexts();
+  await cell.getByRole("button", { name: /Ver todos os 5 prazos/ }).click();
+  const dialog = ana.page.getByRole("dialog");
+  await expect(dialog.getByRole("link")).toHaveCount(5);
+  const hiddenTitle = (await dialog.getByRole("link").allInnerTexts()).find((t) => !shown.includes(t))!;
+  expect(hiddenTitle).toBeTruthy();
+  await dialog.getByRole("link", { name: hiddenTitle, exact: true }).click();
+  await expect(ana.page.getByRole("heading", { name: hiddenTitle })).toBeVisible();
+  await ana.context.close();
+});
+
+async function officeDeadline(page: Page, title: string) {
+  return page.evaluate(async (title) => (await (await fetch("/bff/api/deadlines", { method: "POST",
+    headers: { "x-prazoai-csrf": "1", "content-type": "application/json" },
+    body: JSON.stringify({ scope: "office", title, caseNumber: "0001234-56.2026", court: "TJSC", practiceArea: "Cível",
+      startDate: "2026-11-01", dueDate: "2026-11-20", countingMode: "business", duration: 10 }) })).json()).id as string, title);
+}
+
+test("auditoria 6.3: membro só leitura no ambiente pessoal abrindo prazo do escritório por URL", async ({ browser }) => {
+  const ana = await personIn(browser, "Ana Admin Leitura");
+  await createOfficeVia(ana.page, "Leituras SA");
+  const bia = await personIn(browser, "Bia Só Lê");
+  await joinByInvite(ana.page, bia.page);
+  const { oid } = await idsOf(ana.page);
+  const { uid } = await idsOf(bia.page);
+  await patchMember(ana.page, oid!, uid, { permissions: ["deadline.read"], visibility: "all" });
+  const id = await officeDeadline(ana.page, "Prazo do escritório lido");
+  await bia.page.goto("/app");
+  await bia.page.getByLabel("Ambiente").selectOption("personal");
+  await bia.page.goto(`/app/prazos/${id}`);
+  await expect(bia.page.getByRole("heading", { name: "Prazo de outro ambiente" })).toBeVisible();
+  await expect(bia.page.getByText("Prazo do escritório lido")).toHaveCount(0);            // nenhum dado do outro ambiente
+  await expect(bia.page.getByRole("button", { name: "Editar prazo" })).toHaveCount(0);
+  await expect(bia.page.getByRole("button", { name: "Concluir" })).toHaveCount(0);
+  await bia.page.getByRole("button", { name: "Abrir no ambiente do escritório" }).click();  // troca explícita
+  await expect(bia.page.getByRole("heading", { name: "Prazo do escritório lido" })).toBeVisible();
+  await expect(bia.page.getByLabel("Ambiente")).toHaveValue("office");
+  await expect(bia.page.getByRole("button", { name: "Editar prazo" })).toHaveCount(0);   // só leitura: capacidades do recurso
+  await expect(bia.page.getByRole("button", { name: "Concluir" })).toHaveCount(0);
+  await expect(bia.page.getByLabel("Novo comentário")).toHaveCount(0);
+  await ana.context.close();
+  await bia.context.close();
+});
+
+test("auditoria 6.3: inverso — prazo pessoal com o escritório selecionado; ações funcionam no ambiente correto", async ({ browser }) => {
+  const ana = await personIn(browser, "Ana Inverso");
+  await createOfficeVia(ana.page, "Inversos Ltda");
+  await ana.page.getByLabel("Ambiente").selectOption("personal");
+  const id = await newDeadline(ana.page, { title: "Pessoal da Ana", due: "2026-11-20" });
+  await ana.page.getByLabel("Ambiente").selectOption("office");
+  await ana.page.goto(`/app/prazos/${id}`);
+  await expect(ana.page.getByRole("heading", { name: "Prazo de outro ambiente" })).toBeVisible();
+  await expect(ana.page.getByText("Pessoal da Ana")).toHaveCount(0);
+  await ana.page.getByRole("button", { name: "Abrir no ambiente pessoal" }).click();
+  await expect(ana.page.getByRole("heading", { name: "Pessoal da Ana" })).toBeVisible();
+  await ana.page.getByRole("button", { name: "Editar prazo" }).click();
+  await ana.page.getByLabel("Título").fill("Pessoal da Ana editado");
+  await ana.page.getByRole("button", { name: "Salvar alterações" }).click();
+  await expect(ana.page.getByRole("heading", { name: "Pessoal da Ana editado" })).toBeVisible();
+  await ana.page.getByRole("button", { name: "Concluir" }).click();
+  await ana.page.getByRole("button", { name: "Concluir", exact: true }).last().click();
+  await expect(ana.page.getByText("Status: Concluído.")).toBeVisible();
+  await ana.context.close();
+});
+
+test("auditoria 6.3: troca de ambiente com o formulário aberto descarta formulário e dados", async ({ browser }) => {
+  const ana = await personIn(browser, "Ana Troca Form");
+  await createOfficeVia(ana.page, "Formulários SA");
+  const id = await officeDeadline(ana.page, "Prazo com formulário aberto");
+  await ana.page.goto(`/app/prazos/${id}`);
+  await ana.page.getByRole("button", { name: "Editar prazo" }).click();
+  await ana.page.getByLabel("Título").fill("Rascunho não salvo");
+  await ana.page.getByLabel("Ambiente").selectOption("personal");
+  await expect(ana.page.getByRole("heading", { name: "Prazo de outro ambiente" })).toBeVisible();
+  await expect(ana.page.getByLabel("Título")).toHaveCount(0);
+  await expect(ana.page.getByText("Prazo com formulário aberto")).toHaveCount(0);
+  await ana.page.getByLabel("Ambiente").selectOption("office");
+  await expect(ana.page.getByRole("heading", { name: "Prazo com formulário aberto" })).toBeVisible();
+  await expect(ana.page.getByLabel("Título")).toHaveCount(0);                              // rascunho não volta
+  await ana.context.close();
+});
+
+test("auditoria 6.3: detalhe aberto, perda de deadline.read e resposta antiga pausada", async ({ browser }) => {
+  const ana = await personIn(browser, "Ana Detalhe");
+  await createOfficeVia(ana.page, "Detalhes SA");
+  const bia = await personIn(browser, "Bia Detalhe");
+  await joinByInvite(ana.page, bia.page);
+  const { oid } = await idsOf(ana.page);
+  const { uid } = await idsOf(bia.page);
+  await patchMember(ana.page, oid!, uid, { visibility: "all" });
+  const id = await officeDeadline(ana.page, "Detalhe confidencial");
+  await bia.page.goto(`/app/prazos/${id}`);
+  await expect(bia.page.getByRole("heading", { name: "Detalhe confidencial" })).toBeVisible();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  let held = 0;
+  await bia.page.route(`**/bff/api/deadlines/${id}`, async (route) => {
+    if (held === 0 && route.request().method() === "GET") { held++; const resp = await route.fetch(); await gate; await route.fulfill({ response: resp }).catch(() => {}); }
+    else await route.continue();
+  });
+  await bia.page.reload();                                                                  // nova consulta (fica pausada)
+  await expect.poll(() => held).toBe(1);
+  await patchMember(ana.page, oid!, uid, { permissions: ["deadline.create"] });
+  await bia.page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(bia.page.getByText("Você não tem a permissão “Ver prazos”")).toBeVisible();
+  release();
+  await bia.page.waitForLoadState("networkidle");
+  await expect(bia.page.getByText("Detalhe confidencial")).toHaveCount(0);
+  await expect(bia.page).not.toHaveURL(/\/login$/);
+  await ana.context.close();
+  await bia.context.close();
 });

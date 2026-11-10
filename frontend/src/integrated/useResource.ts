@@ -11,7 +11,9 @@ export type Resource<T> =
   | { status: "loading" }
   | { status: "ready"; data: T }
   | { status: "forbidden"; message: string }
-  | { status: "error"; message: string; unavailable: boolean };
+  | { status: "error"; message: string; unavailable: boolean }
+  /** Resposta válida, mas incompatível com o contexto atual (ex.: prazo de outro ambiente). Não é cacheada. */
+  | { status: "mismatch"; data: T };
 
 /** Trata 401 (sessão), 403/404 (revalida vínculo, sem logout). Retorna true se tratado. */
 export function useApiErrorHandler() {
@@ -25,7 +27,9 @@ export function useApiErrorHandler() {
   }, [auth, org]);
 }
 
-export function useResource<T>(resource: string | null, fetcher: () => Promise<T>): Resource<T> & { reload: () => void } {
+export function useResource<T>(
+  resource: string | null, fetcher: () => Promise<T>, opts: { accept?: (data: T) => boolean } = {},
+): Resource<T> & { reload: () => void } {
   const { cache, state } = useOrg();
   const handle = useApiErrorHandler();
   const key = resource && state.userId
@@ -54,6 +58,11 @@ export function useResource<T>(resource: string | null, fetcher: () => Promise<T
     fetcher()
       .then((data) => {
         if (!alive || currentKey.current !== key) return;           // resposta de outra revisão/chave
+        if (opts.accept && !opts.accept(data)) {                    // incompatível: nunca vai ao cache
+          cache.invalidate(key);
+          setEntry({ key, res: { status: "mismatch", data } });
+          return;
+        }
         cache.set(key, data);
         setEntry({ key, res: { status: "ready", data } });
       })

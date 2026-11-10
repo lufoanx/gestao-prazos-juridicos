@@ -8,7 +8,7 @@ import { createBff } from "../src/server/bff/manager.mjs";
 import { createApiClient } from "../src/lib/integration/api-client.mjs";
 import { canonicalQuery, createDeadlinesClient, fetchWholeMonth, LIST_PARAMS } from "../src/lib/integration/deadlines-client.mjs";
 import { addMonths, formatCivilDate, isCivilDate, monthGrid } from "../src/lib/integration/civil-date.mjs";
-import { canTransferToOffice, deadlineCaps, displayName, selectableResponsibles } from "../src/lib/integration/deadline-caps.mjs";
+import { canTransferToOffice, deadlineCaps, displayName, resourceCaps, scopeMatches, selectableResponsibles } from "../src/lib/integration/deadline-caps.mjs";
 import { describeEvent } from "../src/lib/integration/history-format.mjs";
 import { cacheKey } from "../src/lib/integration/query-cache.mjs";
 import { createFakeBackend, tok } from "./helpers/fake-backend.mjs";
@@ -176,6 +176,25 @@ test("capacidades de prazos espelham as políticas; cargo/gestão não concedem 
   assert.equal(displayName("u2", names, me), "Bia");
   assert.equal(displayName("u1", names, me), "Ana (você)");
   assert.equal(displayName("x9", names, me), "Pessoa fora do escritório");       // nunca o id
+});
+
+test("auditoria 6.3: ambiente do recurso deve coincidir; capacidades pelo recurso real", () => {
+  const office = { scope: { kind: "office", ownerId: null, officeId: "o" } };
+  const personal = { scope: { kind: "personal", ownerId: "u1", officeId: null } };
+  assert.equal(scopeMatches(office, { scope: "personal", officeId: "o", userId: "u1" }), false);   // ambiente pessoal × prazo do escritório
+  assert.equal(scopeMatches(office, { scope: "office", officeId: "o2", userId: "u1" }), false);
+  assert.equal(scopeMatches(office, { scope: "office", officeId: "o", userId: "u1" }), true);
+  assert.equal(scopeMatches(personal, { scope: "office", officeId: "o", userId: "u1" }), false);   // inverso
+  assert.equal(scopeMatches(personal, { scope: "personal", officeId: "o", userId: "u2" }), false);
+  assert.equal(scopeMatches(personal, { scope: "personal", officeId: null, userId: "u1" }), true);
+  const reader = m(["deadline.read"], "all");
+  const rc = resourceCaps(office, reader, "u1");
+  assert.deepEqual([rc.canRead, rc.canEdit, rc.canComplete, rc.canComment], [true, false, false, false]);   // nunca as capacidades pessoais
+  assert.equal(resourceCaps(office, { ...reader, officeId: "o2" }, "u1").canRead, false);
+  assert.equal(resourceCaps(personal, reader, "u1").canEdit, true);
+  assert.equal(resourceCaps(personal, reader, "u2").canRead, false);
+  assert.equal(resourceCaps(personal, m(["deadline.read", "deadline.transfer"]), "u1").canTransferOut, true);
+  assert.equal(resourceCaps(personal, reader, "u1").canTransferOut, false);
 });
 
 test("histórico: referências protegidas não são reveladas; pessoas viram nomes", () => {

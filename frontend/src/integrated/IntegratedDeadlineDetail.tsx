@@ -4,7 +4,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Badge, Button, ConfirmDialog, EmptyState, Modal, Pagination, Select, Textarea } from "@/components/ui";
-import { canTransferToOffice, selectableResponsibles } from "@/lib/integration/deadline-caps.mjs";
+import { resourceCaps, scopeMatches, selectableResponsibles, type DeadlineCaps } from "@/lib/integration/deadline-caps.mjs";
 import { formatCivilDate } from "@/lib/integration/civil-date.mjs";
 import { describeEvent } from "@/lib/integration/history-format.mjs";
 import type { CommentPage, Deadline, DeadlineStatus, HistoryPage } from "@/lib/integration/dto.d.mts";
@@ -12,6 +12,7 @@ import { DeadlineFields, draftToInput, validateDraft, type DeadlineDraft } from 
 import { useResource } from "./useResource";
 import { STATUS_LABEL, STATUS_TONE, ScopeGate, UrgencyBadge, useDeadlineContext, useInvalidateDeadlines } from "./deadlineShared";
 import { Card, Notice, PageHead, ResourceState, fmtDate, useMutation } from "./ui";
+import { useOrg } from "./OrgProvider";
 
 const DEADLINE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -27,11 +28,25 @@ function toDraft(d: Deadline): DeadlineDraft {
 }
 
 function DetailView({ deadlineId, startEditing }: { deadlineId: string; startEditing: boolean }) {
-  const { client, nameOf } = useDeadlineContext();
-  const res = useResource<Deadline>(`deadline:${deadlineId}`, () => client.get(deadlineId));
+  const { client, nameOf, org, me } = useDeadlineContext();
+  // O ambiente REAL do prazo precisa coincidir com o selecionado; senão nada é renderizado nem cacheado.
+  const ctx = { scope: org.scope, officeId: org.office?.id ?? null, userId: me?.id ?? null };
+  const res = useResource<Deadline>(`deadline:${deadlineId}`, () => client.get(deadlineId), { accept: (d) => scopeMatches(d, ctx) });
   const [editing, setEditing] = useState(startEditing);
+  const [transferNotice, setTransferNotice] = useState<string | null>(null);
+  if (res.status === "mismatch") {
+    return (
+      <>
+        {transferNotice ? <Notice kind="ok">{transferNotice}</Notice> : null}
+        <ScopeMismatch d={res.data} />
+      </>
+    );
+  }
   return (
-    <ResourceState res={res}>{(d) => (
+    <ResourceState res={res}>{(d) => {
+      // Capacidades pelo recurso real + usuário + vínculo atual (não pela preferência de navegação).
+      const caps = resourceCaps(d, org.membership, me?.id ?? null);
+      return (
       <div>
         <PageHead title={d.title}>
           <Link className="btn btn--secondary" href="/app/prazos">Voltar à lista</Link>
@@ -55,18 +70,46 @@ function DetailView({ deadlineId, startEditing }: { deadlineId: string; startEdi
             <dt>Criado por</dt><dd>{nameOf(d.createdBy)} em {fmtDate(d.createdAt)}</dd>
           </dl>
         </Card>
-        <EditSection d={d} editing={editing} setEditing={setEditing} reload={res.reload} />
-        <StatusSection d={d} reload={res.reload} />
-        <TransferSection d={d} reload={res.reload} />
-        <CommentsSection d={d} />
+        <EditSection d={d} caps={caps} editing={editing} setEditing={setEditing} reload={res.reload} />
+        <StatusSection d={d} caps={caps} reload={res.reload} />
+        <TransferSection d={d} caps={caps} reload={res.reload} onTransferred={setTransferNotice} />
+        <CommentsSection d={d} caps={caps} />
         <HistorySection d={d} />
       </div>
-    )}</ResourceState>
+      );
+    }}</ResourceState>
   );
 }
 
-function EditSection({ d, editing, setEditing, reload }: { d: Deadline; editing: boolean; setEditing: (v: boolean) => void; reload: () => void }) {
-  const { client, caps, scope, org, members, me, nameOf } = useDeadlineContext();
+/** Prazo de outro ambiente: nenhum dado, formulário ou ação; troca só por escolha explícita. */
+function ScopeMismatch({ d }: { d: Deadline }) {
+  const { org, me } = useDeadlineContext();
+  const { controller } = useOrg();
+  const target = d.scope.kind === "office" && org.office?.id === d.scope.officeId ? "office"
+    : d.scope.kind === "personal" && d.scope.ownerId === me?.id ? "personal" : null;
+  return (
+    <div>
+      <PageHead title="Prazo de outro ambiente" />
+      <Card>
+        <p role="status">
+          {target === "office" ? `Este prazo pertence ao escritório “${org.office?.name}”, mas o ambiente selecionado é o pessoal.`
+            : target === "personal" ? "Este prazo pertence ao seu ambiente pessoal, mas o ambiente selecionado é o do escritório."
+              : "Este prazo não pertence a nenhum ambiente disponível para você agora."}
+        </p>
+        <p className="text-muted">Para evitar misturar dados e permissões, ele só é exibido no ambiente correspondente.</p>
+        {target ? (
+          <Button onClick={() => controller.selectScope(target)}>
+            {target === "office" ? "Abrir no ambiente do escritório" : "Abrir no ambiente pessoal"}
+          </Button>
+        ) : null}
+        <p style={{ marginTop: 12 }}><Link href="/app/prazos">Voltar à lista do ambiente atual</Link></p>
+      </Card>
+    </div>
+  );
+}
+
+function EditSection({ d, caps, editing, setEditing, reload }: { d: Deadline; caps: DeadlineCaps; editing: boolean; setEditing: (v: boolean) => void; reload: () => void }) {
+  const { client, org, members, me, nameOf } = useDeadlineContext();
   const invalidate = useInvalidateDeadlines();
   const [draft, setDraft] = useState<DeadlineDraft>(() => toDraft(d));
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -75,7 +118,7 @@ function EditSection({ d, editing, setEditing, reload }: { d: Deadline; editing:
   const m = useMutation();
   if (!caps.canEdit) return null;
 
-  const base = selectableResponsibles(scope === "office" && d.scope.kind === "office" ? "office" : "personal", org.membership,
+  const base = selectableResponsibles(d.scope.kind, org.membership,
     members.status === "ready" ? members.data.members : [], me!);
   const responsibles = base.some((r) => r.userId === d.responsibleId) ? base : [{ userId: d.responsibleId, name: nameOf(d.responsibleId) }, ...base];
   const lock = d.scope.kind === "personal" || org.membership?.visibility !== "all";
@@ -125,8 +168,8 @@ function EditSection({ d, editing, setEditing, reload }: { d: Deadline; editing:
   );
 }
 
-function StatusSection({ d, reload }: { d: Deadline; reload: () => void }) {
-  const { client, caps, scope, org, members, me } = useDeadlineContext();
+function StatusSection({ d, caps, reload }: { d: Deadline; caps: DeadlineCaps; reload: () => void }) {
+  const { client, org, members, me } = useDeadlineContext();
   const invalidate = useInvalidateDeadlines();
   const m = useMutation();
   const [target, setTarget] = useState<DeadlineStatus | null>(null);
@@ -135,7 +178,7 @@ function StatusSection({ d, reload }: { d: Deadline; reload: () => void }) {
   const [ok, setOk] = useState<string | null>(null);
   if (!caps.canComplete) return null;
 
-  const candidates = selectableResponsibles(scope === "office" && d.scope.kind === "office" ? "office" : "personal", org.membership,
+  const candidates = selectableResponsibles(d.scope.kind, org.membership,
     members.status === "ready" ? members.data.members : [], me!).filter((c) => c.userId !== d.responsibleId);
 
   async function apply(status: DeadlineStatus, responsibleId?: string) {
@@ -176,8 +219,10 @@ function StatusSection({ d, reload }: { d: Deadline; reload: () => void }) {
   );
 }
 
-function TransferSection({ d, reload }: { d: Deadline; reload: () => void }) {
-  const { client, org, scope } = useDeadlineContext();
+function TransferSection({ d, caps, reload, onTransferred }: {
+  d: Deadline; caps: DeadlineCaps; reload: () => void; onTransferred: (notice: string) => void;
+}) {
+  const { client, org } = useDeadlineContext();
   const invalidate = useInvalidateDeadlines();
   const m = useMutation();
   const [open, setOpen] = useState(false);
@@ -185,13 +230,14 @@ function TransferSection({ d, reload }: { d: Deadline; reload: () => void }) {
   const [needIntimationConsent, setNeedIntimationConsent] = useState(false);
   const [intimationConsent, setIntimationConsent] = useState(false);
   const [done, setDone] = useState<string | null>(null);
-  if (d.scope.kind !== "personal" || scope !== "personal" || !org.office || !canTransferToOffice(org.membership)) return null;
+  if (d.scope.kind !== "personal" || !caps.canTransferOut || !org.office) return null;
 
   async function submit() {
     if (!consent) { m.setError("Confirme o compartilhamento para transferir."); return; }
     if (needIntimationConsent && !intimationConsent) { m.setError("Confirme também o compartilhamento da intimação vinculada."); return; }
     const r = await m.run(() => client.transfer(d.id, d.version, org.office!.id, { shareLinkedIntimation: needIntimationConsent && intimationConsent }));
-    if (r.ok) { setOpen(false); setDone(r.value.notice); invalidate(d.id); reload(); return; }
+    // O prazo passa a ser do escritório: o detalhe pedirá a troca explícita de ambiente.
+    if (r.ok) { setOpen(false); setDone(r.value.notice); onTransferred(r.value.notice); invalidate(d.id); reload(); return; }
     if (r.code === "linked_intimation_requires_consent") setNeedIntimationConsent(true);   // pede confirmação ESPECÍFICA
   }
   return (
@@ -220,8 +266,8 @@ function TransferSection({ d, reload }: { d: Deadline; reload: () => void }) {
   );
 }
 
-function CommentsSection({ d }: { d: Deadline }) {
-  const { client, caps, nameOf } = useDeadlineContext();
+function CommentsSection({ d, caps }: { d: Deadline; caps: DeadlineCaps }) {
+  const { client, nameOf } = useDeadlineContext();
   const [page, setPage] = useState(1);
   const res = useResource<CommentPage>(`deadline:${d.id}:comments:p${page}`, () => client.comments(d.id, page, 20));
   const [text, setText] = useState("");
