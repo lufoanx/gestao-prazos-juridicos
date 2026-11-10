@@ -46,8 +46,9 @@ export function IntegratedShell({ children }: { children: ReactNode }) {
   if (state.status !== "authenticated" || !state.user) return null;
 
   const hasOffice = Boolean(org.office);
-  // A chave remonta o conteúdo ao trocar usuário/escritório/ambiente: nenhum dado sobrevive.
-  const contentKey = `${state.user.id}|${org.office?.id ?? "-"}|${org.scope}`;
+  // A chave remonta o conteúdo ao trocar usuário/escritório/ambiente OU a revisão de autorização:
+  // dados renderizados, formulários abertos e seleções incompatíveis são descartados.
+  const contentKey = `${state.user.id}|${org.office?.id ?? "-"}|${org.scope}|r${org.revision}`;
 
   return (
     <div className="app-shell">

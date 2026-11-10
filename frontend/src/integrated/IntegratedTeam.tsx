@@ -13,7 +13,6 @@ import { useResource } from "./useResource";
 import { Card, Notice, PERMISSION_LABELS, PageHead, ResourceState, useMutation } from "./ui";
 
 type Member = MemberAdmin | MemberPublic;
-const isAdminView = (m: Member): m is MemberAdmin => "permissions" in m;
 
 export function IntegratedTeam() {
   const { state } = useOrg();
@@ -46,8 +45,12 @@ function TeamView({ officeId }: { officeId: string }) {
       </PageHead>
       {ok ? <Notice kind="ok">{ok}</Notice> : null}
       {promote.error ? <Notice kind="error">{promote.error}</Notice> : null}
-      <ResourceState res={res}>{(data: MembersResponse) => (
-        <Card title={data.projection === "admin" ? "Membros (visão de gestão)" : "Membros"}>
+      <ResourceState res={res}>{(data: MembersResponse) => {
+        // Campos administrativos SÓ com projeção administrativa E permissão atual de gestão.
+        const adminView = data.projection === "admin" && caps.canManageTeam;
+        const isAdminView = (m: Member): m is MemberAdmin => adminView && "permissions" in m;
+        return (
+        <Card title={adminView ? "Membros (visão de gestão)" : "Membros"}>
           {data.members.length === 0 ? <EmptyState title="Nenhum membro." /> : (
             <ul aria-label="Membros" style={{ listStyle: "none", padding: 0 }}>
               {data.members.map((m) => {
@@ -78,9 +81,10 @@ function TeamView({ officeId }: { officeId: string }) {
               })}
             </ul>
           )}
-          {data.projection === "public" ? <p className="text-muted">E-mails e permissões dos membros são visíveis só para quem gere a equipe.</p> : null}
+          {!adminView ? <p className="text-muted">E-mails e permissões dos membros são visíveis só para quem gere a equipe.</p> : null}
         </Card>
-      )}</ResourceState>
+        );
+      }}</ResourceState>
 
       {editing ? <EditMember officeId={officeId} target={editing} onClose={() => setEditing(null)}
         onSaved={async () => { setEditing(null); await afterChange("Membro atualizado."); }} /> : null}

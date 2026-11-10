@@ -1,9 +1,10 @@
 // Cache pequeno do modo integrado. Chaves SEMPRE incluem usuário, escritório e ambiente:
 // dados de outro usuário/escritório nunca são servidos; invalidação por prefixo após mutações.
 
-export function cacheKey({ userId, officeId, scope }, resource) {
+export function cacheKey({ userId, officeId, scope, revision = 0 }, resource) {
   if (!userId) throw new Error("cache exige usuário");
-  return `u:${userId}|o:${officeId ?? "-"}|s:${scope}|${resource}`;
+  // A revisão de autorização faz parte da chave: dados de outra revisão nunca são servidos.
+  return `u:${userId}|o:${officeId ?? "-"}|s:${scope}|r:${revision}|${resource}`;
 }
 
 export function createQueryCache({ maxEntries = 100 } = {}) {

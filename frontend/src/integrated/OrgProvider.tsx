@@ -22,7 +22,7 @@ const sessionScopeStore = {
 
 interface OrgApi { org: OrgClient; controller: OrgController; cache: QueryCache; state: OrgState }
 const OrgContext = createContext<OrgApi | null>(null);
-const SERVER_STATE: OrgState = { status: "idle", userId: null, office: null, membership: null, scope: "personal", error: null };
+const SERVER_STATE: OrgState = { status: "idle", userId: null, office: null, membership: null, scope: "personal", error: null, revision: 0 };
 
 export function OrgProvider({ children }: { children: ReactNode }) {
   const { api, state: auth } = useAuth();

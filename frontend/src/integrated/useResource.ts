@@ -1,6 +1,6 @@
 "use client";
 // Recurso do servidor com cache por usuário + escritório + ambiente; estados distintos.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, StaleResponseError } from "@/lib/integration/api-client.mjs";
 import { cacheKey } from "@/lib/integration/query-cache.mjs";
 import { useAuth } from "./AuthProvider";
@@ -28,10 +28,17 @@ export function useApiErrorHandler() {
 export function useResource<T>(resource: string | null, fetcher: () => Promise<T>): Resource<T> & { reload: () => void } {
   const { cache, state } = useOrg();
   const handle = useApiErrorHandler();
-  const key = resource && state.userId ? cacheKey({ userId: state.userId, officeId: state.office?.id ?? null, scope: state.scope }, resource) : null;
-  const [res, setRes] = useState<Resource<T>>(() => {
+  const key = resource && state.userId
+    ? cacheKey({ userId: state.userId, officeId: state.office?.id ?? null, scope: state.scope, revision: state.revision }, resource)
+    : null;
+  // Chave ATUAL: uma resposta só é aplicada/cacheada se ainda pertence à chave (e revisão) vigente.
+  const currentKey = useRef(key);
+  currentKey.current = key;
+  // O estado guarda a chave a que pertence: dados de outra chave/revisão NUNCA são devolvidos,
+  // nem no render intermediário antes do efeito.
+  const [entry, setEntry] = useState<{ key: string | null; res: Resource<T> }>(() => {
     const hit = key ? cache.get(key) : undefined;
-    return hit !== undefined ? { status: "ready", data: hit as T } : { status: "loading" };
+    return { key, res: hit !== undefined ? { status: "ready", data: hit as T } : { status: "loading" } };
   });
   const [tick, setTick] = useState(0);
 
@@ -39,22 +46,30 @@ export function useResource<T>(resource: string | null, fetcher: () => Promise<T
     if (!key) return;
     let alive = true;
     const hit = cache.get(key);
-    setRes(hit !== undefined ? { status: "ready", data: hit as T } : { status: "loading" });
+    setEntry({ key, res: hit !== undefined ? { status: "ready", data: hit as T } : { status: "loading" } });
     fetcher()
-      .then((data) => { if (alive) { cache.set(key, data); setRes({ status: "ready", data }); } })
+      .then((data) => {
+        if (!alive || currentKey.current !== key) return;           // resposta de outra revisão/chave
+        cache.set(key, data);
+        setEntry({ key, res: { status: "ready", data } });
+      })
       .catch((e) => {
-        if (!alive || handle(e)) return;
+        if (!alive || currentKey.current !== key || handle(e)) return;
         if (e instanceof ApiError && (e.status === 403 || e.status === 404)) {
           cache.invalidate(key);
-          setRes({ status: "forbidden", message: "Você não tem acesso a esta área ou ela não existe mais." });
+          setEntry({ key, res: { status: "forbidden", message: "Você não tem acesso a esta área ou ela não existe mais." } });
           return;
         }
-        setRes({ status: "error", message: errorMessage(e), unavailable: e instanceof ApiError && ["unavailable", "network"].includes(e.category) });
+        setEntry({ key, res: { status: "error", message: errorMessage(e), unavailable: e instanceof ApiError && ["unavailable", "network"].includes(e.category) } });
       });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, tick]);
 
+  const res: Resource<T> = entry.key === key ? entry.res : (() => {
+    const hit = key ? cache.get(key) : undefined;
+    return hit !== undefined ? { status: "ready", data: hit as T } : { status: "loading" };
+  })();
   const reload = useCallback(() => { if (key) cache.invalidate(key); setTick((t) => t + 1); }, [cache, key]);
   return Object.assign({}, res, { reload });
 }

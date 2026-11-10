@@ -224,6 +224,50 @@ test("vínculo: preferência de ambiente sobrevive ao recarregamento, mas não c
   assert.equal(ctl.state.scope, "personal");
 });
 
+// ---------------------------------------------------------------- auditoria 6.2
+test("auditoria 6.2: aprovar exige ingresso completo; rejeitar só team.manage", () => {
+  const minimo = capabilities(member(["deadline.read", "team.manage"]));
+  assert.equal(minimo.canRejectRequests, true);
+  assert.equal(minimo.canApproveRequests, false);
+  assert.equal(capabilities(member(MANAGER)).canApproveRequests, true);
+  assert.equal(capabilities(member(["deadline.read"])).canRejectRequests, false);
+});
+
+test("auditoria 6.2: revisão de autorização muda com permissões/visibilidade/vínculo e entra na chave", async () => {
+  const x = orgCtl([officeResp(MANAGER), officeResp(MANAGER), officeResp(["deadline.read"]), noOffice()]);
+  await x.ctl.refresh({ userId: "u1" });
+  const r0 = x.ctl.state.revision;
+  await x.ctl.refresh();                                                             // nada mudou
+  assert.equal(x.ctl.state.revision, r0);
+  await x.ctl.refresh();                                                             // perdeu team.manage
+  assert.equal(x.ctl.state.revision, r0 + 1);
+  await x.ctl.refresh();                                                             // perdeu o vínculo
+  assert.equal(x.ctl.state.revision, r0 + 2);
+  const k1 = cacheKey({ userId: "u1", officeId: "o1", scope: "office", revision: 1 }, "members");
+  const k2 = cacheKey({ userId: "u1", officeId: "o1", scope: "office", revision: 2 }, "members");
+  assert.notEqual(k1, k2);
+});
+
+test("auditoria 6.2: resposta pendente da revisão anterior é descartada (época abortada)", async () => {
+  const gate = deferred();
+  const queue = [officeResp(MANAGER), null, officeResp(["deadline.read"])];
+  const api = createApiClient({ fetchImpl: async (url, init) => {
+    const r = queue.shift();
+    if (r === null) {                                                                // GET /members pausado
+      await new Promise((res, rej) => { init.signal.addEventListener("abort", () => rej(new DOMException("x", "AbortError"))); gate.promise.then(res); });
+      return json(200, { projection: "admin", members: [{ userId: "a", email: "a@x" }] });
+    }
+    return r;
+  } });
+  const org = createOrgClient(api);
+  const ctl = createOrgController({ org, api });
+  await ctl.refresh({ userId: "u1" });
+  const pending = org.members("o1");
+  await ctl.refresh();                                                               // perdeu team.manage
+  gate.resolve();
+  await assert.rejects(pending, (e) => e.name === "StaleResponseError");
+});
+
 // ---------------------------------------------------------------- cache
 test("cache: chaves por usuário, escritório e ambiente; invalidação e teto", () => {
   const a = cacheKey({ userId: "u1", officeId: "o1", scope: "office" }, "members");

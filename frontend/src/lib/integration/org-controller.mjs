@@ -6,6 +6,10 @@
 // - Mudança de usuário, escritório ou perda de vínculo → `onReset` (limpa caches/dados) e nova
 //   época do cliente (respostas antigas descartadas).
 // - Avisos entre abas apenas pedem ressincronização.
+// - `revision`: REVISÃO DE AUTORIZAÇÃO. Incrementa a cada troca de usuário, de escritório, perda de
+//   vínculo ou mudança de permissões/visibilidade. Faz parte das chaves de cache e da chave de
+//   remontagem do conteúdo: dados renderizados, formulários e seleções da revisão anterior são
+//   descartados e as consultas refeitas; respostas da revisão anterior não repovoam nada.
 import { ApiError, StaleResponseError } from "./api-client.mjs";
 
 export const ADMIN_PERMS = Object.freeze(["team.manage", "office.manage"]);
@@ -21,6 +25,10 @@ export function capabilities(membership) {
     canManageTeam: perms.has("team.manage"),
     canManageOffice: perms.has("office.manage"),
     canGrantEntry: perms.has("team.manage") && MEMBER_PERMS.every((p) => perms.has(p)),
+    // Solicitações: aprovar concede ingresso (team.manage + permissões de ingresso);
+    // rejeitar só exige team.manage (mesmas regras do backend).
+    canApproveRequests: perms.has("team.manage") && MEMBER_PERMS.every((p) => perms.has(p)),
+    canRejectRequests: perms.has("team.manage"),
     visibilityAll: membership?.visibility === "all",
   };
 }
@@ -47,7 +55,7 @@ export function canEditTarget(actor, actorId, target) {
  * confirmar o vínculo atual.
  */
 export function createOrgController({ org, api, channel = null, onReset = () => {}, scopeStore = null }) {
-  let state = { status: "idle", userId: null, office: null, membership: null, scope: "personal", error: null };
+  let state = { status: "idle", userId: null, office: null, membership: null, scope: "personal", error: null, revision: 0 };
   const listeners = new Set();
   let seq = 0;
 
@@ -66,9 +74,11 @@ export function createOrgController({ org, api, channel = null, onReset = () => 
       const oldOfficeId = state.office?.id ?? null;
       const permsChanged = JSON.stringify(state.membership?.permissions ?? []) !== JSON.stringify(data?.membership?.permissions ?? [])
         || state.membership?.visibility !== data?.membership?.visibility;
+      let revision = state.revision;
       if (state.userId !== userId || newOfficeId !== oldOfficeId || permsChanged) {
-        api.bumpEpoch();
+        api.bumpEpoch();                                     // aborta e descarta respostas antigas
         onReset({ reason: newOfficeId ? "org-changed" : "no-office" });
+        revision += 1;
       }
       const firstLoad = state.userId !== userId || state.status !== "ready";
       const stored = scopeStore?.get(userId) ?? null;
@@ -79,7 +89,7 @@ export function createOrgController({ org, api, channel = null, onReset = () => 
       else if (oldOfficeId !== newOfficeId) scope = "office";
       else scope = state.scope;
       if (scope === "office" || newOfficeId) scopeStore?.set(userId, scope);
-      set({ status: "ready", userId, office: data?.office ?? null, membership: data?.membership ?? null, scope, error: null });
+      set({ status: "ready", userId, office: data?.office ?? null, membership: data?.membership ?? null, scope, error: null, revision });
       return state;
     } catch (e) {
       if (e instanceof StaleResponseError || mine !== seq) return state;
@@ -92,7 +102,7 @@ export function createOrgController({ org, api, channel = null, onReset = () => 
   function reset(userId) {
     seq++;
     onReset({ reason: "reset" });
-    set({ status: userId ? "loading" : "idle", userId, office: null, membership: null, scope: "personal", error: null });
+    set({ status: userId ? "loading" : "idle", userId, office: null, membership: null, scope: "personal", error: null, revision: state.revision + 1 });
   }
 
   /** Ambiente de navegação. Escritório só se o vínculo atual existir (o servidor decide o resto). */

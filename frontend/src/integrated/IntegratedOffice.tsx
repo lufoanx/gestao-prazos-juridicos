@@ -57,7 +57,7 @@ function OfficeView({ officeId }: { officeId: string }) {
       </Card>
       {caps.canManageTeam ? <JoinCodeCard officeId={officeId} /> : null}
       {caps.canManageTeam ? <InvitationsCard officeId={officeId} canCreate={caps.canGrantEntry} /> : null}
-      {caps.canManageTeam ? <RequestsCard officeId={officeId} canDecide={caps.canGrantEntry} /> : null}
+      {caps.canManageTeam ? <RequestsCard officeId={officeId} canApprove={caps.canApproveRequests} canReject={caps.canRejectRequests} /> : null}
       {!caps.canManageTeam ? <Card><p className="text-muted">Convites, código de ingresso e solicitações são geridos por quem tem a permissão “Gerir equipe”.</p></Card> : null}
     </div>
   );
@@ -142,7 +142,7 @@ function InvitationsCard({ officeId, canCreate }: { officeId: string; canCreate:
   );
 }
 
-function RequestsCard({ officeId, canDecide }: { officeId: string; canDecide: boolean }) {
+function RequestsCard({ officeId, canApprove, canReject }: { officeId: string; canApprove: boolean; canReject: boolean }) {
   const { org } = useOrg();
   const res = useResource("join-requests", () => org.officeRequests(officeId));
   const m = useMutation();
@@ -158,18 +158,18 @@ function RequestsCard({ officeId, canDecide }: { officeId: string; canDecide: bo
               <li key={r.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "6px 0" }}>
                 <span>{r.requester ? `${r.requester.name} (${r.requester.email})` : "Usuário indisponível"}</span>
                 <Badge tone={r.status === "pending" ? "warning" : "neutral"}>{REQUEST_LABEL[r.status]}</Badge>
-                {r.status === "pending" && canDecide ? (
-                  <>
-                    <Button size="sm" disabled={m.busy} onClick={() => setPending({ req: r, action: "approve" })}>Aprovar</Button>
-                    <Button size="sm" variant="ghost" disabled={m.busy} onClick={() => setPending({ req: r, action: "reject" })}>Rejeitar</Button>
-                  </>
+                {r.status === "pending" && canApprove ? (
+                  <Button size="sm" disabled={m.busy} onClick={() => setPending({ req: r, action: "approve" })}>Aprovar</Button>
+                ) : null}
+                {r.status === "pending" && canReject ? (
+                  <Button size="sm" variant="ghost" disabled={m.busy} onClick={() => setPending({ req: r, action: "reject" })}>Rejeitar</Button>
                 ) : null}
               </li>
             ))}
           </ul>
         );
       }}</ResourceState>
-      {!canDecide ? <p className="text-muted">Aprovar exige “Gerir equipe” e todas as permissões padrão de membro.</p> : null}
+      {!canApprove ? <p className="text-muted">Aprovar exige “Gerir equipe” e todas as permissões padrão de membro; rejeitar exige apenas “Gerir equipe”.</p> : null}
       {m.error ? <Notice kind="error">{m.error}</Notice> : null}
       {ok ? <Notice kind="ok">{ok}</Notice> : null}
       <ConfirmDialog open={!!pending} danger={pending?.action === "reject"}

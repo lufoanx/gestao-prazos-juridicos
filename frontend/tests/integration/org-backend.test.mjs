@@ -235,3 +235,25 @@ test("real 6.2: perda de permissão vale na próxima requisição (mesma sessão
   assert.equal((await bia.call("GET", `/offices/${oid}/join-code`)).status, 403);
   assert.equal((await bia.call("GET", `/offices/${oid}/members`)).body.projection, "public");
 });
+
+test("real 6.2 (auditoria): gestor com deadline.read + team.manage lista e rejeita, mas não aprova", async () => {
+  const ana = await browser().signup("Ana");
+  const oid = await officeOf(ana);
+  const bia = await browser().signup("Bia");
+  await invite(ana, oid, bia);
+  assert.equal((await ana.call("PATCH", `/offices/${oid}/members/${bia.user.id}`, { permissions: ["deadline.read", "team.manage"] })).status, 200);
+  const code = (await ana.call("GET", `/offices/${oid}/join-code`)).body.joinCode;
+  const caio = await browser().signup("Caio");
+  const dani = await browser().signup("Dani");
+  const rc = await caio.call("POST", "/join-requests", { joinCode: code });
+  const rd = await dani.call("POST", "/join-requests", { joinCode: code });
+  const list = await bia.call("GET", `/offices/${oid}/join-requests`);
+  assert.equal(list.status, 200);
+  assert.ok(list.body.some((r) => r.id === rc.body.id));
+  const approve = await bia.call("POST", `/offices/${oid}/join-requests/${rd.body.id}/approve`, {});
+  assert.equal(approve.status, 403);                                                       // aprovar exige ingresso completo
+  const reject = await bia.call("POST", `/offices/${oid}/join-requests/${rc.body.id}/reject`, {});
+  assert.equal(reject.status, 200);
+  assert.equal(reject.body.status, "rejected");
+  assert.equal((await caio.call("GET", "/join-requests/me")).body[0].status, "rejected");
+});

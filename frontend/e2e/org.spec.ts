@@ -281,3 +281,107 @@ test("duas abas: saída do escritório numa aba ressincroniza a outra (aviso nã
   await ana.context.close();
   await bia.context.close();
 });
+
+// ---------------------------------------------------------------- auditoria da 6.2
+async function idsOf(page: Page) {
+  return page.evaluate(async () => {
+    const h = { headers: { "x-prazoai-csrf": "1" } };
+    const s = await (await fetch("/bff/session", h)).json();
+    const m = await (await fetch("/bff/api/memberships/me", h)).json();
+    return { uid: s.user.id as string, oid: (m.office?.id ?? null) as string | null };
+  });
+}
+/** Alteração de permissões feita PELO administrador na própria sessão (mesmo contrato da tela). */
+async function setPerms(adminPage: Page, oid: string, uid: string, permissions: string[]) {
+  const status = await adminPage.evaluate(async ({ oid, uid, permissions }) => (await fetch(`/bff/api/offices/${oid}/members/${uid}`, {
+    method: "PATCH", headers: { "x-prazoai-csrf": "1", "content-type": "application/json" }, body: JSON.stringify({ permissions }),
+  })).status, { oid, uid, permissions });
+  expect(status).toBe(200);
+}
+const FULL_MANAGER = ["deadline.read", "deadline.create", "deadline.edit", "deadline.complete", "team.manage"];
+
+async function officeWithMember(browser: Browser, adminName: string, office: string, memberName: string) {
+  const ana = await person(browser, adminName);
+  await createOffice(ana.page, office);
+  const link = await newInviteLink(ana.page);
+  const bia = await person(browser, memberName);
+  await bia.page.goto(link);
+  await bia.page.getByRole("button", { name: "Aceitar convite" }).click();
+  await bia.page.getByRole("button", { name: "Aceitar e entrar" }).click();
+  await expect(bia.page).toHaveURL(/\/app\/escritorio$/);
+  const { oid } = await idsOf(ana.page);
+  const { uid } = await idsOf(bia.page);
+  return { ana, bia, oid: oid!, uid };
+}
+
+test("auditoria 6.2: perda de team.manage descarta dados administrativos na mesma aba; resposta antiga não volta", async ({ browser }) => {
+  const { ana, bia, oid, uid } = await officeWithMember(browser, "Ana Revoga", "Revisões SA", "Bia Gestora");
+  await setPerms(ana.page, oid, uid, FULL_MANAGER);
+  const projections: string[] = [];
+  bia.page.on("response", async (r) => {
+    if (/\/bff\/api\/offices\/[^/]+\/members$/.test(new URL(r.url()).pathname) && r.request().method() === "GET") {
+      try { projections.push((await r.json()).projection); } catch { /* resposta abortada */ }
+    }
+  });
+  await bia.page.goto("/app/escritorio/equipe");
+  await expect(bia.page.getByText(ana.email)).toBeVisible();              // projeção administrativa
+  await expect(bia.page.getByText("Membros (visão de gestão)")).toBeVisible();
+
+  // Pausa a PRÓXIMA consulta de membros (feita enquanto Bia ainda é gestora → resposta administrativa).
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  let held = 0;
+  await bia.page.route(/\/bff\/api\/offices\/[^/]+\/members$/, async (route) => {
+    if (held === 0 && route.request().method() === "GET") {
+      held += 1;
+      const resp = await route.fetch();
+      await gate;
+      await route.fulfill({ response: resp }).catch(() => {});             // a requisição já foi abortada
+    } else await route.continue();
+  });
+  await bia.page.getByRole("link", { name: "Equipe" }).click();          // nova consulta (fica pausada)
+  await expect.poll(() => held).toBe(1);
+
+  await setPerms(ana.page, oid, uid, ["deadline.read"]);                  // administrador retira team.manage
+  await bia.page.evaluate(() => window.dispatchEvent(new Event("focus"))); // a mesma aba revalida (sem recarregar)
+  await expect(bia.page.getByText(ana.email)).toHaveCount(0);             // dados, não só botões
+  await expect(bia.page.getByText("Gerir equipe")).toHaveCount(0);
+  await expect(bia.page.getByText("Membros (visão de gestão)")).toHaveCount(0);
+  await expect(bia.page.getByText("Ana Revoga")).toBeVisible();
+  await expect.poll(() => projections.at(-1)).toBe("public");             // nova consulta pública
+  release();                                                              // resposta antiga (administrativa) chega
+  await bia.page.waitForLoadState("networkidle");
+  await expect(bia.page.getByText(ana.email)).toHaveCount(0);
+  await expect(bia.page.getByText("Gerir equipe")).toHaveCount(0);
+  await bia.page.unroute(/\/bff\/api\/offices\/[^/]+\/members$/);
+
+  await setPerms(ana.page, oid, uid, FULL_MANAGER);                       // recupera a permissão
+  await bia.page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(bia.page.getByText(ana.email)).toBeVisible();
+  await expect(bia.page.getByText("Membros (visão de gestão)")).toBeVisible();
+  await ana.context.close();
+  await bia.context.close();
+});
+
+test("auditoria 6.2: gestor com deadline.read + team.manage rejeita pela interface, mas não vê Aprovar", async ({ browser }) => {
+  const { ana, bia, oid, uid } = await officeWithMember(browser, "Ana Delega", "Rejeições Ltda", "Bia Rejeita");
+  await setPerms(ana.page, oid, uid, ["deadline.read", "team.manage"]);
+  await ana.page.goto("/app/escritorio");
+  const code = (await ana.page.getByTestId("join-code").textContent())!.trim();
+  const caio = await person(browser, "Caio Recusado");
+  await caio.page.goto("/solicitar-ingresso");
+  await caio.page.getByLabel("Código de ingresso").fill(code);
+  await caio.page.getByRole("button", { name: "Solicitar ingresso" }).click();
+  await expect(caio.page.getByText("Pendente")).toBeVisible();
+
+  await bia.page.goto("/app/escritorio");
+  const row = bia.page.locator("li", { hasText: "Caio Recusado" });
+  await expect(row).toBeVisible();                                        // lista
+  await expect(row.getByRole("button", { name: "Aprovar" })).toHaveCount(0);
+  await row.getByRole("button", { name: "Rejeitar" }).click();
+  await bia.page.getByRole("button", { name: "Rejeitar", exact: true }).last().click();
+  await expect(bia.page.getByText("Solicitação rejeitada.")).toBeVisible();
+  await caio.page.reload();
+  await expect(caio.page.getByText("Rejeitada")).toBeVisible();
+  for (const c of [ana, bia, caio]) await c.context.close();
+});

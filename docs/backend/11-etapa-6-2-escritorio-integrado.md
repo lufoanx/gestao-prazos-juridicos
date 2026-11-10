@@ -36,6 +36,9 @@ Os controles aparecem conforme as permissões **atuais** do vínculo; o servidor
   administrativo, nunca sobre outros gestores ou administradores.
 - No formulário, só as permissões que o ator possui ficam habilitadas; `team.manage` e
   `office.manage` exigem administrador; "todos os prazos" exige que o ator tenha essa visibilidade.
+- **Solicitações:** "Aprovar" exige `team.manage` e todas as permissões de ingresso (mesma regra
+  do backend, `can_grant_entry`); "Rejeitar" exige apenas `team.manage` (`can_manage_team`). Um
+  gestor com `deadline.read` + `team.manage` lista e rejeita, mas não aprova.
 - "Promover a administrador" só para administradores. O último administrador é preservado pelo
   servidor: a saída sem sucessor recebe 409 `successor_required` e a tela pede o sucessor.
 - **Reatribuição:** a API não oferece um resumo de responsabilidades. A interface **não** inventa
@@ -74,6 +77,24 @@ Os controles aparecem conforme as permissões **atuais** do vínculo; o servidor
   IP do BFF (compartilhado). Nada foi afrouxado para os testes.
 
 ## 6. Estado e isolamento
+
+**Revisão de autorização (correção da auditoria).** O controlador de vínculo mantém `revision`, que
+incrementa a cada troca de usuário, troca de escritório, perda de vínculo ou mudança de permissões
+ou visibilidade. Ela entra:
+- nas **chaves de cache** (`u:…|o:…|s:…|r:<revisão>|<recurso>`): dados de outra revisão nunca são
+  servidos;
+- na **chave de remontagem** do conteúdo de `/app`: dados renderizados, formulários abertos (por
+  exemplo, a edição de um membro) e seleções incompatíveis são descartados, e as consultas são
+  refeitas com a autorização atual;
+- no hook `useResource`, que guarda a chave a que cada resultado pertence. Ele nunca devolve dados
+  de outra chave, nem no render intermediário, e só aplica ou cacheia uma resposta se ela ainda
+  pertence à chave vigente.
+
+A mudança de revisão também incrementa a época do cliente HTTP, abortando requisições pendentes.
+Uma resposta antiga (pausada) não repovoa estado nem cache. Na equipe, e-mails, permissões e
+visibilidade só aparecem com projeção administrativa **e** `team.manage` atual. 403/404 continuam
+revalidando o vínculo, sem logout.
+
 - Fontes separadas dos contextos demonstrativos: `AuthProvider` → `OrgProvider`
   (`org-controller.mjs`) → hook `useResource` com cache (`query-cache.mjs`).
 - Chaves de cache: `u:<usuário>|o:<escritório>|s:<ambiente>|<recurso>`. O cache é limpo ao trocar

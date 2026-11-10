@@ -4,7 +4,10 @@ import type { Office, OwnMembership, MemberAdmin, MemberPublic } from "./dto.d.m
 export const ADMIN_PERMS: readonly string[];
 export const MEMBER_PERMS: readonly string[];
 export const ALL_PERMS: readonly string[];
-export interface Capabilities { isAdmin: boolean; canManageTeam: boolean; canManageOffice: boolean; canGrantEntry: boolean; visibilityAll: boolean }
+export interface Capabilities {
+  isAdmin: boolean; canManageTeam: boolean; canManageOffice: boolean; canGrantEntry: boolean;
+  canApproveRequests: boolean; canRejectRequests: boolean; visibilityAll: boolean;
+}
 export function capabilities(m: OwnMembership | null | undefined): Capabilities;
 export function grantablePermissions(actor: OwnMembership | null | undefined): string[];
 export function canEditTarget(actor: OwnMembership | null | undefined, actorId: string, target: (MemberAdmin | MemberPublic) & { permissions?: string[] }): boolean;
@@ -12,6 +15,8 @@ export type Scope = "personal" | "office";
 export interface OrgState {
   status: "idle" | "loading" | "ready" | "error" | "unavailable";
   userId: string | null; office: Office | null; membership: OwnMembership | null; scope: Scope; error: string | null;
+  /** Revisão de autorização (troca de usuário/escritório, perda de vínculo, mudança de permissões). */
+  revision: number;
 }
 export interface OrgController {
   readonly state: OrgState;
