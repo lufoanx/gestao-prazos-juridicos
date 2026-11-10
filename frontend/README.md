@@ -97,7 +97,9 @@ frontend/
 Com `NEXT_PUBLIC_PRAZOAI_MODE=integrated` (fixado no build), o frontend fala com o FastAPI por um
 **BFF no próprio Next.js** (`/bff/*`): o navegador recebe só um identificador de sessão em cookie
 HttpOnly; access e refresh tokens ficam no servidor. Integrados: cadastro, login, sessão após
-recarregar, logout, proteção de `/app` e perfil. Demais módulos aparecem como "ainda não
+recarregar, logout, proteção de `/app` e perfil (6.1); onboarding, ambientes pessoal/escritório,
+escritório, equipe, convites (`/convite#TOKEN`) e solicitações de ingresso (6.2, ver
+`docs/backend/11-etapa-6-2-escritorio-integrado.md`). Demais módulos aparecem como "ainda não
 integrados", sem dados demonstrativos. Configuração em `.env.example`; detalhes e limitações em
 `docs/backend/10-etapa-6-1-sessao-bff.md`.
 

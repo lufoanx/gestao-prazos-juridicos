@@ -1,4 +1,6 @@
 "use client";
+import { IntegratedOffice } from "@/integrated/IntegratedOffice";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -7,7 +9,7 @@ import { useScope } from "@/context/ScopeContext";
 import { useOrg } from "@/context/OrgContext";
 import { Input, Button, EmptyState, Badge, Select, Modal, useToast } from "@/components/ui";
 
-export default function EscritorioPage() {
+function DemoEscritorioPage() {
   const router = useRouter();
   const { office, scopeKind, membership, user } = useScope();
   const { updateOffice, memberships, leaveOffice } = useOrg();
@@ -160,4 +162,9 @@ export default function EscritorioPage() {
       ) : null}
     </div>
   );
+}
+
+// Modo integrado (Etapa 6.2): tela real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedOffice /> : <DemoEscritorioPage />;
 }

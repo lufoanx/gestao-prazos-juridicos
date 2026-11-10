@@ -1,24 +1,27 @@
 "use client";
-// Casca do MODO INTEGRADO (6.1): proteção de rota no cliente (o servidor é a autoridade),
-// navegação com módulos ainda não integrados identificados e estados distintos de sessão.
+// Casca do MODO INTEGRADO: proteção de rota no cliente (o servidor é a autoridade), seleção de
+// ambiente (contexto de navegação, nunca autorização) e módulos ainda não integrados identificados.
 import { useEffect, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { useAuth } from "./AuthProvider";
+import { useOrg } from "./OrgProvider";
 
 const NAV = [
   { href: "/app", label: "Início", ready: true },
+  { href: "/app/escritorio", label: "Escritório", ready: true, office: true },
+  { href: "/app/escritorio/equipe", label: "Equipe", ready: true, office: true },
   { href: "/app/perfil", label: "Perfil", ready: true },
   { href: "/app/dashboard", label: "Dashboard", ready: false },
   { href: "/app/prazos", label: "Prazos", ready: false },
   { href: "/app/calendario", label: "Calendário", ready: false },
   { href: "/app/intimacoes", label: "Intimações", ready: false },
   { href: "/app/notificacoes", label: "Notificações", ready: false },
-  { href: "/app/escritorio", label: "Escritório", ready: false },
 ];
 
 export function IntegratedShell({ children }: { children: ReactNode }) {
   const { state, controller } = useAuth();
+  const { state: org, controller: orgCtl } = useOrg();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -42,12 +45,17 @@ export function IntegratedShell({ children }: { children: ReactNode }) {
   }
   if (state.status !== "authenticated" || !state.user) return null;
 
+  const hasOffice = Boolean(org.office);
+  // A chave remonta o conteúdo ao trocar usuário/escritório/ambiente OU a revisão de autorização:
+  // dados renderizados, formulários abertos e seleções incompatíveis são descartados.
+  const contentKey = `${state.user.id}|${org.office?.id ?? "-"}|${org.scope}|r${org.revision}`;
+
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
         <div className="app-sidebar__brand">PrazoAI</div>
         <nav className="app-nav" aria-label="Navegação principal">
-          {NAV.map((item) => (
+          {NAV.filter((i) => !i.office || hasOffice).map((item) => (
             <a key={item.href} href={item.href} className="app-nav__link"
                aria-current={pathname === item.href ? "page" : undefined}>
               {item.label}{!item.ready && <span className="text-muted"> · em integração</span>}
@@ -57,6 +65,14 @@ export function IntegratedShell({ children }: { children: ReactNode }) {
       </aside>
       <div className="app-main">
         <header className="app-header">
+          <label className="text-muted" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            Ambiente
+            <select className="select" aria-label="Ambiente" value={org.scope}
+              onChange={(e) => orgCtl.selectScope(e.target.value as "personal" | "office")}>
+              <option value="personal">Pessoal</option>
+              {org.office ? <option value="office">Escritório: {org.office.name}</option> : null}
+            </select>
+          </label>
           <span className="app-header__spacer" />
           <div className="app-header__actions">
             <span className="user-btn__name">{state.user.name}</span>
@@ -65,7 +81,13 @@ export function IntegratedShell({ children }: { children: ReactNode }) {
             </button>
           </div>
         </header>
-        <main className="app-content" id="conteudo">{children}</main>
+        <main className="app-content" id="conteudo" key={contentKey}>
+          {org.status === "unavailable" ? (
+            <p role="alert" className="field__error">Não foi possível carregar o vínculo com escritório (serviço indisponível).
+              {" "}<button className="btn btn--secondary btn--sm" onClick={() => void orgCtl.revalidate()}>Tentar novamente</button></p>
+          ) : null}
+          {children}
+        </main>
       </div>
     </div>
   );

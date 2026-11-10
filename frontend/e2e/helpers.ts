@@ -12,8 +12,23 @@ export async function signup(page: Page, name: string, email: string) {
   await pw.nth(0).fill(PASSWORD);
   await pw.nth(1).fill(PASSWORD);
   await page.getByRole("button", { name: "Criar conta", exact: true }).click();
+  // 6.2: depois do cadastro vem o onboarding; os testes de sessão seguem pelo ambiente pessoal.
+  await expect(page).toHaveURL(/\/onboarding$/);
+  await page.getByRole("button", { name: "Usar ambiente pessoal" }).click();
   await expect(page).toHaveURL(/\/app$/);
   await expect(page.getByRole("heading", { name: `Olá, ${name}` })).toBeVisible();
+}
+
+/** Cadastro que PARA no onboarding (fluxos da 6.2). */
+export async function signupToOnboarding(page: Page, name: string, email: string) {
+  await page.goto("/cadastro");
+  await page.getByLabel("Nome").fill(name);
+  await page.getByLabel("E-mail").fill(email);
+  const pw = page.locator('input[autocomplete="new-password"]');
+  await pw.nth(0).fill(PASSWORD);
+  await pw.nth(1).fill(PASSWORD);
+  await page.getByRole("button", { name: "Criar conta", exact: true }).click();
+  await expect(page).toHaveURL(/\/onboarding$/);
 }
 
 export async function login(page: Page, email: string) {

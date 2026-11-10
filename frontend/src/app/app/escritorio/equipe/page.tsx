@@ -1,4 +1,6 @@
 "use client";
+import { IntegratedTeam } from "@/integrated/IntegratedTeam";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Users, ShieldAlert, Copy, Link2, Check, X, UserMinus } from "lucide-react";
@@ -27,7 +29,7 @@ const PERMS: [Permission, string][] = [
 const INVITE_TONE = { valid: "info", used: "success", revoked: "neutral", expired: "danger", invalid: "danger" } as const;
 const INVITE_LABEL = { valid: "Pendente", used: "Aceito", revoked: "Revogado", expired: "Expirado", invalid: "Inválido" } as const;
 
-export default function EquipePage() {
+function DemoEquipePage() {
   const { office, scopeKind, membership, user } = useScope();
   const { session } = useSession();
   const org = useOrg();
@@ -340,4 +342,9 @@ function MemberEditor({ member, name, isSelf, onClose, onSave }: {
       </div>
     </Modal>
   );
+}
+
+// Modo integrado (Etapa 6.2): tela real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedTeam /> : <DemoEquipePage />;
 }

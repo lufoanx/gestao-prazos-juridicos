@@ -376,5 +376,26 @@ export function createBff({
     return passthrough(r);
   }
 
-  return { register, login, logout, session, proxy, ensureFresh, CSRF_HEADER };
+  /**
+   * Consulta PÚBLICA de convite (6.2): rota própria, sem sessão e sem mexer em cookies.
+   * Exige o cabeçalho próprio e Origin (é POST); o token vai SÓ no corpo (nunca em URL);
+   * aceita apenas `{ token }` com o formato do contrato; nada é registrado em log.
+   */
+  async function publicInvitationLookup(request) {
+    const denied = guard(request);
+    if (denied) return err(denied.status, denied.code, denied.message);
+    const body = await readJson(request);
+    if (body.error) return body.error;
+    const token = body.value?.token;
+    const keys = Object.keys(body.value ?? {});
+    if (keys.length !== 1 || typeof token !== "string" || token.length < 16 || token.length > 256) {
+      return err(422, "validation_error", "Convite inválido.");
+    }
+    const r = await callBackend(ctx, { method: "POST", path: "/invitations/lookup", body: { token }, clientIp: clientIp(request) });
+    if (r.kind === "unreachable") return err(503, "backend_unavailable", "Serviço indisponível. Tente novamente.");
+    if (r.kind === "uncertain") return err(503, "backend_unavailable", "Serviço indisponível. Tente novamente.");
+    return passthrough(r);
+  }
+
+  return { register, login, logout, session, proxy, publicInvitationLookup, ensureFresh, CSRF_HEADER };
 }
