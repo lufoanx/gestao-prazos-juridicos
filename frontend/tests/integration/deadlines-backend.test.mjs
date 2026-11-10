@@ -238,7 +238,8 @@ test("real 6.3: transferência com consentimentos; intimação vinculada exige c
   assert.equal(r.body.error.code, "linked_intimation_requires_consent");
   r = await ana.call("POST", `/deadlines/${linkedId}/transfer`, { version: 1, officeId: oid, confirmSharing: true, shareLinkedIntimation: true });
   assert.equal(r.status, 200);
-  assert.equal((await ana.call("GET", "/intimations")).status, 404);                     // rotas de intimação NÃO abertas
+  // 6.4 abriu as rotas de intimação usadas pelas telas; retry continua fora (processamento inexistente).
+  assert.equal((await ana.call("POST", `/intimations/${intim.id}/retry`, { version: 2 })).status, 404);
 });
 
 test("real 6.3: calendário com mais resultados que uma página; contagens do mês inteiro", async () => {

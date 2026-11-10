@@ -55,7 +55,7 @@ export function useResource<T>(
     setEntry((prev) => (hit !== undefined
       ? { key, res: { status: "ready", data: hit as T } }
       : prev.key === key && prev.res.status === "ready" ? prev : { key, res: { status: "loading" } }));
-    fetcher()
+    cache.dedupe(`${key}#${tick}`, fetcher)
       .then((data) => {
         if (!alive || currentKey.current !== key) return;           // resposta de outra revisão/chave
         if (opts.accept && !opts.accept(data)) {                    // incompatível: nunca vai ao cache

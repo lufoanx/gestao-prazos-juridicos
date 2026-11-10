@@ -19,7 +19,7 @@ const qs = (s) => new URLSearchParams(s);
 const json = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 
 // ---------------------------------------------------------------- allowlist e query
-test("allowlist 6.3: rotas de prazos/calendário liberadas; intimações/notificações fora", () => {
+test("allowlist 6.3: rotas de prazos/calendário liberadas; anexos e outras rotas fora", () => {
   for (const [m, p] of [["GET", "/deadlines"], ["POST", "/deadlines"], ["GET", `/deadlines/${ID}`], ["PATCH", `/deadlines/${ID}`],
     ["POST", `/deadlines/${ID}/status`], ["POST", `/deadlines/${ID}/transfer`], ["GET", `/deadlines/${ID}/comments`],
     ["POST", `/deadlines/${ID}/comments`], ["GET", `/deadlines/${ID}/history`], ["GET", "/calendar"]]) {
@@ -27,7 +27,7 @@ test("allowlist 6.3: rotas de prazos/calendário liberadas; intimações/notific
   }
   assert.equal(matchAllowlist("DELETE", `/deadlines/${ID}`), "method_not_allowed");
   assert.equal(matchAllowlist("POST", `/deadlines/${ID}/history`), "method_not_allowed");
-  for (const p of ["/intimations", "/notifications", `/deadlines/${ID}/attachments`]) assert.equal(matchAllowlist("GET", p), "not_found");
+  for (const p of ["/attachments", "/ai", `/deadlines/${ID}/attachments`]) assert.equal(matchAllowlist("GET", p), "not_found");
 });
 
 test("query: canônica, validada por rota; desconhecido, repetido, inválido e obrigatório ausente recusados", () => {

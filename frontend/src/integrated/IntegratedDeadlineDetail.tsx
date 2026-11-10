@@ -10,9 +10,8 @@ import { describeEvent } from "@/lib/integration/history-format.mjs";
 import type { CommentPage, Deadline, DeadlineStatus, HistoryPage } from "@/lib/integration/dto.d.mts";
 import { DeadlineFields, draftToInput, validateDraft, type DeadlineDraft } from "./DeadlineFields";
 import { useResource } from "./useResource";
-import { STATUS_LABEL, STATUS_TONE, ScopeGate, UrgencyBadge, useDeadlineContext, useInvalidateDeadlines } from "./deadlineShared";
+import { STATUS_LABEL, STATUS_TONE, ScopeGate, ScopeMismatchNotice, UrgencyBadge, useDeadlineContext, useInvalidateDeadlines } from "./deadlineShared";
 import { Card, Notice, PageHead, ResourceState, fmtDate, useMutation } from "./ui";
-import { useOrg } from "./OrgProvider";
 
 const DEADLINE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -81,31 +80,8 @@ function DetailView({ deadlineId, startEditing }: { deadlineId: string; startEdi
   );
 }
 
-/** Prazo de outro ambiente: nenhum dado, formulário ou ação; troca só por escolha explícita. */
 function ScopeMismatch({ d }: { d: Deadline }) {
-  const { org, me } = useDeadlineContext();
-  const { controller } = useOrg();
-  const target = d.scope.kind === "office" && org.office?.id === d.scope.officeId ? "office"
-    : d.scope.kind === "personal" && d.scope.ownerId === me?.id ? "personal" : null;
-  return (
-    <div>
-      <PageHead title="Prazo de outro ambiente" />
-      <Card>
-        <p role="status">
-          {target === "office" ? `Este prazo pertence ao escritório “${org.office?.name}”, mas o ambiente selecionado é o pessoal.`
-            : target === "personal" ? "Este prazo pertence ao seu ambiente pessoal, mas o ambiente selecionado é o do escritório."
-              : "Este prazo não pertence a nenhum ambiente disponível para você agora."}
-        </p>
-        <p className="text-muted">Para evitar misturar dados e permissões, ele só é exibido no ambiente correspondente.</p>
-        {target ? (
-          <Button onClick={() => controller.selectScope(target)}>
-            {target === "office" ? "Abrir no ambiente do escritório" : "Abrir no ambiente pessoal"}
-          </Button>
-        ) : null}
-        <p style={{ marginTop: 12 }}><Link href="/app/prazos">Voltar à lista do ambiente atual</Link></p>
-      </Card>
-    </div>
-  );
+  return <ScopeMismatchNotice resourceScope={d.scope} noun="Prazo" listHref="/app/prazos" />;
 }
 
 function EditSection({ d, caps, editing, setEditing, reload }: { d: Deadline; caps: DeadlineCaps; editing: boolean; setEditing: (v: boolean) => void; reload: () => void }) {

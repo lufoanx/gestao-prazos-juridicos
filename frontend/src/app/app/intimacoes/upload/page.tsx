@@ -1,4 +1,6 @@
 "use client";
+import { IntegratedIntimationRegister } from "@/integrated/IntegratedIntimationRegister";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { UploadCloud, FileText, X, Loader2, CheckCircle2, AlertTriangle, ShieldAlert } from "lucide-react";
@@ -16,7 +18,7 @@ function formatSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export default function UploadIntimacaoPage() {
+function DemoUploadPage() {
   const router = useRouter();
   const { scopeKind, membership } = useScope();
   const { uploadIntimation, retryIntimation, getIntimation } = useData();
@@ -183,4 +185,9 @@ export default function UploadIntimacaoPage() {
       </div>
     </div>
   );
+}
+
+// Modo integrado (Etapa 6.4): tela real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedIntimationRegister /> : <DemoUploadPage />;
 }

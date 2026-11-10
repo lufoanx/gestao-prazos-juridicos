@@ -151,8 +151,8 @@ comentários, histórico, calendário e transferência (**Etapa 4**) e intimaç�
 humana e notificações internas (**Etapa 5**, sem arquivos nem IA), com armazenamento **em
 memória** — não é persistente nem está pronto para produção. Na **Etapa 6.1**, o frontend
 ganhou um **modo integrado** (BFF no Next.js) para cadastro, login, sessão, logout e perfil; na
-**6.2**, onboarding, escritório, equipe, convites e solicitações; na **6.3**, prazos e calendário; dashboard,
-intimações e notificações seguem em integração. Ver o [README do backend](backend/README.md).
+**6.2**, onboarding, escritório, equipe, convites e solicitações; na **6.3**, prazos e calendário; na **6.4**, intimações (somente metadados, com revisão humana) e
+notificações internas; o dashboard segue em integração. Ver o [README do backend](backend/README.md).
 
 ### Ainda são etapas futuras
 - Armazenamento real de arquivos e processamento de intimações (IA/OCR)
@@ -169,7 +169,7 @@ intimações e notificações seguem em integração. Ver o [README do backend](
 ## Status do projeto
 
 Projeto acadêmico da disciplina PAC Extensionista VII. O **protótipo de frontend está
-concluído e navegável** (modo demo); o **modo integrado** (Etapas 6.1–6.3) já conecta conta, sessão, perfil, escritório, equipe, convites, solicitações, prazos e calendário ao backend. O backend tem a
+concluído e navegável** (modo demo); o **modo integrado** (Etapas 6.1–6.4) já conecta conta, sessão, perfil, escritório, equipe, convites, solicitações, prazos, calendário, intimações e notificações ao backend. O backend tem a
 fundação, a autenticação (Etapa 2), escritórios/equipe/permissões (Etapa 3) prazos (Etapa 4) e intimações/notificações (Etapa 5), em memória. Requisitos e validação do problema
 foram levantados nas etapas anteriores.
 
