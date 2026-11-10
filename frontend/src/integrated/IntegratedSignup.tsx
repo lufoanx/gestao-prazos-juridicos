@@ -19,7 +19,8 @@ export function passwordProblem(pw: string): string | undefined {
   return undefined;
 }
 
-export function IntegratedSignup() {
+/** `embedded`: usado dentro de outra tela (ex.: convite) — não navega e não usa a moldura. */
+export function IntegratedSignup({ embedded = false, onSuccess }: { embedded?: boolean; onSuccess?: () => void } = {}) {
   const router = useRouter();
   const { controller } = useAuth();
   const [form, setForm] = useState({ name: "", email: "", pw: "", pw2: "" });
@@ -41,7 +42,7 @@ export function IntegratedSignup() {
     try {
       await controller.register(form.name.trim(), form.email.trim(), form.pw);
       await controller.login(form.email.trim(), form.pw);
-      router.push("/app");
+      if (onSuccess) onSuccess(); else router.push("/onboarding");   // 6.2: escolha de ambiente
     } catch (err) {
       const msg = err instanceof ApiError && err.code === "email_already_registered"
         ? "Este e-mail já está cadastrado." : errorMessage(err);
@@ -53,7 +54,7 @@ export function IntegratedSignup() {
   }
 
   return (
-    <AuthShell title="Criar conta" subtitle="Comece a organizar seus prazos.">
+    <Frame embedded={embedded} title="Criar conta" subtitle="Comece a organizar seus prazos.">
       <form className="auth__form" onSubmit={submit} noValidate aria-label="Criar conta">
         <Input label="Nome" autoComplete="name" required value={form.name} onChange={set("name")} error={errors.name} />
         <Input label="E-mail" type="email" autoComplete="email" required value={form.email} onChange={set("email")} error={errors.email} />
@@ -65,6 +66,10 @@ export function IntegratedSignup() {
       <div className="divider">ou</div>
       <UnavailableNote feature="Criar conta com Google" reason="O cadastro com Google ainda não está disponível nesta fase." />
       <p className="auth__alt">Já tem conta? <Link href="/login">Entrar</Link></p>
-    </AuthShell>
+    </Frame>
   );
+}
+
+function Frame({ embedded, title, subtitle, children }: { embedded: boolean; title: string; subtitle: string; children: React.ReactNode }) {
+  return embedded ? <div aria-label={title}>{children}</div> : <AuthShell title={title} subtitle={subtitle}>{children}</AuthShell>;
 }

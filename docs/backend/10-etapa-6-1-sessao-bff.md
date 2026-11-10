@@ -111,7 +111,8 @@ tela de indisponibilidade, **sem logout e sem dados demonstrativos**) · `rate_l
 
 ## 6. Proxy restrito
 - Destino fixo (`PRAZOAI_BACKEND_URL`, só servidor); nenhuma URL vem do cliente.
-- Lista explícita (`allowlist.mjs`): `GET /auth/me`, `GET /users/me`, `PATCH /users/me`. Login,
+- Lista explícita (`allowlist.mjs`): `GET /auth/me`, `GET /users/me`, `PATCH /users/me` (6.1),
+  ampliada na 6.2 com as rotas de escritório/equipe/convites/solicitações (ver doc 11). Login,
   cadastro, refresh e logout **não** passam pelo proxy (têm rotas próprias; refresh nunca é exposto).
 - Segmentos validados (`[A-Za-z0-9_-]`, até 8): nada de `..`, codificações, query ou URL absoluta.
 - Cabeçalhos para o backend são **montados do zero**: `Authorization`, cookies, `Host`,

@@ -12,7 +12,8 @@ import { UnavailableNote } from "./Unavailable";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export function IntegratedLogin() {
+/** `embedded`: usado dentro de outra tela (ex.: convite) — não navega e não usa a moldura. */
+export function IntegratedLogin({ embedded = false, onSuccess }: { embedded?: boolean; onSuccess?: () => void } = {}) {
   const router = useRouter();
   const { controller, state } = useAuth();
   const [email, setEmail] = useState("");
@@ -31,7 +32,7 @@ export function IntegratedLogin() {
     try {
       await controller.login(email.trim(), pw);
       setPw("");
-      router.push("/app");
+      if (onSuccess) onSuccess(); else router.push("/app");
     } catch (err) {
       // login_cancelled (servidor) ou resposta descartada porque outra aba encerrou a sessão.
       const cancelled = (err instanceof ApiError && err.code === "login_cancelled") || err instanceof StaleResponseError;
@@ -50,7 +51,7 @@ export function IntegratedLogin() {
   }
 
   return (
-    <AuthShell title="Entrar" subtitle="Acesse seu painel de prazos.">
+    <Frame embedded={embedded} title="Entrar" subtitle="Acesse seu painel de prazos.">
       {state.status === "expired" && (
         <div className="form-note" role="status"><span>Sua sessão terminou. Entre novamente.</span></div>
       )}
@@ -69,6 +70,10 @@ export function IntegratedLogin() {
       <div className="divider">ou</div>
       <UnavailableNote feature="Entrar com Google" reason="O login com Google ainda não está disponível nesta fase." />
       <p className="auth__alt">Não tem conta? <Link href="/cadastro">Criar conta</Link></p>
-    </AuthShell>
+    </Frame>
   );
+}
+
+function Frame({ embedded, title, subtitle, children }: { embedded: boolean; title: string; subtitle: string; children: React.ReactNode }) {
+  return embedded ? <div aria-label={title}>{children}</div> : <AuthShell title={title} subtitle={subtitle}>{children}</AuthShell>;
 }

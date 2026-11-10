@@ -136,7 +136,13 @@ test("rotas: modo integrado reescreve módulos não integrados e recursos indisp
   assert.deepEqual(routeDecision("/app/prazos/123", "integrated"), { action: "rewrite", to: "/app/nao-integrado" });
   assert.deepEqual(routeDecision("/esqueci-senha", "integrated"), { action: "rewrite", to: "/indisponivel" });
   assert.deepEqual(routeDecision("/redefinir-senha/abc", "integrated"), { action: "rewrite", to: "/indisponivel" });
-  assert.deepEqual(routeDecision("/convite/abc", "integrated"), { action: "rewrite", to: "/nao-integrado" });
+  // 6.2: convite pelo fragmento; o formato antigo vai para uma página que não chama a API.
+  assert.deepEqual(routeDecision("/convite/abc", "integrated"), { action: "rewrite", to: "/convite-antigo" });
+  assert.deepEqual(routeDecision("/convite", "integrated"), { action: "allow" });
+  assert.deepEqual(routeDecision("/onboarding/escritorio", "integrated"), { action: "allow" });
+  assert.deepEqual(routeDecision("/solicitar-ingresso", "integrated"), { action: "allow" });
+  assert.deepEqual(routeDecision("/app/escritorio/equipe", "integrated"), { action: "allow" });
+  assert.deepEqual(routeDecision("/app/escritorio/outra", "integrated"), { action: "rewrite", to: "/app/nao-integrado" });
   assert.deepEqual(routeDecision("/login", "integrated"), { action: "allow" });
   assert.deepEqual(routeDecision("/bff/session", "integrated"), { action: "allow" });
 });
