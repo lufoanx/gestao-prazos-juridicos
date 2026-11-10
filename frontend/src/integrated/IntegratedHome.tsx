@@ -31,7 +31,8 @@ export function IntegratedHome() {
       ) : null}
       <Card>
         <p>Prazos e calendário do ambiente selecionado: <Link href="/app/prazos">ver prazos</Link> · <Link href="/app/calendario">ver calendário</Link>.</p>
-        <p className="text-muted">Dashboard, intimações e notificações ainda estão em integração. Nenhum dado demonstrativo é exibido no modo integrado.</p>
+        <p>Intimações (somente metadados, com revisão humana): <Link href="/app/intimacoes">ver intimações</Link> · <Link href="/app/notificacoes">notificações</Link>.</p>
+        <p className="text-muted">O dashboard ainda está em integração. Nenhum dado demonstrativo é exibido no modo integrado.</p>
       </Card>
     </div>
   );

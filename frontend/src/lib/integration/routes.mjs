@@ -5,9 +5,14 @@
 // 6.3: prazos (lista, cadastro, detalhe, edição) e calendário.
 export const INTEGRATED_APP_ROUTES = Object.freeze([
   "/app", "/app/perfil", "/app/escritorio", "/app/escritorio/equipe", "/app/prazos", "/app/prazos/novo", "/app/calendario",
+  // 6.4: intimações e notificações.
+  "/app/intimacoes", "/app/intimacoes/upload", "/app/notificacoes",
 ]);
 // Rotas dinâmicas integradas (segmento de id validado).
-const INTEGRATED_APP_PATTERNS = Object.freeze([/^\/app\/prazos\/[A-Za-z0-9_-]{1,64}$/, /^\/app\/prazos\/[A-Za-z0-9_-]{1,64}\/editar$/]);
+const INTEGRATED_APP_PATTERNS = Object.freeze([
+  /^\/app\/prazos\/[A-Za-z0-9_-]{1,64}$/, /^\/app\/prazos\/[A-Za-z0-9_-]{1,64}\/editar$/,
+  /^\/app\/intimacoes\/[A-Za-z0-9_-]{1,64}$/, /^\/app\/intimacoes\/[A-Za-z0-9_-]{1,64}\/revisao$/,
+]);
 export const UNAVAILABLE_PUBLIC = Object.freeze(["/esqueci-senha", "/redefinir-senha"]);
 export const PENDING_PUBLIC = Object.freeze([]);
 

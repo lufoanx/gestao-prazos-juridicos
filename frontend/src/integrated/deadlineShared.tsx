@@ -1,6 +1,8 @@
 "use client";
 // Contexto comum das telas de prazos (6.3): cliente, ambiente, capacidades e nomes autorizados.
 import { useCallback, useMemo } from "react";
+import Link from "next/link";
+import { Button } from "@/components/ui";
 import { cacheKey } from "@/lib/integration/query-cache.mjs";
 import { Badge } from "@/components/ui";
 import { createDeadlinesClient } from "@/lib/integration/deadlines-client.mjs";
@@ -59,4 +61,41 @@ export function ScopeGate({ children }: { children: React.ReactNode }) {
     return <p role="status" className="text-muted">Você não tem a permissão “Ver prazos” neste escritório. Seus prazos pessoais continuam no ambiente pessoal.</p>;
   }
   return <>{children}</>;
+}
+
+/**
+ * Recurso de OUTRO ambiente (prazo ou intimação): nenhum dado, formulário ou ação; troca de
+ * ambiente só por escolha explícita. Usado pelos detalhes de prazos (6.3) e intimações (6.4).
+ */
+export function ScopeMismatchNotice({ resourceScope, noun, listHref }: {
+  resourceScope: { kind: "personal" | "office"; ownerId: string | null; officeId: string | null };
+  noun: "Prazo" | "Intimação"; listHref: string;
+}) {
+  const { org, me } = useDeadlineContext();
+  const { controller } = useOrg();
+  const lower = noun.toLowerCase();
+  const target = resourceScope.kind === "office" && org.office?.id === resourceScope.officeId ? "office"
+    : resourceScope.kind === "personal" && resourceScope.ownerId === me?.id ? "personal" : null;
+  const article = noun === "Prazo" ? "Este" : "Esta";
+  return (
+    <div>
+      <div className="page-head"><div className="page-head__title">
+        <h1 style={{ fontSize: "var(--fs-2xl)", fontWeight: 700, margin: 0 }}>{noun} de outro ambiente</h1>
+      </div></div>
+      <div className="card" style={{ marginBottom: 16 }}><div className="card__body">
+        <p role="status">
+          {target === "office" ? `${article} ${lower} pertence ao escritório “${org.office?.name}”, mas o ambiente selecionado é o pessoal.`
+            : target === "personal" ? `${article} ${lower} pertence ao seu ambiente pessoal, mas o ambiente selecionado é o do escritório.`
+              : `${article} ${lower} não pertence a nenhum ambiente disponível para você agora.`}
+        </p>
+        <p className="text-muted">Para evitar misturar dados e permissões, só é exibido no ambiente correspondente.</p>
+        {target ? (
+          <Button onClick={() => controller.selectScope(target)}>
+            {target === "office" ? "Abrir no ambiente do escritório" : "Abrir no ambiente pessoal"}
+          </Button>
+        ) : null}
+        <p style={{ marginTop: 12 }}><Link href={listHref}>Voltar à lista do ambiente atual</Link></p>
+      </div></div>
+    </div>
+  );
 }

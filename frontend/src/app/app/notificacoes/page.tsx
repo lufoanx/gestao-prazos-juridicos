@@ -1,4 +1,6 @@
 "use client";
+import { IntegratedNotifications } from "@/integrated/IntegratedNotifications";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bell, CheckCheck, Check } from "lucide-react";
@@ -8,7 +10,7 @@ import { formatCivil } from "@/lib/dates.mjs";
 import type { Notification } from "@/types/domain";
 import { Badge, Button, Filters, EmptyState } from "@/components/ui";
 
-export default function NotificacoesPage() {
+function DemoNotificacoesPage() {
   const router = useRouter();
   const { scope, scopeKind } = useScope();
   const { notifications, markNotificationRead, markAllNotificationsRead } = useData();
@@ -84,4 +86,9 @@ export default function NotificacoesPage() {
       )}
     </div>
   );
+}
+
+// Modo integrado (Etapa 6.4): tela real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedNotifications /> : <DemoNotificacoesPage />;
 }

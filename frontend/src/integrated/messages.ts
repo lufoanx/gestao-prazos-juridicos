@@ -36,7 +36,7 @@ const ORG_MESSAGES: Record<string, string> = {
   invitation_used: "Este convite já foi utilizado.",
   forbidden: "Você não tem permissão para esta operação.",
   // 6.3 — prazos
-  version_conflict: "Este prazo foi alterado por outra pessoa ou aba depois que você o abriu. Nada foi salvo.",
+  version_conflict: "Este registro foi alterado por outra pessoa ou aba depois que você o abriu. Nada foi salvo.",
   status_unchanged: "O prazo já está neste status.",
   invalid_transition: "Transição de status não permitida. Reabra o prazo antes.",
   responsible_inactive: "O responsável não pertence mais ao escritório. Escolha um novo responsável para reabrir.",
@@ -48,6 +48,11 @@ const ORG_MESSAGES: Record<string, string> = {
   deadline_limit_reached: "Limite de prazos do ambiente atingido.",
   history_limit_reached: "Limite de histórico deste prazo atingido.",
   validation_error: "Dados inválidos. Revise os campos.",
+  // 6.4 — intimações
+  already_reviewed: "Esta intimação já foi revisada.",
+  invalid_state: "A intimação não está mais aguardando revisão (pode ter sido confirmada ou descartada).",
+  operational_responsible_required: "O autor não pertence mais ao escritório: a intimação precisa de um responsável sugerido. Seu rascunho foi mantido.",
+  processing_unavailable: "Processamento indisponível nesta fase.",
 };
 
 export function orgErrorMessage(e: unknown, fallback?: string): string {

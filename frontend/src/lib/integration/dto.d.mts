@@ -55,3 +55,30 @@ export interface DeadlineInput {
   priority: "normal" | "high"; startDate: string; dueDate: string; countingMode: "business" | "calendar";
   duration: number; agendaTime?: string | null; reviewed: boolean;
 }
+
+// ---- 6.4: intimações e notificações (espelham backend/app/schemas/intimations.py)
+export type IntimationStatus = "processing" | "awaiting_review" | "failed" | "reviewed" | "discarded";
+export interface IntimationDraft {
+  title: string | null; caseNumber: string | null; court: string | null; practiceArea: string | null;
+  startDate: string | null; dueDate: string | null; countingMode: "business" | "calendar" | null;
+  duration: number | null; priority: "normal" | "high" | null; agendaTime: string | null;
+}
+export interface Intimation {
+  id: string; scope: DeadlineScope;
+  file: { name: string; sizeBytes: number; contentType: string; storage: "not_stored" | string };
+  receivedAt: string; status: IntimationStatus;
+  processing: { status: "not_available" | "pending" | "completed" | "failed" | string; attempts: number; failureCode: string | null };
+  draft: IntimationDraft; suggestion: { source: string; fields: Record<string, unknown> } | null;
+  suggestedResponsibleId: string | null; deadlineId: string | null; linked: boolean;
+  createdBy: string; createdAt: string; updatedAt: string; closedAt: string | null; version: number;
+}
+export interface IntimationPage { items: Intimation[]; page: number; perPage: number; total: number; }
+export interface IntimationEventPage { items: HistoryEvent[]; page: number; perPage: number; total: number; }
+export interface ConfirmResult { intimation: Intimation; deadline: Deadline; created: boolean; }
+export interface RegisterIntimation { fileName: string; sizeBytes: number; contentType: "application/pdf"; receivedAt: string; suggestedResponsibleId?: string; }
+export type NotificationSummary = Record<string, unknown>;
+export interface InboxNotification {
+  id: string; kind: "deadline_assigned" | "intimation_assigned" | string; resourceType: "deadline" | "intimation" | string;
+  resourceId: string; summary: NotificationSummary; createdAt: string; readAt: string | null;
+}
+export interface NotificationPage { items: InboxNotification[]; page: number; perPage: number; total: number; unread: number; retentionPolicy: string; }

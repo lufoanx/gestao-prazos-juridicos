@@ -1,4 +1,6 @@
 "use client";
+import { IntegratedIntimationRoute } from "@/integrated/IntegratedIntimationDetail";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -14,7 +16,7 @@ import type { Deadline } from "@/types/domain";
 import { Breadcrumb, Button, EmptyState, useToast } from "@/components/ui";
 import { DeadlineForm, PRACTICE_AREAS } from "@/components/deadlines/DeadlineForm";
 
-export default function RevisaoIntimacaoPage() {
+function DemoRevisaoPage() {
   const params = useParams<{ id: string }>();
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
   const router = useRouter();
@@ -158,4 +160,9 @@ export default function RevisaoIntimacaoPage() {
       )}
     </div>
   );
+}
+
+// Modo integrado (Etapa 6.4): tela real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedIntimationRoute /> : <DemoRevisaoPage />;
 }

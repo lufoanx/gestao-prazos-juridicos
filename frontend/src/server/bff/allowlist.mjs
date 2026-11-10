@@ -3,6 +3,8 @@
 // 6.1: conta e perfil. 6.2: vínculo, escritório, equipe, convites (aceite) e solicitações.
 // A consulta PÚBLICA de convite NÃO passa por aqui: tem rota própria (/bff/public/...).
 // 6.3: prazos, status, transferência, comentários, histórico e calendário.
+// 6.4: intimações (metadados, rascunho, confirmação, descarte, histórico) e notificações internas.
+//      `retry` NÃO é exposto: o processamento não existe nesta fase e a interface não o oferece.
 //
 // QUERY STRINGS (6.3): só rotas com `query` aceitam parâmetros, e somente os listados, cada um com
 // validador próprio (enum, inteiro com faixa, data civil, id, texto limitado). Parâmetro
@@ -40,6 +42,22 @@ const CALENDAR_QUERY = Object.freeze({
   page: PAGE,
   perPage: { check: intIn(1, 500) },
 });
+
+const SCOPE_REQUIRED = { check: enumOf("personal", "office"), required: true };
+const INTIMATION_LIST_QUERY = Object.freeze({
+  scope: SCOPE_REQUIRED,
+  status: { check: enumOf("processing", "awaiting_review", "failed", "reviewed", "discarded") },
+  q: { check: text(100) },
+  page: PAGE,
+  perPage: { check: intIn(1, 100) },
+});
+const NOTIFICATION_LIST_QUERY = Object.freeze({
+  scope: SCOPE_REQUIRED,
+  unreadOnly: { check: enumOf("true", "false") },
+  page: PAGE,
+  perPage: { check: intIn(1, 100) },
+});
+const SCOPE_ONLY_QUERY = Object.freeze({ scope: SCOPE_REQUIRED });
 
 export const PROXY_ALLOWLIST = Object.freeze([
   // 6.1
@@ -81,6 +99,19 @@ export const PROXY_ALLOWLIST = Object.freeze([
   { method: "POST", path: "/deadlines/:id/comments" },
   { method: "GET", path: "/deadlines/:id/history", query: PAGED_QUERY },
   { method: "GET", path: "/calendar", query: CALENDAR_QUERY },
+  // 6.4 — intimações (somente metadados declarados; nenhum arquivo trafega)
+  { method: "GET", path: "/intimations", query: INTIMATION_LIST_QUERY },
+  { method: "POST", path: "/intimations" },
+  { method: "GET", path: "/intimations/:id" },
+  { method: "PATCH", path: "/intimations/:id" },
+  { method: "POST", path: "/intimations/:id/confirm" },
+  { method: "POST", path: "/intimations/:id/discard" },
+  { method: "GET", path: "/intimations/:id/history", query: PAGED_QUERY },
+  // 6.4 — notificações internas (por destinatário; autorização atual decidida no servidor)
+  { method: "GET", path: "/notifications", query: NOTIFICATION_LIST_QUERY },
+  { method: "GET", path: "/notifications/unread-count", query: SCOPE_ONLY_QUERY },
+  { method: "POST", path: "/notifications/:id/read" },
+  { method: "POST", path: "/notifications/read-all", query: SCOPE_ONLY_QUERY },
 ]);
 
 const SEGMENT = /^[A-Za-z0-9_-]{1,64}$/;

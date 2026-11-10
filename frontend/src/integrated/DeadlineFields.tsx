@@ -42,9 +42,11 @@ export function draftToInput(d: DeadlineDraft): DeadlineInput {
   };
 }
 
-export function DeadlineFields({ draft, onChange, errors, responsibles, lockResponsible }: {
+export function DeadlineFields({ draft, onChange, errors, responsibles, lockResponsible, hideReviewed }: {
   draft: DeadlineDraft; onChange: (d: DeadlineDraft) => void; errors: Record<string, string>;
   responsibles: Array<{ userId: string; name: string }>; lockResponsible?: boolean;
+  /** Confirmação de intimação: a revisão humana tem declaração própria e o servidor marca o prazo como revisado. */
+  hideReviewed?: boolean;
 }) {
   const set = <K extends keyof DeadlineDraft>(k: K) => (v: DeadlineDraft[K]) => onChange({ ...draft, [k]: v });
   return (
@@ -72,10 +74,12 @@ export function DeadlineFields({ draft, onChange, errors, responsibles, lockResp
         Duração e forma de contagem são referências organizacionais: o sistema não calcula o prazo processual
         oficial. O vencimento é o informado acima.
       </p>
-      <label style={{ display: "block", margin: "8px 0" }}>
-        <input type="checkbox" checked={draft.reviewed} onChange={(e) => set("reviewed")(e.target.checked)} />{" "}
-        Conferi os dados (declaração sua; não é certificação jurídica)
-      </label>
+      {hideReviewed ? null : (
+        <label style={{ display: "block", margin: "8px 0" }}>
+          <input type="checkbox" checked={draft.reviewed} onChange={(e) => set("reviewed")(e.target.checked)} />{" "}
+          Conferi os dados (declaração sua; não é certificação jurídica)
+        </label>
+      )}
     </>
   );
 }

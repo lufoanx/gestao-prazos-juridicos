@@ -1,6 +1,9 @@
 "use client";
+import { IntegratedIntimationList } from "@/integrated/IntegratedIntimationList";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Upload, Inbox } from "lucide-react";
 import { useScope } from "@/context/ScopeContext";
 import { useData } from "@/context/DataContext";
@@ -18,7 +21,7 @@ const STATUS_TONE: Record<Intimation["status"], "neutral" | "info" | "warning" |
   sent: "neutral", processing: "info", awaiting_review: "warning", reviewed: "success", failed: "danger",
 };
 
-export default function IntimacoesPage() {
+function DemoIntimacoesPage() {
   const router = useRouter();
   const { scope, scopeKind, user, membership } = useScope();
   const { intimations, deadlines } = useData();
@@ -72,7 +75,7 @@ export default function IntimacoesPage() {
         </div>
         {canUpload ? (
           <div className="page-head__actions">
-            <a className="btn btn--primary" href="/app/intimacoes/upload"><Upload size={17} aria-hidden /> Enviar intimação</a>
+            <Link className="btn btn--primary" href="/app/intimacoes/upload"><Upload size={17} aria-hidden /> Enviar intimação</Link>
           </div>
         ) : null}
       </div>
@@ -109,4 +112,9 @@ export default function IntimacoesPage() {
       )}
     </div>
   );
+}
+
+// Modo integrado (Etapa 6.4): tela real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedIntimationList /> : <DemoIntimacoesPage />;
 }

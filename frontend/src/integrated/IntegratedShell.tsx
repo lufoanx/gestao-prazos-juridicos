@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { useAuth } from "./AuthProvider";
 import { useOrg } from "./OrgProvider";
+import { UnreadCount } from "./IntegratedNotifications";
 
 const NAV = [
   { href: "/app", label: "Início", ready: true },
@@ -15,8 +16,8 @@ const NAV = [
   { href: "/app/dashboard", label: "Dashboard", ready: false },
   { href: "/app/prazos", label: "Prazos", ready: true },
   { href: "/app/calendario", label: "Calendário", ready: true },
-  { href: "/app/intimacoes", label: "Intimações", ready: false },
-  { href: "/app/notificacoes", label: "Notificações", ready: false },
+  { href: "/app/intimacoes", label: "Intimações", ready: true },
+  { href: "/app/notificacoes", label: "Notificações", ready: true },
 ];
 
 export function IntegratedShell({ children }: { children: ReactNode }) {
@@ -57,8 +58,9 @@ export function IntegratedShell({ children }: { children: ReactNode }) {
         <nav className="app-nav" aria-label="Navegação principal">
           {NAV.filter((i) => !i.office || hasOffice).map((item) => (
             <a key={item.href} href={item.href} className="app-nav__link"
-               aria-current={pathname === item.href || (item.href === "/app/prazos" && pathname.startsWith("/app/prazos/")) ? "page" : undefined}>
-              {item.label}{!item.ready && <span className="text-muted"> · em integração</span>}
+               aria-current={pathname === item.href || (["/app/prazos", "/app/intimacoes"].includes(item.href) && pathname.startsWith(`${item.href}/`)) ? "page" : undefined}>
+              {item.label}{item.href === "/app/notificacoes" && org.status === "ready" ? <UnreadCount key={contentKey} /> : null}
+              {!item.ready && <span className="text-muted"> · em integração</span>}
             </a>
           ))}
         </nav>

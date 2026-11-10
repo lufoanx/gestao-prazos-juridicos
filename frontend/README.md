@@ -100,7 +100,9 @@ HttpOnly; access e refresh tokens ficam no servidor. Integrados: cadastro, login
 recarregar, logout, proteção de `/app` e perfil (6.1); onboarding, ambientes pessoal/escritório,
 escritório, equipe, convites (`/convite#TOKEN`) e solicitações de ingresso (6.2, ver
 `docs/backend/11-etapa-6-2-escritorio-integrado.md`); prazos (lista, cadastro, detalhe, status,
-comentários, histórico, transferência) e calendário (6.3, ver `docs/backend/12-etapa-6-3-prazos-integrados.md`). Demais módulos aparecem como "ainda não
+comentários, histórico, transferência) e calendário (6.3, ver `docs/backend/12-etapa-6-3-prazos-integrados.md`);
+intimações (somente metadados, revisão humana e confirmação) e notificações internas (6.4, ver
+`docs/backend/14-etapa-6-4-intimacoes-notificacoes-integradas.md`). Demais módulos aparecem como "ainda não
 integrados", sem dados demonstrativos. Configuração em `.env.example`; detalhes e limitações em
 `docs/backend/10-etapa-6-1-sessao-bff.md`.
 

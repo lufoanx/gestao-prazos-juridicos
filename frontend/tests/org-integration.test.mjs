@@ -31,8 +31,8 @@ test("allowlist 6.2: rotas necessárias liberadas, segmentos dinâmicos validado
   for (const [m, p] of ok) assert.equal(matchAllowlist(m, p), "ok", `${m} ${p}`);
   assert.equal(matchAllowlist("POST", "/invitations/lookup"), "not_found");           // pública: rota própria
   assert.equal(matchAllowlist("DELETE", `/offices/${ID}/members/${ID}`), "method_not_allowed");
-  assert.equal(matchAllowlist("GET", "/intimations"), "not_found");                     // módulos futuros fora
-  assert.equal(matchAllowlist("GET", "/notifications"), "not_found");
+  assert.equal(matchAllowlist("GET", "/attachments"), "not_found");                     // fora do escopo
+  assert.equal(matchAllowlist("GET", "/ai"), "not_found");
   assert.equal(matchAllowlist("GET", `/offices/${ID}/members/${ID}/extra`), "not_found");
   assert.equal(matchAllowlist("GET", `/offices/${"x".repeat(65)}`), "not_found");
   assert.equal(matchAllowlist("GET", "/offices/a.b"), "not_found");
