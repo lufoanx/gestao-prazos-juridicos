@@ -299,3 +299,19 @@ test("real 6.4: notificação oculta ao perder acesso e visível ao recuperá-lo
   assert.ok(back.body.total >= 1);
   assert.ok(back.body.items.some((n) => n.resourceId === d.id));
 });
+
+test("real 6.4 (auditoria): autora confirma para si; após reatribuição, linked=true, deadlineId=null e prazo 404", async () => {
+  const { ana, bia, caio } = await team();
+  const i = (await bia.call("POST", "/intimations", META({ suggestedResponsibleId: bia.user.id }))).body;
+  const c = await bia.call("POST", `/intimations/${i.id}/confirm`, { version: i.version, ...FINAL({ responsibleId: bia.user.id }) });
+  assert.equal(c.status, 201);
+  const d = c.body.deadline;
+  assert.equal(c.body.intimation.deadlineId, d.id);                                     // na resposta da confirmação, legível
+  assert.equal((await ana.call("PATCH", `/deadlines/${d.id}`, { version: d.version, responsibleId: caio.user.id })).status, 200);
+  const now = await bia.call("GET", `/intimations/${i.id}`);                             // autora continua lendo a intimação
+  assert.equal(now.status, 200);
+  assert.equal(now.body.linked, true);
+  assert.equal(now.body.deadlineId, null);
+  assert.equal((await bia.call("GET", `/deadlines/${d.id}`)).status, 404);
+  assert.ok(!JSON.stringify(now.body).includes(d.id));
+});

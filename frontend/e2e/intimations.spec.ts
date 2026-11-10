@@ -302,3 +302,52 @@ test("notificações e contador: perda de acesso com resposta antiga pausada; re
   await ana.context.close();
   await bia.context.close();
 });
+
+// ---------------------------------------------------------------- auditoria da 6.4
+test("auditoria 6.4: confirmação pausada + reatribuição — mensagem preservada, vínculo protegido, nenhum link antigo", async ({ browser }) => {
+  const ana = await personIn(browser, "Ana Reatribui Gate");
+  await createOfficeVia(ana.page, "Gate Confirmação");
+  const bia = await personIn(browser, "Bia Autora Gate");
+  await joinByInvite(ana.page, bia.page);
+  const caio = await personIn(browser, "Caio Recebe Gate");
+  await joinByInvite(ana.page, caio.page);
+  const { uid: caioId } = await idsOf(caio.page);
+  const id = await registerViaUi(bia.page, { file: "gate.pdf", suggested: "Bia Autora Gate" });
+  let deadlineId = "";
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  await bia.page.route(`**/bff/api/intimations/${id}/confirm`, async (route) => {
+    const resp = await route.fetch();                                   // o servidor confirma e cria o prazo da Bia
+    deadlineId = (await resp.json()).deadline.id;
+    await gate;                                                         // resposta pausada
+    await route.fulfill({ response: resp });
+  });
+  await confirmViaUi(bia.page, { title: "Prazo reatribuído no meio" });
+  await expect.poll(() => deadlineId).not.toBe("");
+  const d = await api(ana.email, "GET", `/deadlines/${deadlineId}`);
+  expect((await api(ana.email, "PATCH", `/deadlines/${deadlineId}`, { version: d.body.version, responsibleId: caioId })).status).toBe(200);
+  release();                                                            // resposta antiga (com o id) chega depois
+  await expect(bia.page.getByTestId("confirm-result")).toContainText("Revisão confirmada: prazo criado.");   // mensagem preservada
+  await expect(bia.page.getByTestId("linked")).toHaveText("Existe um prazo vinculado, mas você não tem permissão para vê-lo.");
+  await expect(bia.page.getByTestId("confirm-result").getByRole("link")).toHaveCount(0);
+  await expect(bia.page.locator(`a[href*="${deadlineId}"]`)).toHaveCount(0);
+  expect(await bia.page.content()).not.toContain(deadlineId);           // nenhum trecho com o id antigo
+  await bia.page.unroute(`**/bff/api/intimations/${id}/confirm`);
+  for (const c of [ana, bia, caio]) await c.context.close();
+});
+
+test("auditoria 6.4: acesso mantido — o link do resultado e do vínculo funciona", async ({ browser }) => {
+  const ana = await personIn(browser, "Ana Mantém Acesso");
+  await createOfficeVia(ana.page, "Acesso Mantido");
+  const bia = await personIn(browser, "Bia Mantém Acesso");
+  await joinByInvite(ana.page, bia.page);
+  await registerViaUi(bia.page, { file: "mantem.pdf", suggested: "Bia Mantém Acesso" });
+  await confirmViaUi(bia.page, { title: "Prazo que continua da Bia" });
+  await expect(bia.page.getByTestId("confirm-result")).toContainText("Revisão confirmada: prazo criado.");
+  await expect(bia.page.getByTestId("linked").getByRole("link", { name: "Abrir o prazo vinculado" })).toBeVisible();
+  await bia.page.getByTestId("confirm-result").getByRole("link", { name: "Abrir o prazo" }).click();
+  await expect(bia.page.getByRole("heading", { name: "Prazo que continua da Bia" })).toBeVisible();
+  await expect(bia.page.getByTestId("responsible")).toHaveText("Bia Mantém Acesso (você)");
+  await ana.context.close();
+  await bia.context.close();
+});

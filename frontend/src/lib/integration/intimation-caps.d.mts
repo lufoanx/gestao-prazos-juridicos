@@ -5,3 +5,4 @@ export function intimationCaps(i: Intimation, membership: OwnMembership | null |
 export function canRegisterIntimation(scope: "personal" | "office", membership: OwnMembership | null | undefined): boolean;
 export { scopeMatches } from "./deadline-caps.mjs";
 export function draftChanges(original: IntimationDraft, form: Record<string, string | number | null | undefined>, originalSuggested: string | null, formSuggested: string | null | ""): Record<string, unknown>;
+export function linkedDeadline(i: Pick<Intimation, "deadlineId" | "linked">): { state: "readable" | "protected" | "none"; href: string | null };

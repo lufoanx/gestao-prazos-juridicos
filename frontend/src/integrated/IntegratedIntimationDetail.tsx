@@ -7,7 +7,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Button, ConfirmDialog, Input, Pagination, Select } from "@/components/ui";
 import { selectableResponsibles } from "@/lib/integration/deadline-caps.mjs";
-import { draftChanges, intimationCaps, scopeMatches } from "@/lib/integration/intimation-caps.mjs";
+import { draftChanges, intimationCaps, linkedDeadline, scopeMatches } from "@/lib/integration/intimation-caps.mjs";
 import { formatCivilDate, isCivilDate } from "@/lib/integration/civil-date.mjs";
 import { describeIntimationEvent } from "@/lib/integration/history-format.mjs";
 import type { Intimation, IntimationEventPage } from "@/lib/integration/dto.d.mts";
@@ -44,12 +44,14 @@ function DetailView({ intimationId }: { intimationId: string }) {
   const { intimations, org, me, nameOf } = useIntimationContext();
   const ctx = { scope: org.scope, officeId: org.office?.id ?? null, userId: me?.id ?? null };
   const res = useResource<Intimation>(`intimation:${intimationId}`, () => intimations.get(intimationId), { accept: (i) => scopeMatches(i, ctx) });
-  // Resultado da confirmação fica AQUI: sobrevive à recarga do recurso.
-  const [result, setResult] = useState<{ kind: "ok" | "info" | "error"; text: string; deadlineId?: string | null } | null>(null);
+  // Resultado da confirmação fica AQUI (sobrevive à recarga), mas guarda SÓ o texto: o link ao
+  // prazo vem sempre da projeção atual (`linkedDeadline(i)`), nunca do id da resposta anterior.
+  const [result, setResult] = useState<{ kind: "ok" | "info" | "error"; text: string } | null>(null);
   if (res.status === "mismatch") return <ScopeMismatchNotice resourceScope={res.data.scope} noun="Intimação" listHref="/app/intimacoes" />;
   return (
     <ResourceState res={res}>{(i) => {
       const caps = intimationCaps(i, org.membership, me?.id ?? null);
+      const link = linkedDeadline(i);
       return (
         <div>
           <PageHead title={i.draft.title || i.file.name}>
@@ -57,7 +59,7 @@ function DetailView({ intimationId }: { intimationId: string }) {
           </PageHead>
           {result ? (
             <p role={result.kind === "error" ? "alert" : "status"} className={result.kind === "error" ? "field__error" : "text-muted"} data-testid="confirm-result">
-              {result.text}{result.deadlineId ? <> <Link href={`/app/prazos/${result.deadlineId}`}>Abrir o prazo</Link></> : null}
+              {result.text}{link.href ? <> <Link href={link.href}>Abrir o prazo</Link></> : null}
             </p>
           ) : null}
           <MetadataOnlyNotice />
@@ -72,8 +74,8 @@ function DetailView({ intimationId }: { intimationId: string }) {
               <dt>Responsável sugerido</dt><dd data-testid="suggested">{i.suggestedResponsibleId ? nameOf(i.suggestedResponsibleId) : "Nenhum"}</dd>
               <dt>Prazo vinculado</dt>
               <dd data-testid="linked">
-                {i.deadlineId ? <Link href={`/app/prazos/${i.deadlineId}`}>Abrir o prazo vinculado</Link>
-                  : i.linked ? "Existe um prazo vinculado, mas você não tem permissão para vê-lo."
+                {link.href ? <Link href={link.href}>Abrir o prazo vinculado</Link>
+                  : link.state === "protected" ? "Existe um prazo vinculado, mas você não tem permissão para vê-lo."
                     : "Nenhum (a intimação ainda não foi confirmada)."}
               </dd>
             </dl>
@@ -168,7 +170,7 @@ function initialConfirm(i: Intimation, fallbackResponsible: string): DeadlineDra
 }
 
 function ConfirmSection({ i, reload, onResult }: {
-  i: Intimation; reload: () => void; onResult: (r: { kind: "ok" | "info" | "error"; text: string; deadlineId?: string | null }) => void;
+  i: Intimation; reload: () => void; onResult: (r: { kind: "ok" | "info" | "error"; text: string }) => void;
 }) {
   const { intimations, org, members, me } = useIntimationContext();
   const invalidate = useInvalidateIntimation();
@@ -197,9 +199,10 @@ function ConfirmSection({ i, reload, onResult }: {
     void _ignored;
     const r = await m.run(() => intimations.confirm(i.id, i.version, data));
     if (r.ok) {
+      // Só o texto: nenhum id da resposta é guardado (a recarga traz a projeção atual autorizada).
       onResult(r.value.created
-        ? { kind: "ok", text: "Revisão confirmada: prazo criado.", deadlineId: r.value.intimation.deadlineId ?? r.value.deadline.id }
-        : { kind: "info", text: "Esta intimação já havia sido confirmada; nenhum prazo novo foi criado.", deadlineId: r.value.intimation.deadlineId });
+        ? { kind: "ok", text: "Revisão confirmada: prazo criado." }
+        : { kind: "info", text: "Esta intimação já havia sido confirmada; nenhum prazo novo foi criado." });
       invalidate(i.id); reload(); announceNotificationsChanged();
       return;
     }

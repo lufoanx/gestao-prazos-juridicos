@@ -75,7 +75,13 @@ Responsabilidades:
    - **409** `invalid_state`: recarrega o estado terminal;
    - **resultado desconhecido:** "pode ter ocorrido" + "Conferir situação" (nunca reenvia).
 
-   A mensagem de resultado fica no detalhe e sobrevive à recarga.
+   A mensagem de resultado fica no detalhe e sobrevive à recarga, mas guarda **só o texto**
+   (correção da auditoria). O link "Abrir o prazo", no aviso e nos metadados, vem exclusivamente
+   da projeção **atual** da intimação (`linkedDeadline(i)`), nunca do id devolvido pela
+   confirmação. Exemplo: se o prazo for reatribuído enquanto a resposta da confirmação está a
+   caminho, a recarga traz `linked=true, deadlineId=null`; a mensagem continua, aparece o aviso de
+   vínculo protegido e nenhum link ou trecho com o id antigo permanece no DOM. Nenhuma consulta
+   extra tenta descobrir a referência ocultada.
 5. **Depois:** a intimação fica `reviewed` e só leitura. Quem pode ler o prazo vê o link. Se
    `linked=true` e `deadlineId=null`, a tela diz que existe um vínculo sem permissão de leitura: sem
    link inventado e sem buscar o id em históricos.
@@ -166,7 +172,7 @@ tokens só no servidor continuam como antes.
 |---|---|
 | Unitários | `frontend/tests/intimations-integration.test.mjs`: allowlist e query por método/rota, corpo só com metadados, `null` × omissão, capacidades específicas, histórico, deduplicação |
 | Integração real | `frontend/tests/integration/intimations-backend.test.mjs`: privacidade pessoal, assigned × all, responsável atual após reatribuição, vínculo sem `deadlineId`, rascunho e conflito, 201/200 sem duplicar, descarte e estados terminais, `operational_responsible_required`, notificações (contagem, marcar todas além da 1ª página e só no ambiente), ocultação e recuperação |
-| E2E | `frontend/e2e/intimations.spec.ts`: 8 cenários com navegador e FastAPI reais (ver §12); a transferência com intimação vinculada continua em `deadlines.spec.ts` |
+| E2E | `frontend/e2e/intimations.spec.ts`: 10 cenários com navegador e FastAPI reais, incluindo a confirmação pausada com reatribuição no meio (sem link antigo) e o caso positivo com o link funcionando; a transferência com intimação vinculada continua em `deadlines.spec.ts` |
 
 ```bash
 cd backend  && pip check && pytest && ruff check app tests && mypy app && python -m compileall app
@@ -192,4 +198,4 @@ cd frontend && PRAZOAI_TEST_PYTHON=../backend/.venv/bin/python npm run test:e2e 
 6. **Notificações (45 s):** mostrar "Notificações (N)", marcar uma, marcar todas (inclusive da página
    2) e trocar para o ambiente pessoal, que não tem notificações.
 7. **Fechamento (15 s):** "O backend é a autoridade; o BFF guarda os tokens e valida cada rota;
-   nenhuma mutação é repetida sozinha. 38 + 8 testes de navegador rodam numa única execução."
+   nenhuma mutação é repetida sozinha. Os 48 testes de navegador rodam numa única execução."

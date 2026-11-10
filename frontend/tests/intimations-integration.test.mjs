@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { buildQuery, findRoute, matchAllowlist } from "../src/server/bff/allowlist.mjs";
 import { createApiClient } from "../src/lib/integration/api-client.mjs";
 import { createIntimationsClient, createNotificationsClient, notificationHref } from "../src/lib/integration/intimations-client.mjs";
-import { canRegisterIntimation, draftChanges, intimationCaps } from "../src/lib/integration/intimation-caps.mjs";
+import { canRegisterIntimation, draftChanges, intimationCaps, linkedDeadline } from "../src/lib/integration/intimation-caps.mjs";
 import { describeIntimationEvent } from "../src/lib/integration/history-format.mjs";
 import { createQueryCache } from "../src/lib/integration/query-cache.mjs";
 
@@ -97,6 +97,13 @@ test("capacidades de intimação: específicas, não copiadas de prazos; cargo/g
   assert.equal(canRegisterIntimation("personal", null), true);
   assert.equal(canRegisterIntimation("office", m(["deadline.read"])), false);
   assert.equal(canRegisterIntimation("office", m(["deadline.read", "deadline.create"])), true);
+});
+
+test("auditoria 6.4: link ao prazo só pela projeção atual; vínculo ocultado não expõe id", () => {
+  assert.deepEqual(linkedDeadline({ deadlineId: "d1", linked: true }), { state: "readable", href: "/app/prazos/d1" });
+  assert.deepEqual(linkedDeadline({ deadlineId: null, linked: true }), { state: "protected", href: null });
+  assert.deepEqual(linkedDeadline({ deadlineId: null, linked: false }), { state: "none", href: null });
+  assert.deepEqual(linkedDeadline({ deadlineId: "../x", linked: true }), { state: "protected", href: null });
 });
 
 test("histórico de intimação legível e sem identificadores protegidos", () => {

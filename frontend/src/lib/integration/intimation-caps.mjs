@@ -59,3 +59,15 @@ export function draftChanges(original, form, originalSuggested, formSuggested) {
   if (s !== (originalSuggested ?? null)) out.suggestedResponsibleId = s;
   return out;
 }
+
+/**
+ * Referência ao prazo vinculado SOMENTE pela projeção ATUAL e autorizada da intimação.
+ * Nunca use um id guardado de uma resposta anterior (ex.: a da confirmação): se a consulta atual
+ * ocultar o vínculo (`linked=true`, `deadlineId=null`), não há link nem identificador.
+ */
+export function linkedDeadline(i) {
+  const ID = /^[A-Za-z0-9_-]{1,64}$/;
+  if (i?.deadlineId && ID.test(i.deadlineId)) return { state: "readable", href: `/app/prazos/${i.deadlineId}` };
+  if (i?.linked) return { state: "protected", href: null };
+  return { state: "none", href: null };
+}
