@@ -46,7 +46,11 @@ export function useResource<T>(resource: string | null, fetcher: () => Promise<T
     if (!key) return;
     let alive = true;
     const hit = cache.get(key);
-    setEntry({ key, res: hit !== undefined ? { status: "ready", data: hit as T } : { status: "loading" } });
+    // Mesma chave (recarga após mutação): mantém os dados atuais enquanto atualiza. Chave nova
+    // (outro usuário/escritório/ambiente/revisão/filtro): nada da anterior é mostrado.
+    setEntry((prev) => (hit !== undefined
+      ? { key, res: { status: "ready", data: hit as T } }
+      : prev.key === key && prev.res.status === "ready" ? prev : { key, res: { status: "loading" } }));
     fetcher()
       .then((data) => {
         if (!alive || currentKey.current !== key) return;           // resposta de outra revisão/chave

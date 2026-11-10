@@ -151,7 +151,8 @@ test("equipe: projeções, delegação refletida na UI e falha de rede sem repet
   await ana.page.getByLabel("Cargo (rótulo visual)").fill("Coordenadora");
   await ana.page.getByRole("checkbox", { name: "Gerir equipe" }).check();
   await ana.page.getByRole("button", { name: "Salvar" }).click();
-  await expect(ana.page.getByText("Sem conexão com o servidor")).toBeVisible();
+  // 6.3: erro de rede numa MUTAÇÃO = resultado desconhecido (pode ter ocorrido), não "sem conexão".
+  await expect(ana.page.getByText("ela pode ter ocorrido")).toBeVisible();
   await expect(ana.page.getByLabel("Cargo (rótulo visual)")).toHaveValue("Coordenadora");
   expect(patches).toBe(1);
   await ana.page.unroute("**/bff/api/offices/*/members/*");

@@ -133,7 +133,13 @@ test("rotas: modo integrado reescreve módulos não integrados e recursos indisp
   assert.deepEqual(routeDecision("/app/prazos", "demo"), { action: "allow" });
   assert.deepEqual(routeDecision("/app/perfil", "integrated"), { action: "allow" });
   assert.deepEqual(routeDecision("/app", "integrated"), { action: "allow" });
-  assert.deepEqual(routeDecision("/app/prazos/123", "integrated"), { action: "rewrite", to: "/app/nao-integrado" });
+  // 6.3: prazos e calendário integrados; dashboard/intimações/notificações seguem fora.
+  assert.deepEqual(routeDecision("/app/prazos/123", "integrated"), { action: "allow" });
+  assert.deepEqual(routeDecision("/app/prazos/123/editar", "integrated"), { action: "allow" });
+  assert.deepEqual(routeDecision("/app/prazos/a.b", "integrated"), { action: "rewrite", to: "/app/nao-integrado" });
+  assert.deepEqual(routeDecision("/app/calendario", "integrated"), { action: "allow" });
+  assert.deepEqual(routeDecision("/app/dashboard", "integrated"), { action: "rewrite", to: "/app/nao-integrado" });
+  assert.deepEqual(routeDecision("/app/intimacoes", "integrated"), { action: "rewrite", to: "/app/nao-integrado" });
   assert.deepEqual(routeDecision("/esqueci-senha", "integrated"), { action: "rewrite", to: "/indisponivel" });
   assert.deepEqual(routeDecision("/redefinir-senha/abc", "integrated"), { action: "rewrite", to: "/indisponivel" });
   // 6.2: convite pelo fragmento; o formato antigo vai para uma página que não chama a API.

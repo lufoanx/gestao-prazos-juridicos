@@ -107,7 +107,8 @@ test("troca de usuário não vaza dados do anterior", async ({ page }) => {
 
 test("módulos não integrados não exibem dados demonstrativos; recursos inexistentes desabilitados", async ({ page }) => {
   await signup(page, "Gil Módulos", newEmail());
-  for (const path of ["/app/prazos", "/app/dashboard", "/app/intimacoes"]) {
+  // 6.3 integrou prazos/calendário; os módulos abaixo seguem não integrados.
+  for (const path of ["/app/dashboard", "/app/intimacoes", "/app/notificacoes"]) {
     await page.goto(path);
     await expect(page.getByRole("heading", { name: "Módulo ainda não integrado" })).toBeVisible();
     for (const t of DEMO_TEXTS) await expect(page.getByText(t)).toHaveCount(0);

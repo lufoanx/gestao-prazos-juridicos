@@ -1,3 +1,4 @@
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { Logo } from "@/components/brand/Logo";
@@ -22,7 +23,11 @@ export function AuthShell({ title, subtitle, children, footer }: AuthShellProps)
         {children}
       </div>
       {footer ? <div className="auth__foot">{footer}</div> : (
-        <div className="auth__foot">Ambiente demonstrativo · sem autenticação real</div>
+        <div className="auth__foot">
+          {APP_MODE === "integrated"
+            ? "Ambiente de desenvolvimento/teste · não use dados reais de clientes"
+            : "Ambiente demonstrativo · sem autenticação real"}
+        </div>
       )}
     </main>
   );

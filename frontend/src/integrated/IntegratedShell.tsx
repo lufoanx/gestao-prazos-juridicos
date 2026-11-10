@@ -13,8 +13,8 @@ const NAV = [
   { href: "/app/escritorio/equipe", label: "Equipe", ready: true, office: true },
   { href: "/app/perfil", label: "Perfil", ready: true },
   { href: "/app/dashboard", label: "Dashboard", ready: false },
-  { href: "/app/prazos", label: "Prazos", ready: false },
-  { href: "/app/calendario", label: "Calendário", ready: false },
+  { href: "/app/prazos", label: "Prazos", ready: true },
+  { href: "/app/calendario", label: "Calendário", ready: true },
   { href: "/app/intimacoes", label: "Intimações", ready: false },
   { href: "/app/notificacoes", label: "Notificações", ready: false },
 ];
@@ -57,7 +57,7 @@ export function IntegratedShell({ children }: { children: ReactNode }) {
         <nav className="app-nav" aria-label="Navegação principal">
           {NAV.filter((i) => !i.office || hasOffice).map((item) => (
             <a key={item.href} href={item.href} className="app-nav__link"
-               aria-current={pathname === item.href ? "page" : undefined}>
+               aria-current={pathname === item.href || (item.href === "/app/prazos" && pathname.startsWith("/app/prazos/")) ? "page" : undefined}>
               {item.label}{!item.ready && <span className="text-muted"> · em integração</span>}
             </a>
           ))}

@@ -1,4 +1,6 @@
 "use client";
+import { IntegratedCalendar } from "@/integrated/IntegratedCalendar";
+import { APP_MODE } from "@/lib/integration/mode.mjs";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -24,7 +26,7 @@ function eventClass(d: Deadline, today: string): string {
   return "cal__event";
 }
 
-export default function CalendarioPage() {
+function DemoCalendarioPage() {
   const router = useRouter();
   const { scope, scopeKind, user, membership } = useScope();
   const { deadlines } = useData();
@@ -103,4 +105,9 @@ export default function CalendarioPage() {
       </div>
     </div>
   );
+}
+
+// Modo integrado (Etapa 6.3): tela real via BFF; o modo demo segue inalterado.
+export default function Page() {
+  return APP_MODE === "integrated" ? <IntegratedCalendar /> : <DemoCalendarioPage />;
 }

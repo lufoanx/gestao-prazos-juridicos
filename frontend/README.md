@@ -99,7 +99,8 @@ Com `NEXT_PUBLIC_PRAZOAI_MODE=integrated` (fixado no build), o frontend fala com
 HttpOnly; access e refresh tokens ficam no servidor. Integrados: cadastro, login, sessão após
 recarregar, logout, proteção de `/app` e perfil (6.1); onboarding, ambientes pessoal/escritório,
 escritório, equipe, convites (`/convite#TOKEN`) e solicitações de ingresso (6.2, ver
-`docs/backend/11-etapa-6-2-escritorio-integrado.md`). Demais módulos aparecem como "ainda não
+`docs/backend/11-etapa-6-2-escritorio-integrado.md`); prazos (lista, cadastro, detalhe, status,
+comentários, histórico, transferência) e calendário (6.3, ver `docs/backend/12-etapa-6-3-prazos-integrados.md`). Demais módulos aparecem como "ainda não
 integrados", sem dados demonstrativos. Configuração em `.env.example`; detalhes e limitações em
 `docs/backend/10-etapa-6-1-sessao-bff.md`.
 
