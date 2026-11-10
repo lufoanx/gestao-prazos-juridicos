@@ -1,5 +1,5 @@
 // E2E 6.1 — navegador real + Next (build integrado) + FastAPI real.
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { PASSWORD, captureBffBodies, login, logout, newEmail, signup } from "./helpers";
 
 const DEMO_TEXTS = ["Contestação — locação residencial", "Paula Andrade", "Rafael Neves"];

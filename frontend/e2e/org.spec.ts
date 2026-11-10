@@ -1,7 +1,8 @@
 // E2E 6.2 — onboarding, ambientes, escritório, equipe, convites e solicitações.
 // Navegador real + Next (build integrado) + FastAPI real. Usuários diferentes = CONTEXTOS diferentes;
 // abas do mesmo contexto compartilham a sessão.
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { type Browser, type Page } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { PASSWORD, logout, newEmail, signupToOnboarding } from "./helpers";
 
 test.describe.configure({ mode: "serial" });

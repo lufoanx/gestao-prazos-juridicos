@@ -172,6 +172,8 @@ cd frontend && cp .env.example .env.local && npm run build && npm run start
 | **E2E** navegador + Next (build integrado) + FastAPI | `frontend/e2e/auth.spec.ts` | `PRAZOAI_TEST_PYTHON=… npm run test:e2e` |
 | Backend (IP confiável) | `backend/tests/test_trusted_client_ip.py` | `pytest` |
 
+Desde a correção da 6.3, o E2E também tem um **proxy de borda** diante do Next que atribui um IP
+de documentação a cada contexto de navegador, pelo mecanismo de IP confiável, só no teste (doc 13).
 No E2E, o BFF fala com um **proxy HTTP de teste** (porta do backend + 1) que só repassa ao
 FastAPI real; ele pode segurar o próximo login para reproduzir de forma determinística o cenário
 "login pendente numa aba + logout na outra". As rotas de controle `/__e2e/*` existem apenas nesse

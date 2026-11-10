@@ -131,6 +131,10 @@ vínculo existente ("a partir de uma intimação", "com a intimação vinculada"
 As fixtures de massa (prazos semeados, prazo com intimação vinculada) usam a **API existente do
 backend**, com contas de teste. Nenhuma rota de módulo futuro foi aberta no BFF.
 
+**Ambiente E2E:** cada contexto de navegador é um cliente com IP próprio, simulado por um proxy de
+borda do harness, e a suíte roda numa única execução. Ver `13-ambiente-e2e-identidade-de-rede.md`
+(correção da falha do CI do PR #16).
+
 ## 10. Limitações
 - Tudo em memória (BFF e backend); um processo; não publicar.
 - Dashboard não integrado (sem indicadores inventados).

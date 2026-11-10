@@ -1,6 +1,7 @@
 // E2E 6.3 — prazos e calendário: navegador real + Next (build integrado) + FastAPI real.
 // Usuários diferentes = contextos diferentes; abas do mesmo contexto compartilham a sessão.
-import { expect, test, type Page } from "@playwright/test";
+import { type Page } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import {
   BACKEND, backendToken, createOfficeVia, idsOf, joinByInvite, patchMember, personIn, seedDeadlines,
 } from "./helpers";

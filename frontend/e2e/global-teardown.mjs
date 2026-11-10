@@ -6,4 +6,5 @@ export default async function globalTeardown() {
   try { process.kill(Number(readFileSync(file, "utf8")), "SIGTERM"); } catch { /* já encerrado */ }
   try { rmSync(file); } catch { /* ok */ }
   await new Promise((r) => (globalThis.__prazoaiE2EProxy ? globalThis.__prazoaiE2EProxy.close(r) : r()));
+  await globalThis.__prazoaiE2EEdge?.close();
 }

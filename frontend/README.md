@@ -105,6 +105,7 @@ integrados", sem dados demonstrativos. Configuração em `.env.example`; detalhe
 `docs/backend/10-etapa-6-1-sessao-bff.md`.
 
 - `npm run test:integration` — BFF contra FastAPI real (`PRAZOAI_TEST_PYTHON`).
-- `npm run test:e2e` — navegador (Playwright) + Next integrado + FastAPI real.
+- `npm run test:e2e` — navegador (Playwright) + Next integrado + FastAPI real, numa única execução;
+  cada contexto de navegador simula um cliente com IP próprio (ver `docs/backend/13-ambiente-e2e-identidade-de-rede.md`).
 - Sessões do BFF ficam em memória: um processo Node, perdidas ao reiniciar; não publicar em
   ambiente distribuído/serverless (ex.: Vercel) nesta fase.

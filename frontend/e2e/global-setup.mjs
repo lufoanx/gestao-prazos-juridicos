@@ -7,6 +7,7 @@ import { randomBytes } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { startEdgeProxy } from "./edge-proxy.mjs";
 
 export default async function globalSetup() {
   const port = Number(process.env.PRAZOAI_E2E_BACKEND_PORT || 18900);
@@ -15,7 +16,10 @@ export default async function globalSetup() {
   const proc = spawn(python, ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(port), "--no-proxy-headers"], {
     cwd: fileURLToPath(new URL("../../backend", import.meta.url)),
     env: { ...process.env, ENVIRONMENT: "test", AUTH_JWT_SECRET: randomBytes(32).toString("hex"),
-      AUTH_ACCESS_TOKEN_TTL_SECONDS: "60", AUTH_REGISTER_MAX_REQUESTS: "200", LOG_LEVEL: "WARNING" },
+      AUTH_ACCESS_TOKEN_TTL_SECONDS: "60", AUTH_REGISTER_MAX_REQUESTS: "200", LOG_LEVEL: "WARNING",
+      // Confiança no IP encaminhado pelo BFF, SOMENTE no E2E (segredo gerado por execução).
+      // Limites de convite (ORG_INVITE_ACCEPT_MAX/LOOKUP_MAX) NÃO são alterados.
+      TRUSTED_PROXY_SECRET: process.env.PRAZOAI_E2E_PROXY_SECRET },
     stdio: "ignore",
   });
   writeFileSync(fileURLToPath(new URL("./.backend.pid", import.meta.url)), String(proc.pid));
@@ -45,6 +49,10 @@ export default async function globalSetup() {
   });
   await new Promise((r) => proxy.listen(proxyPort, "127.0.0.1", r));
   globalThis.__prazoaiE2EProxy = proxy;
+
+  // Proxy de BORDA simulado diante do Next: única camada que define o IP confiável do cliente.
+  const appPort = Number(process.env.PRAZOAI_E2E_PORT || 3100);
+  globalThis.__prazoaiE2EEdge = await startEdgeProxy({ listenPort: appPort, targetPort: appPort + 1 });
 
   for (let i = 0; i < 150; i++) {
     try { if ((await fetch(`http://127.0.0.1:${proxyPort}/api/v1/health`)).ok) return; } catch { /* subindo */ }
