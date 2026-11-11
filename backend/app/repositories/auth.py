@@ -1,7 +1,7 @@
 """Interfaces de repositório de autenticação (contrato para a futura persistência).
 
-A implementação atual é EM MEMÓRIA (app/repositories/memory.py). Uma implementação com
-banco deverá oferecer as MESMAS garantias de atomicidade, por exemplo:
+Implementações: EM MEMÓRIA (app/repositories/memory.py) e PostgreSQL (app/repositories/sql/, P3),
+com as MESMAS garantias de atomicidade (testes de contrato comuns em tests/test_auth_contract.py):
 - unicidade de e-mail (restrição UNIQUE);
 - criação de sessão condicionada à versão da credencial
   (`INSERT ... SELECT ... WHERE users.credential_version = :v`, na mesma transação);
@@ -59,6 +59,12 @@ class SessionRepository(Protocol):
         """Dados públicos da sessão, SEM copiar o histórico de hashes."""
         ...
 
+    def get_with_user(self, session_id: str) -> tuple[SessionView, User] | None:
+        """Sessão e usuário lidos de forma CONSISTENTE (mesmo instante: lock em memória, uma única
+        consulta com junção no PostgreSQL). Usado por `authenticate` para comparar a versão da
+        credencial da sessão com a atual do usuário."""
+        ...
+
     def rotate_refresh(
         self, refresh_hash: str, new_refresh_hash: str, now: datetime
     ) -> tuple[RotationResult, SessionView | None]:
@@ -84,9 +90,11 @@ class SessionRepository(Protocol):
 
 
 class PasswordResetRepository(Protocol):
-    def issue_replacing_active(self, token: PasswordResetToken, now: datetime) -> None:
+    def issue_replacing_active(self, token: PasswordResetToken, now: datetime) -> PasswordResetToken:
         """Invalida os tokens ativos do usuário E registra o novo, atomicamente
-        (no máximo um token ativo por usuário)."""
+        (no máximo um token ativo por usuário). Devolve o registro EFETIVAMENTE persistido: no
+        PostgreSQL, `created_at`/`expires_at` vêm do relógio capturado depois dos bloqueios, e é
+        essa expiração que a mensagem de recuperação deve informar. Retorna só depois do COMMIT."""
         ...
 
     def is_active(self, token_hash: str, now: datetime) -> bool:

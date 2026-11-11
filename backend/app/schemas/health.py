@@ -7,3 +7,6 @@ from pydantic import BaseModel
 class HealthResponse(BaseModel):
     status: str
     service: str
+    # Só aparecem fora do modo padrão (memory), para preservar o contrato existente:
+    storage: str | None = None      # "auth-postgres" (P3)
+    durable: bool | None = None     # False enquanto o domínio estiver em memória

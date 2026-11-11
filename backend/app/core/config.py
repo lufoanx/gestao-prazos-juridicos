@@ -38,6 +38,9 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # Erros de validação NUNCA exibem os valores recebidos: validadores de modelo incluiriam o
+        # dicionário inteiro (com DATABASE_URL e segredos) no `input_value` da mensagem.
+        hide_input_in_errors=True,
     )
 
     # Identificação do serviço (usada em /api/health).
@@ -68,10 +71,14 @@ class Settings(BaseSettings):
     auth_enabled: bool = Field(default=True, alias="AUTH_ENABLED")
     auth_storage: Literal["memory"] = Field(default="memory", alias="AUTH_STORAGE")
 
-    # --- Persistência (P1: fundação). A aplicação continua 100% em memória. ---
-    # STORAGE: único valor aceito nesta entrega é "memory". "auth-postgres" (P3) e "postgres" (P4)
-    # são recusados com mensagem explícita até serem implementados (doc 15, §5.6).
+    # --- Persistência (P1 fundação, P2 esquema, P3 autenticação) ---
+    # STORAGE (doc 15, §5.6):
+    #   "memory" (padrão) — tudo em memória;
+    #   "auth-postgres" (P3) — autenticação no PostgreSQL, domínio VOLÁTIL em memória; aceito só em
+    #       ENVIRONMENT=test ou em development com ALLOW_VOLATILE_DOMAIN=true (aviso no startup e no /health);
+    #   "postgres" (P4) — ainda recusado.
     storage: str = Field(default="memory", alias="STORAGE")
+    allow_volatile_domain: bool = Field(default=False, alias="ALLOW_VOLATILE_DOMAIN")
     # URL de conexão (segredo). NÃO é validada aqui de propósito: erros do pydantic incluem o valor
     # recebido, o que exporia a senha. A validação (sem credenciais na mensagem) fica em
     # app/db/config.py e só ocorre quando um comando explícito precisa do banco. No modo memory a
@@ -242,14 +249,14 @@ class Settings(BaseSettings):
     @classmethod
     def _valid_storage(cls, v: str) -> str:
         value = (v or "memory").strip().lower()
-        if value == "memory":
+        if value in {"memory", "auth-postgres"}:
             return value
-        if value in {"auth-postgres", "postgres"}:
+        if value == "postgres":
             raise ValueError(
-                f"STORAGE={value!r} ainda não está disponível: nesta entrega (P1) só 'memory' é aceito. "
-                "A autenticação no PostgreSQL chega na P3 e o domínio na P4."
+                "STORAGE='postgres' ainda não está disponível: o domínio no PostgreSQL chega na P4. "
+                "Use 'memory' ou, para testar a autenticação persistente, 'auth-postgres'."
             )
-        raise ValueError(f"STORAGE inválido: {v!r}. Use 'memory'.")
+        raise ValueError(f"STORAGE inválido: {v!r}. Use 'memory' ou 'auth-postgres'.")
 
     @field_validator("database_url", mode="before")
     @classmethod
@@ -257,6 +264,28 @@ class Settings(BaseSettings):
         if isinstance(v, str) and not v.strip():
             return None  # variável vazia = não configurada (sem validar o conteúdo aqui)
         return v
+
+    @model_validator(mode="after")
+    def _consistent_storage(self) -> Settings:
+        if self.storage == "auth-postgres":
+            if self.auth_storage_explicit:
+                raise ValueError(
+                    "AUTH_STORAGE (configuração antiga, só 'memory') conflita com STORAGE='auth-postgres': "
+                    "remova AUTH_STORAGE."
+                )
+            allowed = self.environment == "test" or (self.environment == "development" and self.allow_volatile_domain)
+            if not allowed:
+                raise ValueError(
+                    "STORAGE='auth-postgres' só é aceito em ENVIRONMENT=test ou em development com "
+                    "ALLOW_VOLATILE_DOMAIN=true: o domínio (escritórios, prazos, intimações, notificações) "
+                    "continua em memória e se perde ao reiniciar."
+                )
+        return self
+
+    @property
+    def storage_durable(self) -> bool:
+        """Todo o estado sobrevive a reinícios? (só com STORAGE=postgres, ainda não disponível)."""
+        return False
 
     @model_validator(mode="after")
     def _consistent_timeouts(self) -> Settings:

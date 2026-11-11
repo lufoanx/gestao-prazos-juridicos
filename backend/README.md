@@ -158,9 +158,12 @@ O frontend usa um BFF no Next.js; o backend não mudou seus contratos. Única ad
 padrão o uvicorn confia em `X-Forwarded-For` vindo de 127.0.0.1. Ver
 `docs/backend/10-etapa-6-1-sessao-bff.md`.
 
-## Persistência — P1 (fundação) e P2 (esquema); a aplicação continua em memória
-A P2 acrescenta as 14 tabelas aprovadas (`app/db/tables/`, migration `0002`); nenhum serviço as usa
-ainda. Detalhes em `docs/backend/17-p2-esquema-postgresql.md`.
+## Persistência — P1 (fundação), P2 (esquema) e P3 (autenticação)
+A P2 acrescenta as 14 tabelas aprovadas (`app/db/tables/`, migration `0002`). A P3 permite
+`STORAGE=auth-postgres` (só em `test`, ou em `development` com `ALLOW_VOLATILE_DOMAIN=true`):
+usuários, sessões e recuperação de senha no PostgreSQL; o domínio continua em memória. O padrão
+segue `STORAGE=memory`. Detalhes em `docs/backend/17-p2-esquema-postgresql.md` e
+`docs/backend/18-p3-autenticacao-postgresql.md`.
 
 A P1 prepara a infraestrutura do PostgreSQL **sem** que a aplicação passe a usá-la:
 `STORAGE=memory` é o único modo aceito, e a aplicação **não se conecta** ao banco no startup, mesmo

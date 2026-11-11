@@ -36,7 +36,19 @@ def _error_body(code: str, message: str, details: object | None = None) -> dict:
     return body
 
 
+class ConcurrentUpdateError(Exception):
+    """Operação recusada por concorrência no banco (D6, doc 15): deadlock (SQLSTATE 40P01) ou
+    bloqueio indisponível / `lock_timeout` (55P03). A transação já foi desfeita e a conexão
+    devolvida ao pool; NÃO há repetição automática. Resposta: 409 `concurrent_update`."""
+
+
 def register_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(ConcurrentUpdateError)
+    async def concurrent_update_handler(request: Request, exc: ConcurrentUpdateError):
+        logger.info("concurrent_update method=%s path=%s", request.method, request.url.path)
+        return JSONResponse(status_code=409, content=_error_body(
+            "concurrent_update", "Outra operação simultânea impediu esta. Tente novamente."))
+
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         # Loga sem corpo/credenciais.

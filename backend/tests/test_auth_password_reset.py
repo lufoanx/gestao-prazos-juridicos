@@ -2,6 +2,8 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from app.security.tokens import hash_opaque_token
 from tests.auth_utils import API, PASSWORD, bearer, error_code, login, register, register_and_login
 
@@ -32,6 +34,7 @@ def test_resposta_generica_identica_para_email_existente_e_inexistente(client, d
     assert msg.token not in existing.text
 
 
+@pytest.mark.memory_only
 def test_token_aleatorio_armazenado_somente_como_hash(client, delivery, auth_app):
     register(client)
     _forgot(client)
@@ -97,6 +100,7 @@ def test_novo_pedido_invalida_token_pendente_anterior(client, delivery):
     assert _reset(client, new).status_code == 204
 
 
+@pytest.mark.memory_only
 def test_reset_invalida_outros_tokens_e_revoga_todas_as_sessoes(client, delivery, auth_app):
     s1 = register_and_login(client)
     s2 = login(client).json()
