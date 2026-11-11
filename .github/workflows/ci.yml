@@ -94,7 +94,16 @@ jobs:
 
   # Etapa 6.1: integração REAL BFF ↔ FastAPI e E2E no navegador (Next em modo integrado).
   integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Imagem oficial com browsers e dependências: evita apt install no runner.
+    # Manter esta versão igual a @playwright/test no package-lock.json.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+      options: --init --ipc=host
+    defaults:
+      run:
+        shell: bash
     needs: [frontend, backend]
     steps:
       - uses: actions/checkout@v4
@@ -116,9 +125,19 @@ jobs:
         working-directory: frontend
         env:
           PRAZOAI_TEST_PYTHON: python
-      - name: Navegador do Playwright
-        run: npx playwright install --with-deps chromium
+      - name: Verificar Chromium preinstalado e versão do Playwright
         working-directory: frontend
+        run: |
+          node <<'NODE'
+          const { chromium } = require('@playwright/test');
+          const { version } = require('@playwright/test/package.json');
+          if (version !== '1.64.1') throw new Error('Atualize a imagem do CI para a versão instalada do Playwright');
+          (async () => {
+            const browser = await chromium.launch();
+            console.log(`Playwright ${version}; Chromium ${browser.version()}`);
+            await browser.close();
+          })().catch(error => { console.error(error); process.exit(1); });
+          NODE
       - name: E2E (navegador + Next integrado + FastAPI)
         run: npm run test:e2e
         working-directory: frontend
