@@ -157,6 +157,24 @@ O frontend usa um BFF no Next.js; o backend não mudou seus contratos. Única ad
 padrão o uvicorn confia em `X-Forwarded-For` vindo de 127.0.0.1. Ver
 `docs/backend/10-etapa-6-1-sessao-bff.md`.
 
+## Persistência — P1: fundação (a aplicação continua em memória)
+A P1 prepara a infraestrutura do PostgreSQL **sem** que a aplicação passe a usá-la:
+`STORAGE=memory` é o único modo aceito, e a aplicação **não se conecta** ao banco no startup, mesmo
+com `DATABASE_URL` definida. O banco é usado apenas por comandos explícitos e pelos testes de
+fundação. Detalhes em `docs/backend/16-p1-fundacao-persistencia.md`.
+
+```bash
+# verificar a conexão (mostra destino sem credenciais, versão, timeouts e revisão do esquema)
+DATABASE_URL=postgresql+psycopg://prazoai:<senha>@localhost:5432/prazoai_dev python -m app.db check
+# migrations: sempre por comando explícito (nunca no startup)
+DATABASE_URL=... alembic upgrade head      # aplica a revisão inicial (vazia)
+DATABASE_URL=... alembic downgrade base    # reverte
+# testes com PostgreSQL real (banco descartável prazoai_test*, local)
+ENVIRONMENT=test TEST_DATABASE_URL=postgresql+psycopg://prazoai:<senha>@localhost:5432/prazoai_test pytest
+```
+Sem `TEST_DATABASE_URL`, os testes com PostgreSQL são **pulados** localmente (o CI define
+`PRAZOAI_REQUIRE_POSTGRES_TESTS=1` e os torna obrigatórios).
+
 ## Configuração (variáveis de ambiente)
 Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigatório; nunca versione o `.env`):
 - `SERVICE_NAME` (padrão `prazoai-backend`)

@@ -13,6 +13,10 @@
 > migration), `15b-cenarios-ddl-proposto.sql` (cenários autoverificáveis e reproduzíveis) e
 > `15c-cenarios-saida-esperada.txt` (saída esperada), descritos na §11.
 >
+> **Revisão 3** (P1 aprovada): manutenção com espera limitada, timeouts e rollback do lote (§4.2);
+> total em páginas vazias (§4.5). Implementação da P1 descrita em
+> `16-p1-fundacao-persistencia.md`.
+>
 > **Revisão 2** (sobre `965ab64`): protocolo SQL completo de autenticação (§4.3), consistência das
 > leituras (§4.5), relógio pós-lock (§4.6), modos por entrega e bloqueio de produção (§5.6),
 > proteções da fixture de testes (§5.7), manutenção na matriz de bloqueios e política completa da
@@ -171,7 +175,7 @@ O DDL completo está em `15a-ddl-proposto-postgresql.sql`. Resumo das decisões:
 | Uma solicitação pendente por usuário/escritório | **Constraint** | índice único parcial `WHERE status = 'pending'` |
 | Versões otimistas | **Bloqueio + regra de serviço** | `SELECT … FOR UPDATE` da linha, comparação da versão enviada com a lida **depois** do bloqueio (409 `version_conflict` como hoje) e `UPDATE … SET version = version + 1`; as constraints não verificam versões |
 | Limites de capacidade (prazos por escopo, comentários, eventos, caixa) | **Bloqueio + regra de serviço** | contagem sob o bloqueio-âncora do escopo (ou do prazo); caixa de notificações com bloqueio por destinatário (`pg_advisory_xact_lock`) |
-| Retenção (sessões expiradas, tokens encerrados, convites e solicitações encerrados, intimações descartadas, notificações lidas) | **Regra de serviço (manutenção)** | lotes com `FOR UPDATE SKIP LOCKED` em transações curtas e separadas, que nunca esperam bloqueio (§4.2, §5.4) |
+| Retenção (sessões expiradas, tokens encerrados, convites e solicitações encerrados, intimações descartadas, notificações lidas) | **Regra de serviço (manutenção)** | lotes com `FOR UPDATE SKIP LOCKED` em transações curtas e separadas, com `lock_timeout` curto e rollback integral do lote se houver espera ou erro (§4.2, §5.4) |
 
 ---
 
@@ -188,8 +192,8 @@ O DDL completo está em `15a-ddl-proposto-postgresql.sql`. Resumo das decisões:
   (regra, capacidade, falha injetada, constraint) → `ROLLBACK` integral dos quatro módulos.
 - **Argon2 nunca roda com bloqueio ou transação aberta:** hash e verificação acontecem antes
   (ou depois) da transação, e as credenciais são **revalidadas** depois dos bloqueios.
-- **Limites de espera:** `lock_timeout` (ex.: 5 s) e `statement_timeout` (ex.: 15 s) por sessão.
-  A manutenção usa `SKIP LOCKED` e não espera.
+- **Limites de espera:** `lock_timeout` (ex.: 5 s) e `statement_timeout` (ex.: 15 s) por sessão,
+  inclusive na manutenção (§4.2).
 
 ### 4.2 Ordem única de bloqueios
 **Domínio:**
@@ -219,12 +223,25 @@ duas ordens.
 | Redefinição de senha | `users` `FOR UPDATE` → token `FOR UPDATE` → sessões do usuário (`UPDATE`) | após o token | token não usado, não invalidado, não expirado em `tx.now`, mesmo usuário |
 | Logout | `auth_sessions` `FOR UPDATE` | após a sessão | — |
 | Escritas do domínio | âncoras → `memberships` → `deadlines` → `intimations` → caixas | após as âncoras | vínculo e permissões atuais, versão, estado |
-| **Manutenção** | lotes `SELECT … ORDER BY id LIMIT n FOR UPDATE SKIP LOCKED`, filhos antes dos pais | no início do lote | predicado de retenção reavaliado no `DELETE` |
+| **Manutenção** | lotes `SELECT … ORDER BY id LIMIT n FOR UPDATE SKIP LOCKED`, filhos antes dos pais, com `lock_timeout` curto | depois do `SELECT … SKIP LOCKED` do lote | predicado de retenção reavaliado no `DELETE` |
 
-**Manutenção sem espera:** cada lote bloqueia só as linhas livres (`SKIP LOCKED`). O que estiver
-bloqueado por uma operação em andamento fica para o próximo lote, então a manutenção nunca
-participa de um ciclo de espera. Os filhos são apagados antes dos pais, com os próprios
-`SKIP LOCKED`:
+**Manutenção com espera limitada** (correção da revisão 3): `SKIP LOCKED` pula as linhas que outra
+transação já bloqueou **no momento da seleção** do lote. Isso reduz a disputa, mas **não elimina
+todas as esperas**. Ainda é possível esperar, por exemplo:
+- por uma linha bloqueada depois da seleção;
+- pela verificação de FK ao apagar um registro referenciado;
+- por bloqueios de tabela durante uma migration.
+
+Por isso a manutenção:
+1. roda com `lock_timeout` curto (ex.: 1 s) e `statement_timeout` próprios;
+2. trata cada lote como **uma transação**: qualquer timeout, deadlock ou erro → `ROLLBACK`
+   **integral do lote** (nada fica apagado pela metade);
+3. registra o ocorrido e **retoma numa execução futura** (próximo intervalo ou próximo comando). O
+   lote seguinte só começa numa nova execução;
+4. **nunca repete mutação de negócio** e não roda dentro de uma transação de negócio. É uma
+   operação própria de limpeza; uma falha nela não altera nem desfaz nenhuma operação de usuário.
+
+A ordem de apagamento é sempre filhos antes dos pais, com os próprios `SKIP LOCKED`:
 - intimação descartada: primeiro notificações e eventos, depois a intimação; se algum filho estiver
   bloqueado, a intimação fica para depois;
 - sessão expirada: primeiro os hashes usados, depois a sessão.
@@ -345,10 +362,24 @@ próxima requisição (como hoje, em que a leitura acontece sob o lock).
 |---|---|
 | **Detalhe** (prazo, intimação) | snapshot único: vínculo e permissões do ator → recurso → decisão de leitura → projeção (`deadlineId` só se o prazo vinculado for legível pelo ator no mesmo snapshot; chaves `*Hidden` no histórico) |
 | **Histórico** (prazo, intimação) | snapshot único: autorização do recurso → página de eventos + total → projeção de cada evento |
-| **Listagens** (prazos, intimações, equipe, convites, solicitações) | snapshot único: vínculo do ator → uma consulta com o filtro de autorização no `WHERE`, que traz itens e `count(*) OVER ()` |
+| **Listagens** (prazos, intimações, equipe, convites, solicitações) | snapshot único: vínculo do ator → uma consulta com o filtro de autorização no `WHERE`, que traz itens e `count(*) OVER ()`; **página vazia**: ver abaixo |
 | **Calendário** | snapshot único: vínculo → página de itens do mês → `countsByDay` (`GROUP BY due_date`) e total, todos do mesmo snapshot. Páginas diferentes são requisições diferentes (como hoje) |
 | **Notificações** | snapshot único: vínculo do destinatário → itens filtrados pela autorização **atual** (junção com o recurso e o vínculo) + `total` + `unread` na mesma consulta; `unread-count` numa consulta só |
 | **Autenticação por requisição** | um único `SELECT` com junção (§4.3) |
+
+**Total em páginas vazias** (correção da revisão 3; a implementar na P4): `count(*) OVER ()` só
+aparece nas linhas devolvidas. Uma página vazia (por exemplo, `page` além da última, ou um filtro
+sem resultados) não traz linha nenhuma, logo não traz o total. Regra da P4:
+- se a consulta paginada devolver zero linhas e `page > 1`, executa-se um `SELECT count(*)` com o
+  mesmo filtro de autorização, **na mesma transação `REPEATABLE READ READ ONLY`** (mesmo
+  snapshot). Com `page = 1` e zero linhas, o total é 0;
+- alternativa equivalente: uma única consulta com CTE (`WITH filtrados AS (…) SELECT
+  (SELECT count(*) FROM filtrados) AS total, página.* FROM (SELECT * FROM filtrados LIMIT … OFFSET
+  …) página RIGHT JOIN (SELECT 1) um ON true`), que sempre devolve ao menos uma linha com o total;
+- o mesmo vale para o calendário (`countsByDay` e total) e para notificações (`total` e `unread`):
+  totais e contadores nunca dependem de haver itens na página;
+- teste da P4: página além da última e filtro sem resultados devolvem `items=[]` com o total
+  correto, inclusive com uma escrita confirmada por outra conexão entre as consultas.
 
 O instante usado por essas leituras (urgência, expiração) é capturado logo **depois** da primeira
 consulta do snapshot (§4.6).
@@ -416,8 +447,9 @@ consulta do snapshot (§4.6).
   - B precisa ver a sessão, o token ou o convite como expirado.
 
   Também: no instante exato `tx.now == expires_at`, o recurso já é expirado.
-- **Manutenção:** com linhas bloqueadas por outra transação, a manutenção termina sem esperar e as
-  remove no lote seguinte.
+- **Manutenção:** linhas bloqueadas no momento da seleção são puladas e removidas numa execução
+  futura; uma espera além do `lock_timeout` desfaz o lote inteiro (nenhuma remoção parcial) e não
+  afeta operações de usuário.
 - **Rollback:** falha injetada em cada checkpoint existente → nenhum resíduo em nenhuma tabela.
 - **Reinício:** criar dados, recriar a aplicação (novo engine) e conferir que tudo persiste.
 - **Migrations:** `upgrade head` em banco vazio, `downgrade` da última e `upgrade` de novo.
@@ -613,10 +645,11 @@ COMMIT;                                                     -- 7. FKs diferidas:
 - **Bloqueio (lock):** reserva de uma linha para que outra transação espere (`SELECT … FOR UPDATE`).
 - **Versão otimista:** número que muda a cada alteração; quem envia uma versão antiga recebe
   conflito em vez de sobrescrever.
+- **`SKIP LOCKED`:** pula as linhas que outra transação já bloqueou no momento da seleção, em vez
+  de esperar por elas (usado na manutenção). Outras esperas continuam possíveis e são limitadas por
+  `lock_timeout`.
 - **Snapshot:** retrato do banco num instante. Em `REPEATABLE READ`, todas as consultas da
   transação veem o mesmo retrato; em `READ COMMITTED`, cada comando vê um retrato novo.
-- **`SKIP LOCKED`:** pula linhas que outra transação bloqueou, em vez de esperar (usado na
-  manutenção).
 - **Savepoint:** ponto de retorno dentro de uma transação; permite desfazer só um trecho que falhou
   (como uma colisão de código de ingresso) sem abortar a transação inteira.
 
@@ -744,7 +777,7 @@ Essa é a base da decisão da §4.5.
 | D5 | Concorrência | escritas em `READ COMMITTED` + âncora por escritório ou pessoa (`FOR NO KEY UPDATE`) + ordem única de bloqueios (domínio e autenticação), incluindo a manutenção com `SKIP LOCKED` |
 | D6 | Conflitos de bloqueio | 409 `concurrent_update` (código novo), **sem repetição automática no servidor** |
 | D7 | Sessões do BFF e rate limiting | fora do PostgreSQL nesta fase; armazenamento compartilhado (Redis recomendado) quando houver implantação com várias instâncias |
-| D8 | Retenção e caixa | manutenção oportunista + comando explícito, em lotes com `SKIP LOCKED`; política da caixa preservada (lidas mais antigas primeiro, depois não lidas mais antigas) |
+| D8 | Retenção e caixa | manutenção oportunista + comando explícito, em lotes com `SKIP LOCKED`, `lock_timeout` curto e rollback integral do lote em caso de espera ou erro (retomada numa execução futura); política da caixa preservada (lidas mais antigas primeiro, depois não lidas mais antigas) |
 | D9 | Testes com banco real | serviço `postgres:16` no CI e `TEST_DATABASE_URL` local; sem testcontainers |
 | D10 | Migrations | só por comando explícito; a app verifica a revisão ao iniciar |
 | D11 | Sequência | P1 → P5 conforme §5.5, cada entrega com auditoria |

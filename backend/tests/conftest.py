@@ -144,3 +144,67 @@ def client(auth_app):
 
 # Fixture `org` da Etapa 3 (escritórios/equipe).
 from tests.org_utils import org  # noqa: E402,F401
+
+# ---------------------------------------------------------------- PostgreSQL (P1: fundação)
+# Testes marcados com `postgres` usam um banco REAL descartável indicado por TEST_DATABASE_URL.
+# Sem a variável, são PULADOS localmente; com PRAZOAI_REQUIRE_POSTGRES_TESTS=1 (CI), FALHAM.
+# Toda a autorização acontece ANTES de qualquer conexão de escrita (tests/pg_support.py).
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "postgres: requer PostgreSQL real (TEST_DATABASE_URL)")
+
+
+@pytest.fixture(scope="session")
+def pg_url():
+    from tests.pg_support import UnauthorizedTestDatabase, authorize_test_database
+
+    raw = os.environ.get("TEST_DATABASE_URL")
+    if not raw:
+        if os.environ.get("PRAZOAI_REQUIRE_POSTGRES_TESTS") == "1":
+            pytest.fail("PRAZOAI_REQUIRE_POSTGRES_TESTS=1 exige TEST_DATABASE_URL.")
+        pytest.skip("TEST_DATABASE_URL não definida: testes com PostgreSQL pulados.")
+    try:
+        return authorize_test_database(
+            raw, os.environ.get("DATABASE_URL"),
+            environment=os.environ.get("ENVIRONMENT", ""), ci=os.environ.get("CI") == "true",
+        )
+    except UnauthorizedTestDatabase as exc:
+        pytest.fail(f"Banco de teste recusado: {exc}")
+
+
+@pytest.fixture(scope="session")
+def pg_config(pg_url):
+    from app.core.config import Settings
+    from app.db.config import database_config_from
+
+    return database_config_from(Settings(_env_file=None), url=pg_url)
+
+
+@pytest.fixture(scope="session")
+def pg_engine(pg_config, pg_url):
+    from app.db.engine import create_db_engine
+    from tests.pg_support import normalize_target, verify_and_prepare
+
+    engine = create_db_engine(pg_config, application_name="prazoai-tests")
+    try:
+        with engine.begin() as conn:
+            verify_and_prepare(conn, normalize_target(pg_url))
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def pg_clean(pg_engine):
+    """Limpa só as tabelas do projeto (P1: nenhuma) antes do teste."""
+    from sqlalchemy import text
+
+    from app.db.metadata import metadata
+    from tests.pg_support import truncate_statement
+
+    stmt = truncate_statement(metadata)
+    if stmt:
+        with pg_engine.begin() as conn:
+            conn.execute(text(stmt))
+    return pg_engine
