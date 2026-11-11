@@ -77,7 +77,7 @@ jobs:
           ENVIRONMENT: test
           TEST_DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_test
           PRAZOAI_REQUIRE_POSTGRES_TESTS: "1"
-      - name: Migrations pela linha de comando (upgrade → downgrade → upgrade, banco separado)
+      - name: Migrations pela linha de comando (vazio → head; 0002 → 0001 → 0002; base → head; banco separado)
         env:
           PGPASSWORD: prazoai-ci-only
           DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_ci_migrations
@@ -85,9 +85,14 @@ jobs:
           psql -h localhost -U prazoai -d prazoai_test -c "CREATE DATABASE prazoai_ci_migrations"
           python -m app.db check
           alembic upgrade head
-          alembic downgrade base
+          test "$(alembic current 2>/dev/null)" = "0002 (head)"
+          alembic downgrade 0001
+          test "$(alembic current 2>/dev/null)" = "0001"
           alembic upgrade head
-          test "$(alembic current 2>/dev/null)" = "0001 (head)"
+          alembic downgrade base
+          test -z "$(alembic current 2>/dev/null)"
+          alembic upgrade head
+          test "$(alembic current 2>/dev/null)" = "0002 (head)"
       - run: ruff check app tests migrations
       - run: mypy app
       - run: python -m compileall app migrations

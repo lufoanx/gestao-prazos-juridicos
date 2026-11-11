@@ -179,9 +179,22 @@ def open_test_engine(
     return engine, auth
 
 
-def truncate_statement(metadata: MetaData) -> str | None:
-    """TRUNCATE só das tabelas do projeto, com nomes qualificados e RESTRICT (nunca CASCADE)."""
-    names = [f'"{SCHEMA}"."{t.name}"' for t in metadata.sorted_tables if t.schema == SCHEMA]
+def truncate_statement(metadata: MetaData, existing: set[str] | None = None) -> str | None:
+    """TRUNCATE só das tabelas do projeto, com nomes qualificados e RESTRICT (nunca CASCADE).
+
+    `existing` (opcional) restringe às tabelas que existem no banco (ex.: banco ainda em `base`).
+    Todas as tabelas relacionadas por FK entram no MESMO comando, o que dispensa CASCADE.
+    """
+    names = [
+        f'"{SCHEMA}"."{t.name}"' for t in metadata.sorted_tables
+        if t.schema == SCHEMA and (existing is None or t.name in existing)
+    ]
     if not names:
         return None
     return f"TRUNCATE TABLE {', '.join(names)} RESTRICT"
+
+
+def existing_project_tables(conn: Connection) -> set[str]:
+    return {r[0] for r in conn.execute(text(
+        "SELECT c.relname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = :s AND c.relkind IN ('r', 'p')"), {"s": SCHEMA})}

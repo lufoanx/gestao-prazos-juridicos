@@ -203,14 +203,45 @@ def pg_config(pg_engine_and_auth):
 
 @pytest.fixture
 def pg_clean(pg_engine):
-    """Limpa só as tabelas do projeto (P1: nenhuma) antes do teste."""
+    """Limpa só as tabelas do projeto que existirem (qualificadas, RESTRICT) antes do teste."""
     from sqlalchemy import text
 
+    import app.db.tables  # noqa: F401  (registra as tabelas no MetaData)
     from app.db.metadata import metadata
-    from tests.pg_support import truncate_statement
+    from tests.pg_support import existing_project_tables, truncate_statement
 
-    stmt = truncate_statement(metadata)
-    if stmt:
-        with pg_engine.begin() as conn:
+    with pg_engine.begin() as conn:
+        stmt = truncate_statement(metadata, existing_project_tables(conn))
+        if stmt:
+            conn.execute(text(stmt))
+    return pg_engine
+
+
+def alembic_config_for(conn):
+    """Config do Alembic usando uma conexão já autorizada pela fixture protegida."""
+    from pathlib import Path
+
+    from alembic.config import Config
+
+    cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    cfg.attributes["connection"] = conn
+    return cfg
+
+
+@pytest.fixture
+def pg_schema(pg_engine):
+    """Banco de teste na revisão head (0002) e com as tabelas do projeto vazias."""
+    from alembic import command
+    from sqlalchemy import text
+
+    import app.db.tables  # noqa: F401
+    from app.db.metadata import metadata
+    from tests.pg_support import existing_project_tables, truncate_statement
+
+    with pg_engine.begin() as conn:
+        command.upgrade(alembic_config_for(conn), "head")
+    with pg_engine.begin() as conn:
+        stmt = truncate_statement(metadata, existing_project_tables(conn))
+        if stmt:
             conn.execute(text(stmt))
     return pg_engine

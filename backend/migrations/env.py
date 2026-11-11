@@ -16,7 +16,7 @@ from sqlalchemy import Connection, text
 from app.core.config import Settings
 from app.db.config import SCHEMA, database_config_from
 from app.db.engine import create_db_engine
-from app.db.metadata import metadata
+from app.db.tables import metadata  # registra as 14 tabelas (comparação com o esquema migrado)
 
 config = context.config
 
