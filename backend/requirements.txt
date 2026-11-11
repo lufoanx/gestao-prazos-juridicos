@@ -8,3 +8,8 @@ PyJWT==2.15.1
 email-validator==2.3.0
 # Etapa 4 — base IANA de fusos para zoneinfo (Windows não traz a base no sistema)
 tzdata==2026.5
+# Persistência — P1: fundação (justificativa em docs/backend/15-projeto-persistencia-postgresql.md e
+# docs/backend/16-p1-fundacao-persistencia.md). A aplicação ainda NÃO usa o banco (STORAGE=memory).
+SQLAlchemy==2.1.8
+alembic==1.20.1
+psycopg[binary]==3.3.8

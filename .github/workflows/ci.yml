@@ -48,6 +48,20 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # P1 (persistência): PostgreSQL 16 REAL e descartável para os testes de fundação.
+    # A aplicação continua em memória; o banco é usado só pelos testes e pelos comandos de migration.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: prazoai
+          POSTGRES_PASSWORD: prazoai-ci-only
+          POSTGRES_DB: prazoai_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U prazoai -d prazoai_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -57,23 +71,47 @@ jobs:
           cache-dependency-path: backend/requirements-dev.txt
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements-dev.txt
-      - run: pytest
-      - run: ruff check app tests
+      - name: pytest (inclui os testes com PostgreSQL real; falha se o banco não estiver configurado)
+        run: pytest
+        env:
+          ENVIRONMENT: test
+          TEST_DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_test
+          PRAZOAI_REQUIRE_POSTGRES_TESTS: "1"
+      - name: Migrations pela linha de comando (upgrade → downgrade → upgrade, banco separado)
+        env:
+          PGPASSWORD: prazoai-ci-only
+          DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_ci_migrations
+        run: |
+          psql -h localhost -U prazoai -d prazoai_test -c "CREATE DATABASE prazoai_ci_migrations"
+          python -m app.db check
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+          test "$(alembic current 2>/dev/null)" = "0001 (head)"
+      - run: ruff check app tests migrations
       - run: mypy app
-      - run: python -m compileall app
+      - run: python -m compileall app migrations
 
   # Etapa 6.1: integração REAL BFF ↔ FastAPI e E2E no navegador (Next em modo integrado).
   integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Imagem oficial com browsers e dependências: evita apt install no runner.
+    # Manter esta versão igual a @playwright/test no package-lock.json.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+      options: --init --ipc=host
+    defaults:
+      run:
+        shell: bash
     needs: [frontend, backend]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: backend/requirements-dev.txt
-      - run: pip install -r backend/requirements-dev.txt
+          # Sem cache pip neste contêiner: o cache da action exige lsb_release.
+      - run: python -m pip install -r backend/requirements-dev.txt
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -86,9 +124,19 @@ jobs:
         working-directory: frontend
         env:
           PRAZOAI_TEST_PYTHON: python
-      - name: Navegador do Playwright
-        run: npx playwright install --with-deps chromium
+      - name: Verificar Chromium preinstalado e versão do Playwright
         working-directory: frontend
+        run: |
+          node <<'NODE'
+          const { chromium } = require('@playwright/test');
+          const { version } = require('@playwright/test/package.json');
+          if (version !== '1.64.1') throw new Error('Atualize a imagem do CI para a versão instalada do Playwright');
+          (async () => {
+            const browser = await chromium.launch();
+            console.log(`Playwright ${version}; Chromium ${browser.version()}`);
+            await browser.close();
+          })().catch(error => { console.error(error); process.exit(1); });
+          NODE
       - name: E2E (navegador + Next integrado + FastAPI)
         run: npm run test:e2e
         working-directory: frontend

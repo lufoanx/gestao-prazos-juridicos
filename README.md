@@ -173,6 +173,9 @@ concluído e navegável** (modo demo); o **modo integrado** (Etapas 6.1–6.4) j
 fundação, a autenticação (Etapa 2), escritórios/equipe/permissões (Etapa 3) prazos (Etapa 4) e intimações/notificações (Etapa 5), em memória. Requisitos e validação do problema
 foram levantados nas etapas anteriores.
 
+Próximo passo planejado (ainda **não implementado**): persistência em PostgreSQL — projeto técnico em
+`docs/backend/15-projeto-persistencia-postgresql.md` (aguardando aprovação).
+
 Próximos passos:
 - banco de dados, armazenamento de arquivos e processamento de intimações
 - integração frontend–backend e testes de segurança

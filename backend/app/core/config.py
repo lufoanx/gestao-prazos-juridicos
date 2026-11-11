@@ -1,15 +1,33 @@
 """Configuração da aplicação e validação de variáveis de ambiente.
 
 Nenhum segredo fica no código. Valores vêm do ambiente (.env em desenvolvimento,
-variáveis do provedor em produção). Sem banco de dados nesta etapa.
+variáveis do provedor em produção). Persistência: P1 (fundação) — a aplicação continua usando só
+memória (`STORAGE=memory`); o banco é usado apenas por comandos explícitos (migrations, verificação)
+e pelos testes de fundação.
 """
 from __future__ import annotations
 
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ProductionNotReleasedError(RuntimeError):
+    """ENVIRONMENT=production ainda não está liberado (doc 15, §5.6): bloqueio por CÓDIGO.
+
+    Vale para qualquer combinação de AUTH_ENABLED, OFFICES_ENABLED e STORAGE. Configurar um banco
+    não libera produção; isso exige uma entrega própria e aprovada de prontidão.
+    """
+
+
+def ensure_not_production(settings: "Settings") -> None:
+    if settings.is_production:
+        raise ProductionNotReleasedError(
+            "ENVIRONMENT=production ainda não está liberado: a aplicação recusa iniciar em produção "
+            "(independentemente de AUTH_ENABLED, OFFICES_ENABLED e STORAGE) até a entrega de prontidão."
+        )
 
 
 class Settings(BaseSettings):
@@ -49,6 +67,24 @@ class Settings(BaseSettings):
     # configurar um armazenamento persistente.
     auth_enabled: bool = Field(default=True, alias="AUTH_ENABLED")
     auth_storage: Literal["memory"] = Field(default="memory", alias="AUTH_STORAGE")
+
+    # --- Persistência (P1: fundação). A aplicação continua 100% em memória. ---
+    # STORAGE: único valor aceito nesta entrega é "memory". "auth-postgres" (P3) e "postgres" (P4)
+    # são recusados com mensagem explícita até serem implementados (doc 15, §5.6).
+    storage: str = Field(default="memory", alias="STORAGE")
+    # URL de conexão (segredo). NÃO é validada aqui de propósito: erros do pydantic incluem o valor
+    # recebido, o que exporia a senha. A validação (sem credenciais na mensagem) fica em
+    # app/db/config.py e só ocorre quando um comando explícito precisa do banco. No modo memory a
+    # presença desta variável NÃO causa conexão (apenas um aviso no startup).
+    database_url: SecretStr | None = Field(default=None, alias="DATABASE_URL")
+    database_pool_size: int = Field(default=5, alias="DATABASE_POOL_SIZE", ge=1, le=50)
+    database_max_overflow: int = Field(default=5, alias="DATABASE_MAX_OVERFLOW", ge=0, le=50)
+    database_pool_timeout_seconds: int = Field(default=10, alias="DATABASE_POOL_TIMEOUT_SECONDS", ge=1, le=120)
+    database_connect_timeout_seconds: int = Field(default=5, alias="DATABASE_CONNECT_TIMEOUT_SECONDS", ge=1, le=60)
+    database_lock_timeout_ms: int = Field(default=5_000, alias="DATABASE_LOCK_TIMEOUT_MS", ge=100, le=60_000)
+    database_statement_timeout_ms: int = Field(
+        default=15_000, alias="DATABASE_STATEMENT_TIMEOUT_MS", ge=1_000, le=600_000
+    )
 
     # Segredo de assinatura dos access tokens (HS256). Sem valor padrão no código.
     # Obrigatório em staging/production. Em development/test, se ausente, cada
@@ -201,6 +237,40 @@ class Settings(BaseSettings):
         if raw.lower().startswith(("change", "troque", "placeholder", "example", "exemplo")):
             raise ValueError("AUTH_JWT_SECRET parece um placeholder; gere um valor aleatório.")
         return SecretStr(raw)
+
+    @field_validator("storage")
+    @classmethod
+    def _valid_storage(cls, v: str) -> str:
+        value = (v or "memory").strip().lower()
+        if value == "memory":
+            return value
+        if value in {"auth-postgres", "postgres"}:
+            raise ValueError(
+                f"STORAGE={value!r} ainda não está disponível: nesta entrega (P1) só 'memory' é aceito. "
+                "A autenticação no PostgreSQL chega na P3 e o domínio na P4."
+            )
+        raise ValueError(f"STORAGE inválido: {v!r}. Use 'memory'.")
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _empty_database_url(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return None  # variável vazia = não configurada (sem validar o conteúdo aqui)
+        return v
+
+    @model_validator(mode="after")
+    def _consistent_timeouts(self) -> Settings:
+        if self.database_statement_timeout_ms < self.database_lock_timeout_ms:
+            raise ValueError(
+                "DATABASE_STATEMENT_TIMEOUT_MS deve ser maior ou igual a DATABASE_LOCK_TIMEOUT_MS "
+                "(senão uma espera por bloqueio seria interrompida como consulta lenta)."
+            )
+        return self
+
+    @property
+    def auth_storage_explicit(self) -> bool:
+        """AUTH_STORAGE definido explicitamente (configuração antiga, aceita só como 'memory')."""
+        return "auth_storage" in self.model_fields_set
 
     @field_validator("environment")
     @classmethod

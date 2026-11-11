@@ -25,7 +25,7 @@ from pydantic import AfterValidator
 from app.api.health import router as health_router
 from app.api.router import build_api_v1_router
 from app.core.clock import Clock
-from app.core.config import get_settings
+from app.core.config import ensure_not_production, get_settings
 from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging, get_logger
 from app.security.passwords import PasswordHasher
@@ -72,6 +72,8 @@ def create_app(
     (testes). O estado de autenticação em memória pertence a esta instância.
     """
     settings = get_settings()
+    # Bloqueio INCONDICIONAL de produção, antes de configurar log, compor módulos ou criar recursos.
+    ensure_not_production(settings)
     configure_logging(settings.log_level)
     logger = get_logger("prazoai")
 
@@ -103,6 +105,16 @@ def create_app(
 
     # Tratamento global de erros (sem stack trace/caminhos).
     register_error_handlers(app)
+
+    # Persistência (P1): a aplicação continua EM MEMÓRIA e NUNCA se conecta ao banco no startup.
+    # DATABASE_URL presente no modo memory é ignorada (só avisa, sem conectar nem validar a URL).
+    if settings.database_url is not None:
+        logger.warning(
+            "database_url_ignored: STORAGE=memory; DATABASE_URL não é usada pela aplicação nesta entrega "
+            "(apenas por migrations e por 'python -m app.db check')."
+        )
+    if settings.auth_storage_explicit:
+        logger.warning("auth_storage_deprecated: AUTH_STORAGE será substituída por STORAGE (aceita só 'memory').")
 
     # Autenticação (Etapa 2): estado EM MEMÓRIA por instância. Bloqueado em production.
     # Etapa 6.1: segredo do intermediário (BFF) para aceitar o IP do cliente; None = desativado.

@@ -19,19 +19,18 @@ def test_environment_invalido_rejeitado(monkeypatch):
     get_settings.cache_clear()
 
 
-def test_production_desliga_docs(monkeypatch):
+def test_production_e_recusada_antes_de_criar_a_aplicacao(monkeypatch):
+    # Antes da P1 este teste criava a app em production (sem autenticação) para conferir que o Swagger
+    # ficava desligado. O projeto aprovado (doc 15, §5.6) bloqueia production incondicionalmente, então
+    # a app nem chega a ser criada; a regra "docs só fora de produção" segue no código para a entrega
+    # de prontidão.
+    from app.core.config import ProductionNotReleasedError
+
     monkeypatch.setenv("ENVIRONMENT", "production")
-    # Etapa 2: o armazenamento de autenticação em memória é bloqueado em production;
-    # este teste verifica docs/health, então desliga o módulo de autenticação.
     monkeypatch.setenv("AUTH_ENABLED", "false")
     get_settings.cache_clear()
-    app = create_app()
-    client = TestClient(app, raise_server_exceptions=False)
-    assert client.get("/docs").status_code == 404
-    assert client.get("/redoc").status_code == 404
-    assert client.get("/openapi.json").status_code == 404
-    # health continua funcionando em produção
-    assert client.get("/api/v1/health").status_code == 200
+    with pytest.raises(ProductionNotReleasedError):
+        create_app()
     get_settings.cache_clear()
 
 
