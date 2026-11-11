@@ -2,7 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.services.org_container import InMemoryOrgBlockedError
+from app.core.config import ProductionNotReleasedError
 from tests.org_utils import ALL, API
 
 
@@ -119,13 +119,34 @@ def test_entrar_em_escritorio_nao_altera_dados_pessoais(org):
 
 
 def test_production_bloqueia_escritorios_mesmo_com_auth_desligada(make_app):
-    with pytest.raises(InMemoryOrgBlockedError):
+    # P1: recusa incondicional antes de compor módulos (antes: InMemoryOrgBlockedError, mantido como defesa).
+    with pytest.raises(ProductionNotReleasedError):
         make_app(ENVIRONMENT="production", AUTH_ENABLED="false", OFFICES_ENABLED="true")
 
 
-def test_production_com_auth_desligada_e_escritorios_padrao_sobe_sem_rotas(make_app):
-    client = TestClient(make_app(ENVIRONMENT="production", AUTH_ENABLED="false"), raise_server_exceptions=False)
-    assert client.post(f"{API}/offices", json={}).status_code == 404
+@pytest.mark.parametrize("env", [
+    {"AUTH_ENABLED": "false", "OFFICES_ENABLED": "false"},                 # ambos os módulos desligados
+    {"AUTH_ENABLED": "false"},                                              # escritórios no padrão (desligados)
+    {"AUTH_ENABLED": "false", "OFFICES_ENABLED": "false", "STORAGE": "memory"},
+    {"AUTH_JWT_SECRET": "s" * 48, "OFFICES_ENABLED": "true"},               # módulos ligados
+])
+def test_production_recusada_em_qualquer_combinacao(make_app, env):
+    # Antes da P1, production com AUTH_ENABLED=false subia sem rotas de escritório. O projeto aprovado
+    # (doc 15, §5.6) exige recusa incondicional até a entrega de prontidão: mudança intencional.
+    with pytest.raises(ProductionNotReleasedError):
+        make_app(ENVIRONMENT="production", **env)
+
+
+def test_bloqueio_de_production_acontece_antes_de_compor_modulos(make_app, monkeypatch):
+    import app.main as main_module
+
+    def must_not_run(*_a, **_k):
+        raise AssertionError("módulo composto antes do bloqueio de production")
+
+    for name in ("build_auth_container", "build_org_container", "ensure_offices_allowed", "configure_logging"):
+        monkeypatch.setattr(main_module, name, must_not_run)
+    with pytest.raises(ProductionNotReleasedError):
+        make_app(ENVIRONMENT="production", AUTH_ENABLED="false", OFFICES_ENABLED="false")
 
 
 def test_escritorios_exigem_autenticacao_ligada(make_app):

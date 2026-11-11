@@ -156,8 +156,9 @@ def pytest_configure(config):
 
 
 @pytest.fixture(scope="session")
-def pg_url():
-    from tests.pg_support import UnauthorizedTestDatabase, authorize_test_database
+def pg_engine_and_auth():
+    from app.db.engine import create_db_engine
+    from tests.pg_support import UnauthorizedTestDatabase, open_test_engine
 
     raw = os.environ.get("TEST_DATABASE_URL")
     if not raw:
@@ -165,34 +166,39 @@ def pg_url():
             pytest.fail("PRAZOAI_REQUIRE_POSTGRES_TESTS=1 exige TEST_DATABASE_URL.")
         pytest.skip("TEST_DATABASE_URL não definida: testes com PostgreSQL pulados.")
     try:
-        return authorize_test_database(
-            raw, os.environ.get("DATABASE_URL"),
+        engine, auth = open_test_engine(
+            test_raw=raw, app_raw=os.environ.get("DATABASE_URL"),
             environment=os.environ.get("ENVIRONMENT", ""), ci=os.environ.get("CI") == "true",
+            env=os.environ, engine_factory=create_db_engine,
         )
     except UnauthorizedTestDatabase as exc:
         pytest.fail(f"Banco de teste recusado: {exc}")
-
-
-@pytest.fixture(scope="session")
-def pg_config(pg_url):
-    from app.core.config import Settings
-    from app.db.config import database_config_from
-
-    return database_config_from(Settings(_env_file=None), url=pg_url)
-
-
-@pytest.fixture(scope="session")
-def pg_engine(pg_config, pg_url):
-    from app.db.engine import create_db_engine
-    from tests.pg_support import normalize_target, verify_and_prepare
-
-    engine = create_db_engine(pg_config, application_name="prazoai-tests")
     try:
-        with engine.begin() as conn:
-            verify_and_prepare(conn, normalize_target(pg_url))
-        yield engine
+        yield engine, auth
     finally:
         engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def pg_engine(pg_engine_and_auth):
+    return pg_engine_and_auth[0]
+
+
+@pytest.fixture(scope="session")
+def pg_url(pg_engine_and_auth):
+    return pg_engine_and_auth[1].url
+
+
+@pytest.fixture(scope="session")
+def pg_target(pg_engine_and_auth):
+    return pg_engine_and_auth[1].target
+
+
+@pytest.fixture(scope="session")
+def pg_config(pg_engine_and_auth):
+    from tests.pg_support import config_for_test_database
+
+    return config_for_test_database(pg_engine_and_auth[1], os.environ)
 
 
 @pytest.fixture

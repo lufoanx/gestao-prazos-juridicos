@@ -18,6 +18,7 @@ from tests.pg_support import (
     UnauthorizedTestDatabase,
     authorize_test_database,
     normalize_target,
+    open_test_engine,
     truncate_statement,
 )
 
@@ -91,6 +92,7 @@ def test_url_normalizada_e_descricao_segura():
     assert safe_target(url) == "db.local:6543/prazoai"
     socket_url = parse_database_url("postgresql://u@/prazoai?host=/run/pg&port=6000")
     assert safe_target(socket_url) == "socket-local:6000/prazoai"
+    assert safe_target(parse_database_url("postgresql://u@/prazoai")) == "(destino ambíguo)/prazoai"
     cfg = database_config_from(settings(DATABASE_URL=f"postgresql://prazoai:{SECRET}@db.local:6543/prazoai"))
     assert SECRET not in repr(cfg) and "prazoai@" not in repr(cfg)
     assert SECRET not in repr(settings(DATABASE_URL=URL))      # SecretStr
@@ -141,34 +143,155 @@ def test_engine_configura_timeouts_esquema_e_encerra(monkeypatch):
 
 
 # ---------------------------------------------------------------- proteções da fixture
-def auth(test_raw, app_raw=None, environment="test", ci=False):
-    return authorize_test_database(test_raw, app_raw, environment=environment, ci=ci)
+# Valores FICTÍCIOS (domínios .invalid e IPs de documentação); nada aqui tenta conectar.
+EXTERNAL_IP = "203.0.113.50"
+EXTERNAL_HOST = "db.externo.invalid"
 
 
-def test_fixture_aceita_banco_local_autorizado():
-    assert auth(URL).database == "prazoai_test"
-    assert auth(URL.replace("prazoai_test", "prazoai_test_p1")).database == "prazoai_test_p1"
+def auth(test_raw, app_raw=None, environment="test", ci=False, env=None):
+    return authorize_test_database(test_raw, app_raw, environment=environment, ci=ci, env=env or {})
+
+
+@pytest.fixture
+def no_connections(monkeypatch):
+    """Dublê: qualquer tentativa de conexão pelo driver falha o teste."""
+    import psycopg
+
+    calls: list[dict] = []
+
+    def forbidden(*args, **kwargs):
+        calls.append(kwargs)
+        raise AssertionError("tentativa de conexão durante um teste de recusa")
+
+    monkeypatch.setattr(psycopg, "connect", forbidden)
+    return calls
+
+
+def open_with_doubles(env, test_raw=URL, app_raw=None, ci=False):
+    created: list[object] = []
+
+    def factory(cfg, **kwargs):
+        created.append(cfg)
+        raise AssertionError("engine criado: a recusa deveria acontecer antes")
+
+    try:
+        open_test_engine(test_raw=test_raw, app_raw=app_raw, environment="test", ci=ci, env=env,
+                         engine_factory=factory)
+    finally:
+        assert created == []                     # nenhum engine → nenhuma conexão → nenhuma escrita
+
+
+def test_fixture_aceita_configuracao_local_explicita():
+    a = auth(URL)
+    assert (a.target.host, a.target.port, a.target.database) == ("localhost", 5432, "prazoai_test")
+    assert auth(URL.replace("prazoai_test", "prazoai_test_p1")).target.database == "prazoai_test_p1"
+    s = auth("postgresql+psycopg://prazoai:x@/prazoai_test?host=/var/run/postgresql&port=55433")
+    assert (s.target.host, s.target.port, s.target.is_socket) == ("/var/run/postgresql", 55433, True)
+
+
+@pytest.mark.parametrize("var, value", [
+    ("PGHOSTADDR", EXTERNAL_IP), ("PGSERVICE", "producao"), ("PGSERVICEFILE", "/etc/pg_service.conf"),
+])
+def test_variaveis_libpq_que_redirecionam_sao_recusadas_sem_conectar(var, value, no_connections):
+    with pytest.raises(UnauthorizedTestDatabase, match=var):
+        open_with_doubles({var: value})                       # URL com localhost explícito
+    assert no_connections == []
+
+
+def test_url_sem_host_com_pghost_externo_recusada_sem_conectar(no_connections):
+    with pytest.raises(UnauthorizedTestDatabase, match="host explicitamente"):
+        open_with_doubles({"PGHOST": EXTERNAL_HOST}, test_raw="postgresql+psycopg://prazoai:x@/prazoai_test")
+    with pytest.raises(UnauthorizedTestDatabase, match="host explicitamente"):
+        auth("postgresql+psycopg://prazoai:x@/prazoai_test")  # sem PGHOST: também NÃO é presumido local
+    assert no_connections == []
+
+
+@pytest.mark.parametrize("raw", [
+    "postgresql+psycopg://p:x@localhost:0/prazoai_test",
+    "postgresql+psycopg://p:x@localhost:70000/prazoai_test",
+    "postgresql+psycopg://p:x@localhost/prazoai_test?port=abc",
+    "postgresql+psycopg://p:x@localhost/prazoai_test?port=0",
+    "postgresql+psycopg://p:x@localhost/prazoai_test?port=65536",
+    "postgresql+psycopg://p:x@localhost:5432/prazoai_test?port=5433",       # porta nos dois lugares
+    "postgresql+psycopg://p:x@localhost/prazoai_test?host=/tmp",           # host nos dois lugares
+])
+def test_portas_invalidas_ou_ambiguas_recusadas_sem_fallback(raw, no_connections):
+    with pytest.raises(UnauthorizedTestDatabase):
+        open_with_doubles({}, test_raw=raw)
+    assert no_connections == []
+
+
+def test_porta_da_query_e_porta_herdada():
+    assert auth("postgresql+psycopg://p:x@localhost/prazoai_test?port=55433").target.port == 55433
+    # PGPORT herdada NÃO vale: a porta efetiva é sempre explícita (5432 se a URL não disser).
+    assert auth(URL.replace(":5432", ""), env={"PGPORT": "6543"}).target.port == 5432
+
+
+def test_parametros_efetivos_entregues_ao_driver_ignoram_pghost_pgport_pgdatabase(monkeypatch):
+    """Dublê do driver captura os parâmetros REAIS da conexão; nada é contatado."""
+    import psycopg
+
+    from app.db.engine import create_db_engine
+    from tests.pg_support import config_for_test_database
+
+    for k, v in {"PGHOST": EXTERNAL_HOST, "PGPORT": "6543", "PGDATABASE": "prazoai"}.items():
+        monkeypatch.setenv(k, v)                                    # herdadas (fictícias)
+    captured: list[dict] = []
+
+    class Sentinel(Exception):
+        pass
+
+    def fake_connect(*args, **kwargs):
+        captured.append(kwargs)
+        raise Sentinel()
+
+    monkeypatch.setattr(psycopg, "connect", fake_connect)
+    import os
+    a = authorize_test_database(URL.replace(":5432", ":55433"), None, environment="test", ci=False, env=os.environ)
+    engine = create_db_engine(config_for_test_database(a, os.environ))
+    try:
+        with pytest.raises(Sentinel):
+            engine.connect()
+    finally:
+        engine.dispose()
+    kw = captured[0]
+    assert (kw["host"], kw["port"], kw["dbname"]) == ("localhost", 55433, "prazoai_test")
+    assert "hostaddr" not in kw and "service" not in kw
+    assert "lock_timeout" in kw["options"] and "search_path=prazoai" in kw["options"]
 
 
 @pytest.mark.parametrize("app_url", [
     URL,
     "postgresql+psycopg://outro:x@127.0.0.1/prazoai_test",                 # mesmo destino, outro usuário/host local
-    "postgresql://admin:y@[::1]:5432/prazoai_test?sslmode=disable",        # IPv6 de loopback + porta padrão explícita
+    "postgresql://admin:y@[::1]:5432/prazoai_test?sslmode=disable",         # IPv6 de loopback + porta padrão explícita
     "postgresql+psycopg://u@/prazoai_test?host=/var/run/postgresql",        # socket local
-    "postgresql+psycopg://outro:x@db.remoto/prazoai_test?host=localhost",   # host da query prevalece
+    "postgresql+psycopg://u@localhost/prazoai_test?port=5432",              # porta na query
 ])
-def test_fixture_recusa_mesmo_destino_normalizado(app_url):
+def test_fixture_recusa_mesmo_destino_escrito_de_formas_equivalentes(app_url, no_connections):
     with pytest.raises(UnauthorizedTestDatabase, match="MESMO destino"):
-        auth(URL, app_url)
+        open_with_doubles({}, app_raw=app_url)
+    assert no_connections == []
 
 
-def test_fixture_considera_porta_e_host_da_query_string():
+def test_fixture_considera_porta_da_query_na_comparacao():
     test_url = "postgresql+psycopg://prazoai:x@localhost:55433/prazoai_test"
     with pytest.raises(UnauthorizedTestDatabase, match="MESMO destino"):
         auth(test_url, "postgresql+psycopg://outro:y@127.0.0.1/prazoai_test?port=55433")
-    assert auth(test_url, "postgresql+psycopg://outro:y@127.0.0.1/prazoai_test?port=5432").database == "prazoai_test"
+    assert auth(test_url, "postgresql+psycopg://outro:y@127.0.0.1/prazoai_test?port=5432").target.port == 55433
     with pytest.raises(UnauthorizedTestDatabase, match="Host não autorizado"):
-        auth("postgresql+psycopg://prazoai:x@localhost/prazoai_test?host=db.empresa.com")
+        auth(f"postgresql+psycopg://prazoai:x@/prazoai_test?host={EXTERNAL_HOST}")
+
+
+@pytest.mark.parametrize("app_url", [
+    f"mysql://u:{SECRET}@h/x",                                              # inválida
+    "postgresql+psycopg://u:p@/prazoai_test",                               # sem host: destino indeterminado
+    "postgresql+psycopg://u:p@localhost:5432/prazoai_test?port=5433",       # ambígua
+])
+def test_database_url_invalida_ou_ambigua_impede_provar_destino_diferente(app_url, no_connections):
+    with pytest.raises(UnauthorizedTestDatabase, match="inválida ou ambígua") as exc:
+        open_with_doubles({}, app_raw=app_url)
+    assert SECRET not in str(exc.value)
+    assert no_connections == []
 
 
 @pytest.mark.parametrize("query", ["service=prod", "hostaddr=10.0.0.5", "dbname=prazoai", "host=a,b", "port=1,2"])
@@ -178,34 +301,34 @@ def test_parametros_que_redirecionam_a_conexao_sao_recusados(query):
 
 
 def test_fixture_aceita_destino_diferente_da_aplicacao():
-    assert auth(URL, "postgresql+psycopg://u:p@localhost:5432/prazoai_dev").database == "prazoai_test"
-    assert auth(URL, "postgresql+psycopg://u:p@localhost:5433/prazoai_test").database == "prazoai_test"   # outra porta
+    assert auth(URL, "postgresql+psycopg://u:p@localhost:5432/prazoai_dev").target.database == "prazoai_test"
+    assert auth(URL, "postgresql+psycopg://u:p@localhost:5433/prazoai_test").target.port == 5432   # outra porta
 
 
 @pytest.mark.parametrize("raw, reason", [
     (URL.replace("prazoai_test", "prazoai"), "Nome de banco"),
     (URL.replace("prazoai_test", "prazoai_testx"), "Nome de banco"),
     (URL.replace("prazoai_test", "postgres"), "Nome de banco"),
-    (URL.replace("localhost", "db.empresa.com"), "Host não autorizado"),
+    (URL.replace("localhost", EXTERNAL_HOST), "Host não autorizado"),
+    (URL.replace("localhost", EXTERNAL_IP), "Host não autorizado"),
     (URL.replace("localhost", "postgres"), "Host não autorizado"),          # serviço do CI só com CI=true
 ])
-def test_fixture_recusa_destinos_nao_autorizados(raw, reason):
+def test_fixture_recusa_destinos_nao_autorizados(raw, reason, no_connections):
     with pytest.raises(UnauthorizedTestDatabase, match=reason) as exc:
-        auth(raw)
+        open_with_doubles({}, test_raw=raw)
     assert SECRET not in str(exc.value)
+    assert no_connections == []
 
 
-def test_fixture_exige_environment_test_e_url_valida():
+def test_fixture_exige_environment_test_e_url_definida():
     with pytest.raises(UnauthorizedTestDatabase, match="ENVIRONMENT"):
         auth(URL, environment="development")
     with pytest.raises(UnauthorizedTestDatabase, match="não definida"):
         auth(None)
-    with pytest.raises(UnauthorizedTestDatabase, match="DATABASE_URL inválida"):
-        auth(URL, f"mysql://u:{SECRET}@h/x")
 
 
 def test_fixture_aceita_servico_do_ci_somente_com_ci_true():
-    assert auth(URL.replace("localhost", "postgres"), ci=True).host == "postgres"
+    assert auth(URL.replace("localhost", "postgres"), ci=True).target.host == "postgres"
 
 
 def test_normalizacao_de_destino():

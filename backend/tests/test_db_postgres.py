@@ -99,7 +99,9 @@ def test_connect_timeout_para_servidor_que_nao_responde(pg_config):
     port = srv.getsockname()[1]
     stop = threading.Event()
     try:
-        cfg = replace(pg_config, url=pg_config.url.set(host="127.0.0.1", port=port), connect_timeout_seconds=1)
+        # O destino efetivo é o ConnectionTarget (host/porta explícitos ao driver), não só a URL.
+        cfg = replace(pg_config, url=pg_config.url.set(host="127.0.0.1", port=port),
+                      target=replace(pg_config.target, host="127.0.0.1", port=port), connect_timeout_seconds=1)
         engine = create_db_engine(cfg)
         start = time.monotonic()
         with pytest.raises(OperationalError):
@@ -195,3 +197,48 @@ def test_check_cli_mostra_destino_sem_credenciais(pg_url, monkeypatch, capsys):
     if pg_url.password:
         assert pg_url.password not in out.out + out.err
     assert (pg_url.username or "@@") + ":" not in out.out
+
+
+# ---------------------------------------------------------------- destino efetivo (auditoria da P1)
+def test_variaveis_herdadas_nao_desviam_a_conexao(pg_target, pg_config, monkeypatch):
+    """PGHOST/PGPORT/PGDATABASE fictícias não têm efeito: host/porta/banco são passados explicitamente."""
+    from app.db.engine import create_db_engine
+    from tests.pg_support import verify_effective_destination
+
+    monkeypatch.setenv("PGHOST", "db.externo.invalid")
+    monkeypatch.setenv("PGPORT", "1")
+    monkeypatch.setenv("PGDATABASE", "prazoai")
+    engine = create_db_engine(pg_config, application_name="prazoai-tests-env")
+    try:
+        with engine.connect() as conn:
+            info = conn.connection.dbapi_connection.info
+            assert (info.host, int(info.port), info.dbname) == (pg_target.host, pg_target.port, pg_target.database)
+            verify_effective_destination(conn, pg_target)            # só leitura
+            assert conn.execute(text("SELECT current_database()")).scalar_one() == pg_target.database
+    finally:
+        engine.dispose()
+
+
+def test_verificacao_pos_conexao_detecta_destino_divergente(pg_clean, pg_target):
+    from dataclasses import replace
+
+    from tests.pg_support import UnauthorizedTestDatabase, verify_effective_destination
+
+    with pg_clean.connect() as conn:
+        for wrong in (replace(pg_target, port=pg_target.port + 1), replace(pg_target, database="prazoai_test_x"),
+                      replace(pg_target, host="db.externo.invalid")):
+            with pytest.raises(UnauthorizedTestDatabase):
+                verify_effective_destination(conn, wrong)
+
+
+def test_pghostaddr_recusada_mesmo_apontando_para_loopback(pg_url, monkeypatch):
+    import os
+
+    from tests.pg_support import UnauthorizedTestDatabase, open_test_engine
+
+    created: list[object] = []
+    monkeypatch.setenv("PGHOSTADDR", "127.0.0.1")
+    with pytest.raises(UnauthorizedTestDatabase, match="PGHOSTADDR"):
+        open_test_engine(test_raw=pg_url.render_as_string(hide_password=False), app_raw=None, environment="test",
+                         ci=False, env=os.environ, engine_factory=lambda *a, **k: created.append(a))
+    assert created == []

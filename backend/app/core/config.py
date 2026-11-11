@@ -14,6 +14,22 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+class ProductionNotReleasedError(RuntimeError):
+    """ENVIRONMENT=production ainda não está liberado (doc 15, §5.6): bloqueio por CÓDIGO.
+
+    Vale para qualquer combinação de AUTH_ENABLED, OFFICES_ENABLED e STORAGE. Configurar um banco
+    não libera produção; isso exige uma entrega própria e aprovada de prontidão.
+    """
+
+
+def ensure_not_production(settings: "Settings") -> None:
+    if settings.is_production:
+        raise ProductionNotReleasedError(
+            "ENVIRONMENT=production ainda não está liberado: a aplicação recusa iniciar em produção "
+            "(independentemente de AUTH_ENABLED, OFFICES_ENABLED e STORAGE) até a entrega de prontidão."
+        )
+
+
 class Settings(BaseSettings):
     """Variáveis de ambiente validadas da fundação do backend."""
 

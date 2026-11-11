@@ -84,7 +84,8 @@ oficial é `/api/v1/health`.
 ## Autenticação (Etapa 2 — em memória)
 > ⚠️ **Não é produção.** Usuários, sessões e tokens ficam na memória do processo: são
 > **perdidos ao reiniciar** e **não funcionam com múltiplos workers** (rode com um só).
-> Com `ENVIRONMENT=production` e `AUTH_ENABLED=true`, a aplicação **não inicia**.
+> Com `ENVIRONMENT=production`, a aplicação **não inicia** em nenhuma configuração (desde a P1 da
+> persistência, mesmo com `AUTH_ENABLED=false`).
 
 | Método e rota | Auth | Resposta |
 |---|---|---|
@@ -173,12 +174,16 @@ DATABASE_URL=... alembic downgrade base    # reverte
 ENVIRONMENT=test TEST_DATABASE_URL=postgresql+psycopg://prazoai:<senha>@localhost:5432/prazoai_test pytest
 ```
 Sem `TEST_DATABASE_URL`, os testes com PostgreSQL são **pulados** localmente (o CI define
-`PRAZOAI_REQUIRE_POSTGRES_TESTS=1` e os torna obrigatórios).
+`PRAZOAI_REQUIRE_POSTGRES_TESTS=1` e os torna obrigatórios). As URLs precisam indicar o host
+explicitamente, e `PGHOSTADDR`, `PGSERVICE` e `PGSERVICEFILE` não podem estar definidas no ambiente.
+
+**Produção:** `create_app()` recusa `ENVIRONMENT=production` em qualquer configuração
+(`ProductionNotReleasedError`) até a entrega de prontidão.
 
 ## Configuração (variáveis de ambiente)
 Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigatório; nunca versione o `.env`):
 - `SERVICE_NAME` (padrão `prazoai-backend`)
-- `ENVIRONMENT` (`development` habilita Swagger em `/docs`; `production` desabilita)
+- `ENVIRONMENT` (`development`/`test`/`staging` habilitam Swagger em `/docs`; `production` é recusado no startup até a entrega de prontidão)
 - `API_PREFIX` (padrão `/api`)
 - `API_VERSION_PREFIX` (padrão `/v1`; base canônica = `API_PREFIX`+`API_VERSION_PREFIX` → `/api/v1`)
 - `ENABLE_LEGACY_HEALTH_ALIAS` (padrão `true`; expõe `/api/health` como alias legado)
@@ -205,4 +210,4 @@ Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigató
 - `/calcular-prazo` desconsidera sábados, domingos e **feriados nacionais**
   (Issue #2). Não contempla recesso forense, feriados estaduais/municipais nem
   calendários de tribunais — ver `docs/backend/05-calculo-de-prazos.md`.
-- Swagger/OpenAPI em `/docs` e `/openapi.json` apenas fora de produção.
+- Swagger/OpenAPI em `/docs` e `/openapi.json` apenas fora de produção (produção está bloqueada no startup).

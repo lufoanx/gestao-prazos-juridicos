@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 
-from app.services.auth_container import InMemoryAuthBlockedError
+from app.core.config import ProductionNotReleasedError
 from tests.auth_utils import API, PASSWORD, bearer, error_code, login, register, register_and_login
 
 
@@ -163,14 +163,17 @@ def test_isolamento_mesmo_com_o_mesmo_segredo(make_app, clock):
 
 # ---------- Produção e configuração ----------
 def test_armazenamento_em_memoria_bloqueado_em_production(make_app):
-    with pytest.raises(InMemoryAuthBlockedError):
+    # P1 da persistência: production é recusada ANTES de compor a autenticação (bloqueio incondicional;
+    # antes: InMemoryAuthBlockedError, que continua existindo como defesa adicional).
+    with pytest.raises(ProductionNotReleasedError):
         make_app(ENVIRONMENT="production", AUTH_JWT_SECRET="s" * 48)
 
 
-def test_production_sem_auth_continua_servindo_health(make_app):
-    client = TestClient(make_app(ENVIRONMENT="production", AUTH_ENABLED="false"), raise_server_exceptions=False)
-    assert client.get(f"{API}/health").status_code == 200
-    assert client.post(f"{API}/auth/login", json={}).status_code == 404
+def test_production_sem_auth_tambem_e_recusada(make_app):
+    # Antes da P1, production com AUTH_ENABLED=false servia /health. O projeto aprovado (doc 15, §5.6)
+    # exige recusa incondicional até a entrega de prontidão: o comportamento foi alterado de propósito.
+    with pytest.raises(ProductionNotReleasedError):
+        make_app(ENVIRONMENT="production", AUTH_ENABLED="false")
 
 
 def test_staging_exige_segredo_explicito(make_app):

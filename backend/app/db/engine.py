@@ -4,7 +4,9 @@ Cada conexão do pool nasce com:
 - `lock_timeout` e `statement_timeout` da configuração;
 - `search_path` fixado no esquema do projeto (o código ainda qualifica `prazoai.<tabela>`);
 - `application_name` para identificar a origem no PostgreSQL;
-- `connect_timeout` (segundos) para não travar se o servidor não responder.
+- `connect_timeout` (segundos) para não travar se o servidor não responder;
+- `host`, `port` e `dbname` EXPLÍCITOS do ConnectionTarget: variáveis PGHOST/PGPORT/PGDATABASE
+  herdadas não alteram o destino (PGHOSTADDR/PGSERVICE são recusadas em app/db/config.py).
 `hide_parameters=True` evita que valores de parâmetros apareçam em mensagens de erro.
 """
 from __future__ import annotations
@@ -15,6 +17,18 @@ from contextlib import contextmanager
 from sqlalchemy import Engine, create_engine
 
 from app.db.config import SCHEMA, DatabaseConfig
+
+
+def connect_arguments(cfg: DatabaseConfig, *, application_name: str = "prazoai-backend") -> dict[str, object]:
+    """Parâmetros efetivos entregues ao driver (além de usuário/senha da URL)."""
+    return {
+        "host": cfg.target.host,
+        "port": cfg.target.port,
+        "dbname": cfg.target.database,
+        "connect_timeout": cfg.connect_timeout_seconds,
+        "options": connection_options(cfg),
+        "application_name": application_name,
+    }
 
 
 def connection_options(cfg: DatabaseConfig) -> str:
@@ -33,11 +47,7 @@ def create_db_engine(cfg: DatabaseConfig, *, application_name: str = "prazoai-ba
         pool_timeout=cfg.pool_timeout_seconds,
         pool_pre_ping=True,
         hide_parameters=True,
-        connect_args={
-            "connect_timeout": cfg.connect_timeout_seconds,
-            "options": connection_options(cfg),
-            "application_name": application_name,
-        },
+        connect_args=connect_arguments(cfg, application_name=application_name),
     )
 
 
