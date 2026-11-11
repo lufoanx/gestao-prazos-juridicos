@@ -6,7 +6,9 @@
 --   * IDs: uuid (a API continua expondo o hex de 32 caracteres; conversão no repositório);
 --   * instantes: timestamptz (UTC); datas civis: date; horário de agenda: time (sem fuso);
 --   * enumerações: text + CHECK (mais simples de evoluir que tipos ENUM);
---   * "escopo": kind + owner_id/office_id, com coluna gerada scope_key para FKs compostas.
+--   * "escopo": kind + owner_id/office_id, com coluna gerada scope_key para FKs compostas;
+--   * nenhuma coluna de negócio usa DEFAULT now(): todo instante vem da aplicação (tx.now,
+--     capturado DEPOIS dos bloqueios; doc 15, §4.6). now() devolveria o início da transação.
 -- =====================================================================================
 
 -- ------------------------------------------------------------------ identidade e sessões
