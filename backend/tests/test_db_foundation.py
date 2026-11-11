@@ -337,32 +337,54 @@ def test_normalizacao_de_destino():
 
 
 def test_truncate_so_tabelas_do_projeto_qualificadas_e_sem_cascade():
-    assert truncate_statement(metadata) is None                  # P1: nenhuma tabela de negócio
+    import app.db.tables as tables
+
+    stmt = truncate_statement(metadata)
+    assert stmt is not None and stmt.endswith(" RESTRICT") and "CASCADE" not in stmt
+    assert stmt.count('"prazoai".') == len(tables.TABLE_NAMES) == 14
     md = MetaData(schema=SCHEMA)
     Table("a", md, Column("id", Integer, primary_key=True))
     Table("b", md, Column("id", Integer, primary_key=True))
     Table("fora", MetaData(schema="public"), Column("id", Integer, primary_key=True))
-    stmt = truncate_statement(md)
-    assert stmt == f'TRUNCATE TABLE "{SCHEMA}"."a", "{SCHEMA}"."b" RESTRICT'
-    assert "CASCADE" not in stmt
+    assert truncate_statement(md) == f'TRUNCATE TABLE "{SCHEMA}"."a", "{SCHEMA}"."b" RESTRICT'
+    assert truncate_statement(md, existing={"b"}) == f'TRUNCATE TABLE "{SCHEMA}"."b" RESTRICT'
+    assert truncate_statement(md, existing=set()) is None
 
 
-def test_metadata_p1_sem_tabelas_e_no_esquema_explicito():
+def test_metadata_unico_com_as_14_tabelas_no_esquema_explicito():
+    # P1 afirmava "nenhuma tabela"; a P2 registra as 14 tabelas aprovadas no MESMO MetaData.
+    import app.db.tables as tables
+
+    assert tables.metadata is metadata
     assert metadata.schema == SCHEMA == "prazoai"
-    assert list(metadata.tables) == []
+    assert sorted(t.name for t in metadata.tables.values()) == sorted(tables.TABLE_NAMES)
+    assert all(t.schema == SCHEMA for t in metadata.tables.values())
 
 
-def test_alembic_tem_uma_revisao_inicial_vazia():
+def test_alembic_tem_0001_intacta_e_0002_explicita():
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(BACKEND / "alembic.ini")))
-    revs = list(script.walk_revisions())
-    assert [r.revision for r in revs] == ["0001"]
-    assert revs[0].down_revision is None
-    text_ = (BACKEND / "migrations" / "versions" / "0001_fundacao.py").read_text(encoding="utf-8")
-    assert "op." not in text_                                    # nenhuma operação de esquema
-    assert "sqlalchemy.url" not in (BACKEND / "alembic.ini").read_text(encoding="utf-8")   # sem URL no arquivo
+    revs = {r.revision: r for r in script.walk_revisions()}
+    assert set(revs) == {"0001", "0002"}
+    assert revs["0001"].down_revision is None and revs["0002"].down_revision == "0001"
+    first = (BACKEND / "migrations" / "versions" / "0001_fundacao.py").read_text(encoding="utf-8")
+    assert "op." not in first                                         # 0001 continua vazia
+    second = (BACKEND / "migrations" / "versions" / "0002_esquema_inicial.py").read_text(encoding="utf-8")
+    # independente do metadata da aplicação:
+    assert "create_all(" not in second and "drop_all(" not in second
+    assert "from app" not in second and "import app" not in second
+    assert "DROP SCHEMA" not in second and "CASCADE" not in second.split("def downgrade")[1]
+    assert "sqlalchemy.url" not in (BACKEND / "alembic.ini").read_text(encoding="utf-8")
+
+
+def test_aplicacao_nao_importa_as_tabelas():
+    out = subprocess.run([sys.executable, "-c", "import sys; from app.main import create_app; create_app(); "
+                          "print('app.db.tables' in sys.modules, 'sqlalchemy' in sys.modules)"],
+                         cwd=BACKEND, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr[-300:]
+    assert out.stdout.strip().endswith("False False")
 
 
 def test_alembic_e_check_bloqueados_em_production(monkeypatch):

@@ -133,31 +133,93 @@ def _state(engine):
     return tables, rev, public
 
 
-def test_alembic_upgrade_downgrade_upgrade_da_revisao_inicial(pg_clean):
-    with pg_clean.begin() as conn:
-        command.downgrade(_alembic_cfg(conn), "base")                 # parte de um estado conhecido
-    with pg_clean.begin() as conn:
-        command.upgrade(_alembic_cfg(conn), "head")
+def _migrate(engine, target: str, direction: str = "upgrade") -> None:
+    with engine.begin() as conn:
+        getattr(command, direction)(_alembic_cfg(conn), target)
+
+
+BASE_TABLES = ["alembic_version", MARKER_TABLE]
+
+
+def _head_tables() -> list[str]:
+    from app.db.tables import TABLE_NAMES
+
+    return sorted([*BASE_TABLES, *TABLE_NAMES])
+
+
+# P2: a revisão head passou de 0001 para 0002 (as 14 tabelas aprovadas). As expectativas da P1 que
+# afirmavam "head = 0001, nenhuma tabela de negócio" foram atualizadas para o novo head, e os ciclos
+# pedidos na P2 foram acrescentados. O marcador da fixture e objetos externos à revisão sobrevivem.
+def test_alembic_upgrade_downgrade_upgrade_ate_head(pg_clean):
+    _migrate(pg_clean, "base", "downgrade")                            # parte de um estado conhecido
+    assert _state(pg_clean)[:2] == (BASE_TABLES, None)
+    _migrate(pg_clean, "head")
     tables, rev, public = _state(pg_clean)
-    assert rev == "0001"
-    assert tables == ["alembic_version", MARKER_TABLE]                # nenhuma tabela de negócio
-    assert public == 0                                                 # nada fora do esquema explícito
+    assert rev == "0002"
+    assert tables == _head_tables()
+    assert public == 0                                                  # nada fora do esquema explícito
+    _migrate(pg_clean, "base", "downgrade")
+    assert _state(pg_clean)[:2] == (BASE_TABLES, None)                  # marcador preservado
+    _migrate(pg_clean, "head")
+    assert _state(pg_clean)[1] == "0002"
+
+
+def test_banco_sem_historico_de_migrations_vai_ao_head(pg_clean):
+    """'Banco vazio' do ponto de vista do projeto: só o marcador da fixture, sem tabela de versões."""
+    from sqlalchemy import text as sql
+
+    _migrate(pg_clean, "base", "downgrade")
     with pg_clean.begin() as conn:
-        command.downgrade(_alembic_cfg(conn), "base")
-    assert _state(pg_clean)[1] is None
+        conn.execute(sql(f'DROP TABLE "{SCHEMA}".alembic_version RESTRICT'))   # objeto do próprio Alembic
+    assert _state(pg_clean)[:2] == ([MARKER_TABLE], None)
+    _migrate(pg_clean, "head")
+    tables, rev, _ = _state(pg_clean)
+    assert (tables, rev) == (_head_tables(), "0002")
+
+
+def test_banco_em_0001_avanca_para_0002_e_volta(pg_clean):
+    _migrate(pg_clean, "base", "downgrade")
+    _migrate(pg_clean, "0001")
+    assert _state(pg_clean)[:2] == (BASE_TABLES, "0001")
+    _migrate(pg_clean, "0002")
+    assert _state(pg_clean)[:2] == (_head_tables(), "0002")
+    _migrate(pg_clean, "0001", "downgrade")                            # 0002 → 0001
+    assert _state(pg_clean)[:2] == (BASE_TABLES, "0001")
+    _migrate(pg_clean, "0002")                                          # 0001 → 0002
+    assert _state(pg_clean)[1] == "0002"
+
+
+def test_downgrade_preserva_objetos_externos_a_revisao(pg_clean):
+    from sqlalchemy import text as sql
+
+    _migrate(pg_clean, "head")
     with pg_clean.begin() as conn:
-        command.upgrade(_alembic_cfg(conn), "head")
-    assert _state(pg_clean)[1] == "0001"
+        conn.execute(sql(f'CREATE TABLE "{SCHEMA}".p2_externo (id int)'))
+        conn.execute(sql(f'INSERT INTO "{SCHEMA}".p2_externo VALUES (1)'))
+    try:
+        _migrate(pg_clean, "base", "downgrade")
+        tables, rev, _ = _state(pg_clean)
+        assert rev is None
+        assert tables == sorted([*BASE_TABLES, "p2_externo"])          # marcador e objeto externo intactos
+        with pg_clean.connect() as conn:
+            assert conn.execute(sql(f'SELECT count(*) FROM "{SCHEMA}".{MARKER_TABLE}')).scalar_one() == 1
+            assert conn.execute(sql(f'SELECT count(*) FROM "{SCHEMA}".p2_externo')).scalar_one() == 1
+            namespaces = sql("SELECT count(*) FROM pg_namespace WHERE nspname = :s")
+            assert conn.execute(namespaces, {"s": SCHEMA}).scalar_one() == 1
+    finally:
+        with pg_clean.begin() as conn:
+            conn.execute(sql(f'DROP TABLE "{SCHEMA}".p2_externo RESTRICT'))
+        _migrate(pg_clean, "head")
 
 
 def test_falha_em_migration_desfaz_tudo(pg_clean):
-    with pg_clean.begin() as conn:
-        command.downgrade(_alembic_cfg(conn), "base")
+    _migrate(pg_clean, "base", "downgrade")
     with pytest.raises(RuntimeError):
         with pg_clean.begin() as conn:
             command.upgrade(_alembic_cfg(conn), "head")
             raise RuntimeError("falha simulada depois do upgrade, antes do commit")
-    assert _state(pg_clean)[1] is None                                 # versão não ficou registrada
+    assert _state(pg_clean)[:2] == (BASE_TABLES, None)                  # nenhuma tabela nem versão ficaram
+    _migrate(pg_clean, "head")
 
 
 def test_verificacao_recusa_banco_com_tabelas_estranhas(pg_clean, pg_url):

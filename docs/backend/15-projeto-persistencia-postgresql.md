@@ -13,6 +13,9 @@
 > migration), `15b-cenarios-ddl-proposto.sql` (cenários autoverificáveis e reproduzíveis) e
 > `15c-cenarios-saida-esperada.txt` (saída esperada), descritos na §11.
 >
+> **P2 implementada:** esquema em `app/db/tables/` e migration `0002`, ver
+> `17-p2-esquema-postgresql.md` (os `CHECK` ganharam nomes explícitos; regras inalteradas).
+>
 > **Revisão 3** (P1 aprovada): manutenção com espera limitada, timeouts e rollback do lote (§4.2);
 > total em páginas vazias (§4.5). Implementação da P1 descrita em
 > `16-p1-fundacao-persistencia.md`.

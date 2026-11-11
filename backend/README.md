@@ -158,7 +158,10 @@ O frontend usa um BFF no Next.js; o backend não mudou seus contratos. Única ad
 padrão o uvicorn confia em `X-Forwarded-For` vindo de 127.0.0.1. Ver
 `docs/backend/10-etapa-6-1-sessao-bff.md`.
 
-## Persistência — P1: fundação (a aplicação continua em memória)
+## Persistência — P1 (fundação) e P2 (esquema); a aplicação continua em memória
+A P2 acrescenta as 14 tabelas aprovadas (`app/db/tables/`, migration `0002`); nenhum serviço as usa
+ainda. Detalhes em `docs/backend/17-p2-esquema-postgresql.md`.
+
 A P1 prepara a infraestrutura do PostgreSQL **sem** que a aplicação passe a usá-la:
 `STORAGE=memory` é o único modo aceito, e a aplicação **não se conecta** ao banco no startup, mesmo
 com `DATABASE_URL` definida. O banco é usado apenas por comandos explícitos e pelos testes de
@@ -168,8 +171,9 @@ fundação. Detalhes em `docs/backend/16-p1-fundacao-persistencia.md`.
 # verificar a conexão (mostra destino sem credenciais, versão, timeouts e revisão do esquema)
 DATABASE_URL=postgresql+psycopg://prazoai:<senha>@localhost:5432/prazoai_dev python -m app.db check
 # migrations: sempre por comando explícito (nunca no startup)
-DATABASE_URL=... alembic upgrade head      # aplica a revisão inicial (vazia)
-DATABASE_URL=... alembic downgrade base    # reverte
+DATABASE_URL=... alembic upgrade head      # 0001 (vazia) → 0002 (14 tabelas)
+DATABASE_URL=... alembic downgrade 0001    # remove só as tabelas da 0002
+DATABASE_URL=... alembic downgrade base    # volta ao início
 # testes com PostgreSQL real (banco descartável prazoai_test*, local)
 ENVIRONMENT=test TEST_DATABASE_URL=postgresql+psycopg://prazoai:<senha>@localhost:5432/prazoai_test pytest
 ```
