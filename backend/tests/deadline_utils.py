@@ -44,5 +44,7 @@ def listing(o, person, **params):
 
 def snapshot(o):
     """Estado integral dos dois módulos (dados e índices) para comparar rollback."""
+    if not hasattr(o.store, "state"):          # PostgreSQL: conteúdo integral lido do banco (sem referências)
+        return (None, None, o.store.snapshot(), o.app.state.org.deadline_store.snapshot())
     org, dl = o.store.state, o.app.state.org.deadline_store.state
     return (org, dl, {k: dict(v) for k, v in vars(org).items()}, {k: dict(v) for k, v in vars(dl).items()})

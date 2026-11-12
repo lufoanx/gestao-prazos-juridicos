@@ -22,6 +22,7 @@ from app.core.clock import Clock
 from app.core.errors import AppError
 from app.core.logging import get_logger
 from app.domain.deadlines import Deadline, Scope, ScopeKind
+from app.domain.errors import CapacityError
 from app.domain.intimations import (
     SYSTEM_ACTOR,
     Draft,
@@ -36,8 +37,8 @@ from app.policies import deadlines as dl_policy
 from app.policies import intimations as policy
 from app.policies.org import NOT_FOUND
 from app.repositories.deadlines import UnitTransaction
-from app.repositories.deadlines_memory import CapacityError
-from app.repositories.unit_of_work import MemoryUnitOfWork
+from app.repositories.queries import IntimationSearch, Viewer
+from app.repositories.unit import UnitOfWork
 from app.services import deadline_ops as ops
 from app.services.processing_port import ProcessingNotAvailable, ProcessingPort
 
@@ -63,7 +64,7 @@ class ConfirmResult:
 
 class IntimationService:
     def __init__(
-        self, *, unit_of_work: MemoryUnitOfWork, clock: Clock, processing: ProcessingPort | None = None
+        self, *, unit_of_work: UnitOfWork, clock: Clock, processing: ProcessingPort | None = None
     ) -> None:
         self._uow = unit_of_work
         self._clock = clock
@@ -136,6 +137,9 @@ class IntimationService:
             if (d := dl_policy.check_create(actor_id, m, kind)):
                 ops.raise_denial(d)
             scope = Scope.personal(actor_id) if kind == "personal" else Scope.office(m.office_id)  # type: ignore[union-attr]
+            # Âncora do escopo ANTES do relógio e da revalidação do sugerido.
+            tx.lock_anchors(office_ids=(scope.office_id,) if scope.office_id else (),
+                            user_ids=(scope.owner_id,) if scope.owner_id else ())
             if suggested_responsible_id is not None:
                 self._check_suggested(tx, actor_id, m, scope, suggested_responsible_id)
                 ops.active_responsible(tx, scope, suggested_responsible_id)
@@ -161,15 +165,21 @@ class IntimationService:
         return result
 
     # ------------------------------------------------------------------ leitura
+    @contextmanager
+    def _read(self) -> Iterator[UnitTransaction]:
+        """Leitura consistente (PostgreSQL: REPEATABLE READ READ ONLY, um snapshot)."""
+        with self._uow.read(self._clock) as tx:
+            yield tx
+
     def get(self, actor_id: str, intimation_id: str) -> IntimationResult:
-        with self._unit() as tx:
+        with self._read() as tx:
             i, m = self._readable(tx, actor_id, intimation_id)
             return self._result(tx, actor_id, m, i)
 
     def list_intimations(
         self, actor_id: str, kind: ScopeKind, status: str | None, q: str | None, page: int, per_page: int
     ) -> tuple[list[IntimationResult], int]:
-        with self._unit() as tx:
+        with self._read() as tx:
             m = tx.org.membership_of_user(actor_id)
             if kind == "personal":
                 scope = Scope.personal(actor_id)
@@ -180,33 +190,18 @@ class IntimationService:
                 if not m.has("deadline.read"):
                     ops.raise_denial(dl_policy.FORBIDDEN)
                 scope = Scope.office(m.office_id)
-            items = [
-                i for i in tx.intimations.in_scope(scope)
-                if policy.can_read(actor_id, m, i, self.linked_responsible(tx, i))   # autoriza ANTES
-            ]
-            if status:
-                items = [i for i in items if i.status == status]
-            else:
-                items = [i for i in items if i.status != "discarded"]                # oculto por padrão
-            if q:
-                needle = q.casefold()
-                items = [i for i in items if needle in f"{i.file.name} {i.draft.title or ''} "
-                         f"{i.draft.case_number or ''}".casefold()]
-            items.sort(key=lambda i: i.id)
-            items.sort(key=lambda i: i.created_at, reverse=True)
-            total = len(items)
-            start = (page - 1) * per_page
-            return [self._result(tx, actor_id, m, i) for i in items[start:start + per_page]], total
+            # Autoriza ANTES de filtrar/contar; descartadas ocultas por padrão; tudo no repositório.
+            items, total = tx.queries.intimations(IntimationSearch(
+                scope=scope, viewer=Viewer(actor_id, m), status=status, q=q, page=page, per_page=per_page))
+            return [self._result(tx, actor_id, m, i) for i in items], total
 
     def history(self, actor_id: str, intimation_id: str, page: int, per_page: int) -> tuple[list[IntimationEvent], int]:
-        with self._unit() as tx:
+        with self._read() as tx:
             i, m = self._readable(tx, actor_id, intimation_id)
-            events = list(tx.intimations.events(i.id))
-            start = (page - 1) * per_page
-            # Projeção autorizada DENTRO da unidade; o histórico armazenado não é alterado.
-            page_items = [replace(e, details=ops.project_details(tx, actor_id, m, e.details))
-                          for e in events[start:start + per_page]]
-        return page_items, len(events)
+            events, total = tx.queries.events(i.id, page, per_page)
+            # Projeção autorizada no mesmo snapshot; o histórico armazenado não é alterado.
+            page_items = [replace(e, details=ops.project_details(tx, actor_id, m, e.details)) for e in events]
+        return page_items, total
 
     # ------------------------------------------------------------------ rascunho
     def update_draft(

@@ -20,8 +20,7 @@ from typing import Any, Generic, TypeVar
 S = TypeVar("S")
 
 
-class ConsistencyError(RuntimeError):
-    """Invariante violada na preparação final; a transação é descartada."""
+from app.domain.errors import ConsistencyError  # noqa: E402,F401  (reexportado por compatibilidade)
 
 
 class Fork(Generic[S]):

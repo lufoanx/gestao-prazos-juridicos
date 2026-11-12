@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Column,
     Date,
     ForeignKeyConstraint,
+    Identity,
     Index,
     Integer,
     Table,
@@ -78,7 +80,10 @@ deadline_comments = Table(
     uuid_fk("author_id", "users", fk_name="fk_deadline_comments_author_id_users"),
     Column("text", Text, nullable=False),
     instant("created_at"),
+    # Ordem INTERNA de inserção (P4, migration 0003): não é horário nem contador sem lacunas.
+    Column("seq", BigInteger, Identity(always=True, cache=1, cycle=False), nullable=False),
     CheckConstraint("char_length(text) BETWEEN 1 AND 2000", name="text_length"),
+    UniqueConstraint("deadline_id", "seq", name="uq_deadline_comments_deadline_id_seq"),
 )
 Index("ix_deadline_comments_deadline_id_created_at", deadline_comments.c.deadline_id,
       deadline_comments.c.created_at, deadline_comments.c.id)
@@ -91,8 +96,10 @@ deadline_history = Table(
     Column("action", Text, nullable=False),
     instant("at"),
     Column("details", JSONB, nullable=False, server_default=text("'{}'::jsonb")),   # SEM projeção
+    Column("seq", BigInteger, Identity(always=True, cache=1, cycle=False), nullable=False),   # ordem interna
     CheckConstraint("action IN ('created', 'updated', 'reassigned', 'status_changed', 'transferred')",
                     name="action_valid"),
+    UniqueConstraint("deadline_id", "seq", name="uq_deadline_history_deadline_id_seq"),
 )
 Index("ix_deadline_history_deadline_id_at", deadline_history.c.deadline_id, deadline_history.c.at,
       deadline_history.c.id)

@@ -23,11 +23,7 @@ class DeadlineLimits:
     max_history_per_deadline: int
 
 
-class CapacityError(Exception):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
+from app.domain.errors import CapacityError  # noqa: E402  (reexportado por compatibilidade)
 
 
 @dataclass(frozen=True)

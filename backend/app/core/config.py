@@ -72,13 +72,11 @@ class Settings(BaseSettings):
     auth_storage: Literal["memory"] = Field(default="memory", alias="AUTH_STORAGE")
 
     # --- Persistência (P1 fundação, P2 esquema, P3 autenticação) ---
-    # STORAGE (doc 15, §5.6):
-    #   "memory" (padrão) — tudo em memória;
-    #   "auth-postgres" (P3) — autenticação no PostgreSQL, domínio VOLÁTIL em memória; aceito só em
-    #       ENVIRONMENT=test ou em development com ALLOW_VOLATILE_DOMAIN=true (aviso no startup e no /health);
-    #   "postgres" (P4) — ainda recusado.
+    # STORAGE (doc 15, §5.6; modos FINAIS desde a P4):
+    #   "memory" (padrão) — tudo em memória (testes rápidos e desenvolvimento);
+    #   "postgres" — autenticação E domínio no PostgreSQL (development/test; production segue bloqueada).
+    # O modo intermediário "auth-postgres" e ALLOW_VOLATILE_DOMAIN (P3) foram REMOVIDOS na P4.
     storage: str = Field(default="memory", alias="STORAGE")
-    allow_volatile_domain: bool = Field(default=False, alias="ALLOW_VOLATILE_DOMAIN")
     # URL de conexão (segredo). NÃO é validada aqui de propósito: erros do pydantic incluem o valor
     # recebido, o que exporia a senha. A validação (sem credenciais na mensagem) fica em
     # app/db/config.py e só ocorre quando um comando explícito precisa do banco. No modo memory a
@@ -249,14 +247,13 @@ class Settings(BaseSettings):
     @classmethod
     def _valid_storage(cls, v: str) -> str:
         value = (v or "memory").strip().lower()
-        if value in {"memory", "auth-postgres"}:
+        if value in {"memory", "postgres"}:
             return value
-        if value == "postgres":
+        if value == "auth-postgres":
             raise ValueError(
-                "STORAGE='postgres' ainda não está disponível: o domínio no PostgreSQL chega na P4. "
-                "Use 'memory' ou, para testar a autenticação persistente, 'auth-postgres'."
+                "STORAGE='auth-postgres' foi removido na P4: use 'postgres' (autenticação e domínio no banco)."
             )
-        raise ValueError(f"STORAGE inválido: {v!r}. Use 'memory' ou 'auth-postgres'.")
+        raise ValueError(f"STORAGE inválido: {v!r}. Use 'memory' ou 'postgres'.")
 
     @field_validator("database_url", mode="before")
     @classmethod
@@ -267,25 +264,20 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _consistent_storage(self) -> Settings:
-        if self.storage == "auth-postgres":
+        if self.storage == "postgres":
             if self.auth_storage_explicit:
                 raise ValueError(
-                    "AUTH_STORAGE (configuração antiga, só 'memory') conflita com STORAGE='auth-postgres': "
+                    "AUTH_STORAGE (configuração antiga, só 'memory') conflita com STORAGE='postgres': "
                     "remova AUTH_STORAGE."
                 )
-            allowed = self.environment == "test" or (self.environment == "development" and self.allow_volatile_domain)
-            if not allowed:
-                raise ValueError(
-                    "STORAGE='auth-postgres' só é aceito em ENVIRONMENT=test ou em development com "
-                    "ALLOW_VOLATILE_DOMAIN=true: o domínio (escritórios, prazos, intimações, notificações) "
-                    "continua em memória e se perde ao reiniciar."
-                )
+            if self.environment not in {"development", "test"}:
+                raise ValueError("STORAGE='postgres' só é aceito em ENVIRONMENT=development ou test nesta fase.")
         return self
 
     @property
     def storage_durable(self) -> bool:
-        """Todo o estado sobrevive a reinícios? (só com STORAGE=postgres, ainda não disponível)."""
-        return False
+        """Estado do BACKEND (autenticação e domínio) sobrevive a reinícios? Não inclui as sessões do BFF."""
+        return self.storage == "postgres"
 
     @model_validator(mode="after")
     def _consistent_timeouts(self) -> Settings:

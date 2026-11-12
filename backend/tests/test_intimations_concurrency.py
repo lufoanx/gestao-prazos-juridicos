@@ -70,6 +70,10 @@ def test_descarte_concorrendo_com_confirmacao(env, discard_first):
     assert len(o.app.state.org.deadline_store.deadlines) == (0 if discard_first else 1)
 
 
+@pytest.mark.memory_only(
+    "ordena as threads pelo RLock reentrante da memória; equivalente SQL: "
+    "test_domain_sql_concurrency::test_perda_de_permissao_concorrendo_com_confirmacao_sql"
+)
 def test_perda_de_permissao_concorrendo_com_confirmacao(env):
     o, oid, ana, bia, caio = env
     i = register(o, bia)

@@ -147,6 +147,10 @@ def test_mudanca_de_status_concorrendo_com_reatribuicao(env, status_first):
     invariant(o)
 
 
+@pytest.mark.memory_only(
+    "ordena as threads pelo RLock reentrante da memória; equivalente SQL: "
+    "test_domain_sql_concurrency::test_perda_de_permissao_concorrendo_com_edicao_sql"
+)
 def test_perda_de_permissao_concorrendo_com_edicao(env):
     o, oid, ana, bia, caio = env
     d = create(o, ana, responsibleId=bia.id)

@@ -1,4 +1,8 @@
-"""P3 — modos de armazenamento e fluxos HTTP da autenticação no PostgreSQL (STORAGE=auth-postgres).
+"""Modos de armazenamento e fluxos HTTP da autenticação no PostgreSQL.
+
+P4: os modos FINAIS são `memory` e `postgres` (autenticação E domínio no banco). O modo intermediário
+`auth-postgres` da P3 foi removido e agora é recusado; as expectativas abaixo foram atualizadas para
+isso (cada teste antigo de `auth-postgres` virou o equivalente em `postgres` ou a verificação da recusa).
 
 Configurações aceitas/recusadas (sem banco) e, com PostgreSQL real (fixture protegida): esquema
 ausente ou desatualizado recusado sem escrita; fluxos HTTP completos; revogações que persistem
@@ -33,19 +37,19 @@ def settings(**env):
 
 # ---------------------------------------------------------------- configuração (sem banco)
 @pytest.mark.parametrize("env", [
-    {"STORAGE": "auth-postgres", "ENVIRONMENT": "test"},
-    {"STORAGE": "auth-postgres", "ENVIRONMENT": "development", "ALLOW_VOLATILE_DOMAIN": "true"},
+    {"STORAGE": "postgres", "ENVIRONMENT": "test"},
+    {"STORAGE": "postgres", "ENVIRONMENT": "development"},
 ])
-def test_modo_intermediario_autorizado(env):
-    assert settings(**env).storage == "auth-postgres"
+def test_modo_postgres_autorizado(env):
+    assert settings(**env).storage == "postgres"
 
 
 @pytest.mark.parametrize("env, reason", [
-    ({"STORAGE": "auth-postgres", "ENVIRONMENT": "development"}, "ALLOW_VOLATILE_DOMAIN"),
-    ({"STORAGE": "auth-postgres", "ENVIRONMENT": "staging", "AUTH_JWT_SECRET": JWT}, "ENVIRONMENT=test"),
-    ({"STORAGE": "auth-postgres", "ENVIRONMENT": "production", "AUTH_JWT_SECRET": JWT}, "ENVIRONMENT=test"),
-    ({"STORAGE": "auth-postgres", "ENVIRONMENT": "test", "AUTH_STORAGE": "memory"}, "AUTH_STORAGE"),
-    ({"STORAGE": "postgres", "ENVIRONMENT": "test"}, "P4"),
+    ({"STORAGE": "auth-postgres", "ENVIRONMENT": "test"}, "removido na P4"),
+    ({"STORAGE": "auth-postgres", "ENVIRONMENT": "development", "ALLOW_VOLATILE_DOMAIN": "true"}, "removido na P4"),
+    ({"STORAGE": "postgres", "ENVIRONMENT": "staging", "AUTH_JWT_SECRET": JWT}, "development ou test"),
+    ({"STORAGE": "postgres", "ENVIRONMENT": "production", "AUTH_JWT_SECRET": JWT}, "development ou test"),
+    ({"STORAGE": "postgres", "ENVIRONMENT": "test", "AUTH_STORAGE": "memory"}, "AUTH_STORAGE"),
 ])
 def test_modos_recusados(env, reason):
     with pytest.raises(ValidationError) as exc:
@@ -55,21 +59,21 @@ def test_modos_recusados(env, reason):
 
 def test_erros_de_configuracao_nao_exibem_valores(monkeypatch):
     with pytest.raises(ValidationError) as exc:
-        settings(STORAGE="auth-postgres", ENVIRONMENT="development",
+        settings(STORAGE="postgres", ENVIRONMENT="staging",
                  DATABASE_URL="postgresql+psycopg://u:SEGREDO-P3@localhost/db", AUTH_JWT_SECRET=JWT)
     assert "SEGREDO" not in str(exc.value) and "GREDO" not in str(exc.value) and "xxxx" not in str(exc.value)
 
 
-def test_auth_postgres_sem_database_url_recusa_iniciar(make_app):
+def test_postgres_sem_database_url_recusa_iniciar(make_app):
     from app.services.auth_container import AuthStorageConfigError
 
     with pytest.raises(AuthStorageConfigError, match="DATABASE_URL"):
-        make_app(STORAGE="auth-postgres", ENVIRONMENT="test", AUTH_JWT_SECRET=JWT, DATABASE_URL="")
+        make_app(STORAGE="postgres", ENVIRONMENT="test", AUTH_JWT_SECRET=JWT, DATABASE_URL="")
 
 
 def test_producao_continua_bloqueada(make_app):
     with pytest.raises((ProductionNotReleasedError, ValidationError)):
-        make_app(ENVIRONMENT="production", STORAGE="auth-postgres", AUTH_JWT_SECRET=JWT)
+        make_app(ENVIRONMENT="production", STORAGE="postgres", AUTH_JWT_SECRET=JWT)
 
 
 def test_modo_memory_nao_importa_sqlalchemy_nem_os_repositorios_sql():
@@ -117,26 +121,26 @@ def test_esquema_desatualizado_ou_ausente_recusado_sem_escrita(pg_clean, pg_url,
         return tables, rev
 
     raw = pg_url.render_as_string(hide_password=False)
-    for target in ("0001", "base"):
+    for target in ("0002", "0001", "base"):                         # exigida: 0003
         with pg_clean.begin() as conn:
             command.downgrade(alembic_config_for(conn), target)
         before = state()
         with pytest.raises(SchemaNotReadyError):
-            make_app(STORAGE="auth-postgres", ENVIRONMENT="test", DATABASE_URL=raw, AUTH_JWT_SECRET=JWT)
+            make_app(STORAGE="postgres", ENVIRONMENT="test", DATABASE_URL=raw, AUTH_JWT_SECRET=JWT)
         assert state() == before                                        # nada criado nem migrado
     with pg_clean.begin() as conn:
         command.upgrade(alembic_config_for(conn), "head")
 
 
 @pytest.mark.postgres
-def test_fluxos_http_completos_no_auth_postgres(pg_app, caplog):
+def test_fluxos_http_completos_no_postgres(pg_app, caplog):
     delivery = CapturingDelivery()
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO):
         app = pg_app(delivery=delivery)
-    assert "storage_auth_postgres_volatile_domain" in caplog.text
+    assert "storage_postgres" in caplog.text
     with TestClient(app) as client:
         assert client.get(f"{API}/health").json() == {"status": "ok", "service": "prazoai-backend",
-                                                      "storage": "auth-postgres", "durable": False}
+                                                      "storage": "postgres", "durable": True}
         tokens = register_and_login(client)
         dup = client.post(f"{API}/auth/register", json={"name": "B", "email": "ANA@exemplo.com", "password": PASSWORD})
         assert dup.json()["error"]["code"] == "email_already_registered"       # normalizado e único

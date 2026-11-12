@@ -128,6 +128,9 @@ def test_politica_da_caixa_remove_lidas_e_depois_nao_lidas(org, clock):
     assert len(st.by_recipient[bia.id]) == 10 and len(st.dedupe) == 10 and len(st.notifications) == 10
 
 
+@pytest.mark.memory_only(
+    "retenção (expurgo) — no PostgreSQL é da P5; sem equivalente nesta entrega"
+)
 def test_retencao_de_lidas_remove_indices_e_nao_recria(org, clock):
     o = org()
     ana, bia = o.person("ana"), o.person("bia")

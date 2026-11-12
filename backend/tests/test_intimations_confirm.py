@@ -168,7 +168,8 @@ def test_falha_em_cada_fase_da_confirmacao_sem_efeito_parcial(env, point, nth):
     r = confirm(o, ana, i["id"], 1, responsibleId=bia.id)
     assert seen["n"] >= nth and r.status_code == 500
     after = full_state(o)
-    assert all(a is b for a, b in zip(after[0], before[0], strict=True))   # referências intactas
+    # Memória: referências intactas; PostgreSQL (sem referências): conteúdo integral idêntico.
+    assert after[0] is None or all(a is b for a, b in zip(after[0], before[0], strict=True))
     assert after[1] == before[1]                                           # dados e índices idênticos
     o.app.state.org.unit_of_work.fault = None
     assert confirm(o, ana, i["id"], 1, responsibleId=bia.id).status_code == 201

@@ -45,6 +45,8 @@ def full_state(o):
     """Estado integral dos quatro armazenamentos (referências e conteúdo, incluindo índices)."""
     uow = o.app.state.org.unit_of_work
     stores = (uow.org_store, uow.deadline_store, uow.intimation_store, uow.notification_store)
+    if not hasattr(stores[0], "state"):        # PostgreSQL: conteúdo integral lido do banco (sem referências)
+        return None, tuple(st.snapshot() for st in stores)
     refs = tuple(st.state for st in stores)
     content = tuple({k: dict(v) for k, v in vars(st.state).items()} for st in stores)
     return refs, content

@@ -77,17 +77,19 @@ jobs:
           ENVIRONMENT: test
           TEST_DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_test
           PRAZOAI_REQUIRE_POSTGRES_TESTS: "1"
-      - name: Autenticação em STORAGE=auth-postgres (suítes HTTP existentes contra PostgreSQL real)
+      - name: Suítes HTTP em STORAGE=postgres (autenticação e domínio contra PostgreSQL real)
         run: >-
-          pytest -p no:cacheprovider
+          pytest -p no:cacheprovider -rs
           tests/test_auth_cost_protection.py tests/test_auth_password_reset.py tests/test_auth_refresh.py
           tests/test_auth_register_login.py tests/test_auth_tokens.py tests/test_users_me.py
+          tests/test_org_*.py tests/test_deadline*.py tests/test_intimation*.py tests/test_notification*.py
+          tests/test_storage_effective.py
         env:
           ENVIRONMENT: test
           TEST_DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_test
           PRAZOAI_REQUIRE_POSTGRES_TESTS: "1"
-          PRAZOAI_TEST_STORAGE: auth-postgres
-      - name: Migrations pela linha de comando (vazio → head; 0002 → 0001 → 0002; base → head; banco separado)
+          PRAZOAI_TEST_STORAGE: postgres
+      - name: Migrations pela linha de comando (vazio → head; 0003 → 0002 → 0001 → 0003; base → head; banco separado)
         env:
           PGPASSWORD: prazoai-ci-only
           DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_ci_migrations
@@ -95,14 +97,16 @@ jobs:
           psql -h localhost -U prazoai -d prazoai_test -c "CREATE DATABASE prazoai_ci_migrations"
           python -m app.db check
           alembic upgrade head
-          test "$(alembic current 2>/dev/null)" = "0002 (head)"
+          test "$(alembic current 2>/dev/null)" = "0003 (head)"
+          alembic downgrade 0002
+          test "$(alembic current 2>/dev/null)" = "0002"
           alembic downgrade 0001
           test "$(alembic current 2>/dev/null)" = "0001"
           alembic upgrade head
           alembic downgrade base
           test -z "$(alembic current 2>/dev/null)"
           alembic upgrade head
-          test "$(alembic current 2>/dev/null)" = "0002 (head)"
+          test "$(alembic current 2>/dev/null)" = "0003 (head)"
       - run: ruff check app tests migrations
       - run: mypy app
       - run: python -m compileall app migrations
@@ -110,7 +114,7 @@ jobs:
   # Etapa 6.1: integração REAL BFF ↔ FastAPI e E2E no navegador (Next em modo integrado).
   integration:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     # Imagem oficial com browsers e dependências: evita apt install no runner.
     # Manter esta versão igual a @playwright/test no package-lock.json.
     container:
@@ -120,6 +124,16 @@ jobs:
       run:
         shell: bash
     needs: [frontend, backend]
+    # PostgreSQL descartável do CI (senha só deste serviço). No job em contêiner, o host é "postgres".
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: prazoai
+          POSTGRES_PASSWORD: prazoai-ci-only
+          POSTGRES_DB: prazoai_integ
+        options: >-
+          --health-cmd "pg_isready -U prazoai" --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -127,6 +141,20 @@ jobs:
           python-version: "3.12"
           # Sem cache pip neste contêiner: o cache da action exige lsb_release.
       - run: python -m pip install -r backend/requirements-dev.txt
+      - name: Preparar bancos da integração e do E2E (migrations explícitas)
+        working-directory: backend
+        env:
+          ADMIN_URL: postgresql://prazoai:prazoai-ci-only@postgres:5432/prazoai_integ
+        run: |
+          python - <<'PY'
+          import os, psycopg
+          with psycopg.connect(os.environ["ADMIN_URL"], autocommit=True) as conn:
+              conn.execute("CREATE DATABASE prazoai_e2e")
+          PY
+          for db in prazoai_integ prazoai_e2e; do
+            DATABASE_URL="postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/$db" alembic upgrade head
+            test "$(DATABASE_URL="postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/$db" alembic current 2>/dev/null)" = "0003 (head)"
+          done
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -134,11 +162,52 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
         working-directory: frontend
-      - name: Integração real (BFF + FastAPI)
+      - name: Integração real (BFF + FastAPI, STORAGE=memory)
         run: npm run test:integration
         working-directory: frontend
         env:
           PRAZOAI_TEST_PYTHON: python
+      - name: Verificar armazenamento efetivo do backend (falha se não subir em postgres)
+        working-directory: backend
+        env:
+          ENVIRONMENT: test
+          AUTH_JWT_SECRET: ci-verificacao-de-armazenamento-0123456789abcdef0123456789
+          STORAGE: postgres
+          DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/prazoai_integ
+        run: |
+          python -m uvicorn app.main:app --host 127.0.0.1 --port 8765 --no-proxy-headers &
+          PID=$!
+          python - <<'PY'
+          import json, time, urllib.request
+          for _ in range(60):
+              try:
+                  body = json.load(urllib.request.urlopen("http://127.0.0.1:8765/api/v1/health"))
+                  break
+              except OSError:
+                  time.sleep(0.5)
+          else:
+              raise SystemExit("backend não respondeu")
+          assert body.get("storage") == "postgres" and body.get("durable") is True, body
+          print("armazenamento efetivo:", body)
+          PY
+          kill $PID
+      - name: Integração real (BFF + FastAPI, STORAGE=postgres)
+        run: npm run test:integration
+        working-directory: frontend
+        env:
+          PRAZOAI_TEST_PYTHON: python
+          STORAGE: postgres
+          DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/prazoai_integ
+      - name: Confirmar dados persistidos pela integração no PostgreSQL
+        run: |
+          python - <<'PY'
+          import psycopg
+          with psycopg.connect("postgresql://prazoai:prazoai-ci-only@postgres:5432/prazoai_integ") as c:
+              n = {t: c.execute(f"SELECT count(*) FROM prazoai.{t}").fetchone()[0]
+                   for t in ("users", "auth_sessions", "offices", "deadlines", "intimations")}
+          print(n)
+          assert all(v > 0 for v in n.values()), n
+          PY
       - name: Verificar Chromium preinstalado e versão do Playwright
         working-directory: frontend
         run: |
@@ -152,8 +221,20 @@ jobs:
             await browser.close();
           })().catch(error => { console.error(error); process.exit(1); });
           NODE
-      - name: E2E (navegador + Next integrado + FastAPI)
+      - name: E2E completo numa única execução (navegador + Next integrado + FastAPI em STORAGE=postgres)
         run: npm run test:e2e
         working-directory: frontend
         env:
           PRAZOAI_TEST_PYTHON: python
+          STORAGE: postgres
+          DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/prazoai_e2e
+      - name: Confirmar dados persistidos pelo E2E no PostgreSQL
+        run: |
+          python - <<'PY'
+          import psycopg
+          with psycopg.connect("postgresql://prazoai:prazoai-ci-only@postgres:5432/prazoai_e2e") as c:
+              n = {t: c.execute(f"SELECT count(*) FROM prazoai.{t}").fetchone()[0]
+                   for t in ("users", "auth_sessions", "offices", "deadlines", "intimations", "notifications")}
+          print(n)
+          assert all(v > 0 for v in n.values()), n
+          PY

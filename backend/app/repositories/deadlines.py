@@ -18,6 +18,7 @@ from app.repositories.org import OrgTransaction
 
 if TYPE_CHECKING:
     from app.repositories.intimations import IntimationTransaction, NotificationTransaction
+    from app.repositories.queries import Queries
 
 
 class DeadlineTransaction(Protocol):
@@ -55,4 +56,15 @@ class UnitTransaction(Protocol):
 
     def checkpoint(self, name: str) -> None:
         """Ponto nomeado da operação (usado para injeção de falhas nos testes)."""
+        ...
+
+    @property
+    def queries(self) -> Queries:
+        """Consultas paginadas com autorização (memória: Python; PostgreSQL: SQL no mesmo snapshot)."""
+        ...
+
+    def lock_anchors(self, *, office_ids: tuple[str, ...] = (), user_ids: tuple[str, ...] = ()) -> None:
+        """Trava ANTECIPADAMENTE as âncoras de escopo na ordem aprovada (escritórios → usuários,
+        IDs ordenados), para operações que tocam mais de um escopo (ex.: transferência). Em memória
+        não faz nada (locks globais); no PostgreSQL, `SELECT … FOR NO KEY UPDATE`."""
         ...

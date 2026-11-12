@@ -21,6 +21,11 @@ from app.domain.org import Invitation, JoinRequest, Membership, Office
 
 
 class OrgTransaction(Protocol):
+    def lock_anchors(self, *, office_ids: tuple[str, ...] = (), user_ids: tuple[str, ...] = ()) -> None:
+        """Trava as âncoras (escritórios → pessoas, IDs ordenados) ANTES de usar `now`.
+        Memória: sem efeito (locks globais). PostgreSQL: SELECT … FOR NO KEY UPDATE."""
+        ...
+
     # Instante lido do relógio DEPOIS de obtido o lock/início da transação; todas as
     # validações temporais e carimbos da transação usam este mesmo valor.
     @property

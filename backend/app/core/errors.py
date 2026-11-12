@@ -43,6 +43,14 @@ class ConcurrentUpdateError(Exception):
 
 
 def register_error_handlers(app: FastAPI) -> None:
+    from app.domain.errors import DomainConflictError
+
+    @app.exception_handler(DomainConflictError)
+    async def domain_conflict_handler(request: Request, exc: DomainConflictError):
+        # Conflito de NEGÓCIO detectado pelo armazenamento sob concorrência (ex.: vínculo em outro escritório).
+        logger.info("domain_conflict method=%s path=%s code=%s", request.method, request.url.path, exc.code)
+        return JSONResponse(status_code=409, content=_error_body(exc.code, exc.message))
+
     @app.exception_handler(ConcurrentUpdateError)
     async def concurrent_update_handler(request: Request, exc: ConcurrentUpdateError):
         logger.info("concurrent_update method=%s path=%s", request.method, request.url.path)

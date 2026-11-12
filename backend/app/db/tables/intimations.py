@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Column,
     Date,
     ForeignKeyConstraint,
+    Identity,
     Index,
     Integer,
     Table,
@@ -104,6 +106,8 @@ intimation_events = Table(
     Column("action", Text, nullable=False),
     instant("at"),
     Column("details", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    Column("seq", BigInteger, Identity(always=True, cache=1, cycle=False), nullable=False),   # ordem interna
+    UniqueConstraint("intimation_id", "seq", name="uq_intimation_events_intimation_id_seq"),
 )
 Index("ix_intimation_events_intimation_id_at", intimation_events.c.intimation_id, intimation_events.c.at,
       intimation_events.c.id)

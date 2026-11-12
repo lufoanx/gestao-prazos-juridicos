@@ -444,9 +444,11 @@ EXPECTED_CONSTRAINTS = {
                   "ck_deadlines_open_office_matches_status", "ck_deadlines_personal_responsible_is_owner",
                   "uq_deadlines_id_scope_key", "fk_deadlines_active_responsible"},
     "deadline_comments": {"pk_deadline_comments", "fk_deadline_comments_deadline_id_deadlines",
-                          "fk_deadline_comments_author_id_users", "ck_deadline_comments_text_length"},
+                          "fk_deadline_comments_author_id_users", "ck_deadline_comments_text_length",
+                          "uq_deadline_comments_deadline_id_seq"},                      # P4 (0003)
     "deadline_history": {"pk_deadline_history", "fk_deadline_history_deadline_id_deadlines",
-                         "fk_deadline_history_actor_id_users", "ck_deadline_history_action_valid"},
+                         "fk_deadline_history_actor_id_users", "ck_deadline_history_action_valid",
+                         "uq_deadline_history_deadline_id_seq"},                        # P4 (0003)
     "intimations": {"pk_intimations", "fk_intimations_owner_id_users", "fk_intimations_office_id_offices",
                     "fk_intimations_suggested_responsible_id_users", "fk_intimations_created_by_users",
                     "ck_intimations_scope_shape", "ck_intimations_file_name_length", "ck_intimations_file_size_range",
@@ -458,7 +460,7 @@ EXPECTED_CONSTRAINTS = {
                     "ck_intimations_suggested_open_office_matches", "uq_intimations_deadline_id",
                     "fk_intimations_deadline_same_scope", "fk_intimations_suggested_active"},
     "intimation_events": {"pk_intimation_events", "fk_intimation_events_intimation_id_intimations",
-                          "fk_intimation_events_actor_id_users"},
+                          "fk_intimation_events_actor_id_users", "uq_intimation_events_intimation_id_seq"},  # P4
     "notifications": {"pk_notifications", "fk_notifications_recipient_id_users", "fk_notifications_owner_id_users",
                       "fk_notifications_office_id_offices", "fk_notifications_deadline_id_deadlines",
                       "fk_notifications_intimation_id_intimations", "ck_notifications_scope_shape",

@@ -23,6 +23,7 @@ from app.core.clock import Clock
 from app.core.errors import AppError
 from app.core.logging import get_logger
 from app.domain.auth import User
+from app.domain.errors import CapacityError, JoinCodeCollisionError
 from app.domain.org import (
     ADMIN_PERMISSIONS,
     JOIN_CODE_ALPHABET,
@@ -37,9 +38,8 @@ from app.domain.org import (
 from app.policies import org as policy
 from app.repositories.auth import UserRepository
 from app.repositories.deadlines import UnitTransaction
-from app.repositories.deadlines_memory import CapacityError
 from app.repositories.org import OrgRepository, OrgTransaction
-from app.repositories.unit_of_work import MemoryUnitOfWork, MemoryUnitTransaction
+from app.repositories.unit import UnitOfWork
 from app.security.rate_limit import RateLimiter
 from app.security.tokens import hash_opaque_token, new_opaque_token
 from app.services.responsibility_port import ResponsibilityModuleUnavailableError, ResponsibilityPort
@@ -88,7 +88,7 @@ class OrgService:
         self,
         *,
         repo: OrgRepository,
-        unit_of_work: MemoryUnitOfWork,
+        unit_of_work: UnitOfWork,
         users: UserRepository,
         clock: Clock,
         responsibilities: ResponsibilityPort,
@@ -145,11 +145,30 @@ class OrgService:
                 n += 1
         return n
 
+    @contextmanager
+    def _read_org(self) -> Iterator[OrgTransaction]:
+        """Leitura consistente: PostgreSQL REPEATABLE READ READ ONLY, sem travar âncoras."""
+        with self._uow.read(self._clock) as tx:
+            yield tx.org
+
     def _new_code(self, tx: OrgTransaction) -> str:
         for _ in range(_CODE_ATTEMPTS):
             code = new_join_code()
             if not tx.code_in_use(code):
                 return code
+        raise AppError(503, "join_code_unavailable", "Não foi possível gerar um código. Tente novamente.")
+
+    def _put_office_with_new_code(self, tx: OrgTransaction, office: Office) -> Office:
+        """Grava o escritório com um código novo. Uma colisão detectada na escrita (outra transação
+        usou o mesmo código depois da verificação) gera OUTRO código, sem abortar a transação: no
+        PostgreSQL, a escrita é isolada num SAVEPOINT. Tentativas limitadas → 503."""
+        for _ in range(_CODE_ATTEMPTS):
+            candidate = replace(office, join_code=self._new_code(tx))
+            try:
+                tx.put_office(candidate)
+                return candidate
+            except JoinCodeCollisionError:
+                continue
         raise AppError(503, "join_code_unavailable", "Não foi possível gerar um código. Tente novamente.")
 
     def user_of(self, user_id: str) -> User | None:
@@ -160,29 +179,30 @@ class OrgService:
         self, actor_id: str, name: str, role_label: str, practice_areas: tuple[str, ...]
     ) -> tuple[Office, Membership]:
         with self._repo.transaction(self._clock) as tx:
+            # Âncora pessoal ANTES do relógio: serializa com ingressos/solicitações da mesma pessoa.
+            tx.lock_anchors(user_ids=(actor_id,))
             now = tx.now  # instante obtido após o lock
             if tx.membership_of_user(actor_id) is not None:
                 raise AppError(409, "already_in_office", "Você já participa de um escritório.")
-            office = Office(
-                id=uuid.uuid4().hex, name=name, created_by=actor_id, created_at=now, join_code=self._new_code(tx)
-            )
+            office = self._put_office_with_new_code(tx, Office(
+                id=uuid.uuid4().hex, name=name, created_by=actor_id, created_at=now, join_code="",
+            ))
             membership = Membership(
                 user_id=actor_id, office_id=office.id, role_label=role_label, practice_areas=practice_areas,
                 permissions=ADMIN_PERMISSIONS, visibility="all", joined_at=now,
             )
-            tx.put_office(office)
             tx.put_membership(membership)
             self._cancel_pending_of(tx, actor_id)
         logger.info("org_office_created office_id=%s", office.id)
         return office, membership
 
     def current(self, actor_id: str) -> tuple[Office | None, Membership | None]:
-        with self._repo.transaction(self._clock) as tx:
+        with self._read_org() as tx:  # leitura consistente (snapshot)
             m = tx.membership_of_user(actor_id)
             return (tx.get_office(m.office_id), m) if m else (None, None)
 
     def get_office(self, actor_id: str, office_id: str) -> Office:
-        with self._repo.transaction(self._clock) as tx:
+        with self._read_org() as tx:  # leitura consistente (snapshot)
             office, _ = self._actor_in(tx, actor_id, office_id)
             return office
 
@@ -197,7 +217,7 @@ class OrgService:
 
     # -------------------------------------------------------------------- equipe
     def list_members(self, actor_id: str, office_id: str) -> tuple[Membership, list[MemberEntry]]:
-        with self._repo.transaction(self._clock) as tx:
+        with self._read_org() as tx:  # leitura consistente (snapshot)
             _, actor = self._actor_in(tx, actor_id, office_id)
             members = sorted(tx.members_of(office_id), key=lambda m: (m.joined_at, m.user_id))
         return actor, [MemberEntry(m, self.user_of(m.user_id)) for m in members]
@@ -276,7 +296,7 @@ class OrgService:
             ) from None
 
     @contextmanager
-    def _unit(self) -> Iterator[MemoryUnitTransaction]:
+    def _unit(self) -> Iterator[UnitTransaction]:
         try:
             with self._uow.unit(self._clock) as unit:
                 yield unit
@@ -319,7 +339,7 @@ class OrgService:
 
     # ---------------------------------------------------------- código de ingresso
     def get_join_code(self, actor_id: str, office_id: str) -> str:
-        with self._repo.transaction(self._clock) as tx:
+        with self._read_org() as tx:  # leitura consistente (snapshot)
             office, actor = self._actor_in(tx, actor_id, office_id)
             if (d := policy.can_manage_team(actor)):
                 _raise(d)
@@ -330,8 +350,7 @@ class OrgService:
             office, actor = self._actor_in(tx, actor_id, office_id)
             if (d := policy.can_manage_team(actor)):
                 _raise(d)
-            office = replace(office, join_code=self._new_code(tx))
-            tx.put_office(office)
+            office = self._put_office_with_new_code(tx, office)
         logger.info("org_join_code_rotated office_id=%s actor=%s", office_id, actor_id)
         return office.join_code
 
@@ -340,12 +359,13 @@ class OrgService:
         self._limit(self._invite_create_limiter, f"user:{actor_id}")
         token = new_opaque_token()
         with self._repo.transaction(self._clock) as tx:
-            now = tx.now  # instante obtido após o lock
             _, actor = self._actor_in(tx, actor_id, office_id)
             # Autoridade para conceder o conjunto de ingresso, verificada nesta transação.
             if (d := policy.can_grant_entry(actor)):
                 _raise(d)
-            pending = sum(1 for i in tx.invitations_of(office_id) if i.state(now) == "valid")
+            invitations = tx.invitations_of(office_id)                  # trava a âncora do escritório
+            now = tx.now  # DEPOIS da âncora (relógio pós-lock)
+            pending = sum(1 for i in invitations if i.state(now) == "valid")
             if pending >= self._limits.max_pending_invites_per_office:
                 raise AppError(409, "pending_limit_reached", "Limite de convites pendentes atingido.")
             invitation = Invitation(
@@ -362,7 +382,7 @@ class OrgService:
         return invitation, token
 
     def list_invitations(self, actor_id: str, office_id: str) -> list[Invitation]:
-        with self._repo.transaction(self._clock) as tx:
+        with self._read_org() as tx:  # leitura consistente (snapshot)
             _, actor = self._actor_in(tx, actor_id, office_id)
             if (d := policy.can_manage_team(actor)):
                 _raise(d)
@@ -370,9 +390,9 @@ class OrgService:
 
     def revoke_invitation(self, actor_id: str, office_id: str, invitation_id: str) -> Invitation:
         with self._repo.transaction(self._clock) as tx:
-            now = tx.now  # instante obtido após o lock
             _, actor = self._actor_in(tx, actor_id, office_id)
             inv = tx.get_invitation(invitation_id)
+            now = tx.now  # DEPOIS da âncora do escritório (relógio pós-lock)
             if inv is None or inv.office_id != office_id:
                 _raise(policy.NOT_FOUND)
             assert inv is not None
@@ -387,11 +407,11 @@ class OrgService:
 
     def lookup_invitation(self, token: str, client_ip: str) -> tuple[InvitationState, str | None]:
         self._limit(self._invite_lookup_limiter, f"ip:{client_ip}")
-        with self._repo.transaction(self._clock) as tx:
-            now = tx.now  # instante obtido após o lock
-            inv = tx.get_invitation_by_hash(hash_opaque_token(token))
+        with self._repo.transaction(self._clock) as tx:  # horário lido DEPOIS do lock (expiração exata)
+            inv = tx.get_invitation_by_hash(hash_opaque_token(token))   # trava a âncora do escritório
             if inv is None:
                 return "invalid", None
+            now = tx.now  # DEPOIS da âncora (relógio pós-lock)
             state = inv.state(now)
             office = tx.get_office(inv.office_id)
             if office is None:
@@ -401,9 +421,10 @@ class OrgService:
     def accept_invitation(self, actor_id: str, token: str, client_ip: str) -> tuple[Office, Membership]:
         self._limit(self._invite_accept_limiter, f"ip:{client_ip}", f"user:{actor_id}")
         with self._repo.transaction(self._clock) as tx:
-            now = tx.now  # instante obtido após o lock
             inv = tx.get_invitation_by_hash(hash_opaque_token(token))
             office = tx.get_office(inv.office_id) if inv else None
+            tx.lock_anchors(user_ids=(actor_id,))          # pessoa que ingressa (escritório → pessoa)
+            now = tx.now  # DEPOIS das âncoras (relógio pós-lock)
             if inv is None or office is None:
                 raise AppError(404, "invitation_invalid", "Convite inválido.")
             state = inv.state(now)
@@ -425,11 +446,15 @@ class OrgService:
     def create_join_request(self, actor_id: str, code: str, client_ip: str) -> tuple[JoinRequest, Office]:
         self._limit(self._join_request_limiter, f"ip:{client_ip}", f"user:{actor_id}")
         with self._repo.transaction(self._clock) as tx:
-            now = tx.now  # instante obtido após o lock
             office = tx.get_office_by_code(code)
+            # Âncora da PESSOA antes do relógio e da verificação de vínculo: serializa com um ingresso
+            # concorrente em outro escritório (que cancela as pendências sob a mesma âncora). Sem isso,
+            # uma solicitação inserida após uma verificação desatualizada escaparia do cancelamento.
+            tx.lock_anchors(user_ids=(actor_id,))
+            now = tx.now  # DEPOIS das âncoras (relógio pós-lock)
             if office is None:
                 raise AppError(404, "join_code_invalid", "Código de ingresso inválido.")
-            if tx.membership_of_user(actor_id) is not None:
+            if tx.membership_of_user(actor_id) is not None:          # revalidado após as âncoras
                 raise AppError(409, "already_in_office", "Você já participa de um escritório.")
             mine = [r for r in tx.requests_of_user(actor_id) if r.status == "pending"]
             if any(r.office_id == office.id for r in mine):
@@ -445,7 +470,7 @@ class OrgService:
         return request, office
 
     def my_requests(self, actor_id: str) -> list[tuple[JoinRequest, str | None]]:
-        with self._repo.transaction(self._clock) as tx:
+        with self._read_org() as tx:  # leitura consistente (snapshot)
             out = []
             for r in sorted(tx.requests_of_user(actor_id), key=lambda r: (r.created_at, r.id), reverse=True):
                 office = tx.get_office(r.office_id)
@@ -454,8 +479,8 @@ class OrgService:
 
     def cancel_request(self, actor_id: str, request_id: str) -> JoinRequest:
         with self._repo.transaction(self._clock) as tx:
-            now = tx.now  # instante obtido após o lock
             req = tx.get_request(request_id)
+            now = tx.now  # DEPOIS da âncora do escritório (relógio pós-lock)
             if req is None or req.user_id != actor_id:
                 _raise(policy.NOT_FOUND)
             assert req is not None
@@ -466,7 +491,7 @@ class OrgService:
         return req
 
     def list_office_requests(self, actor_id: str, office_id: str, status: str | None) -> list[RequestEntry]:
-        with self._repo.transaction(self._clock) as tx:
+        with self._read_org() as tx:  # leitura consistente (snapshot)
             _, actor = self._actor_in(tx, actor_id, office_id)
             if (d := policy.can_manage_team(actor)):
                 _raise(d)
@@ -477,9 +502,11 @@ class OrgService:
     def approve_request(self, actor_id: str, office_id: str, request_id: str) -> tuple[JoinRequest, Membership]:
         conflict = False
         with self._repo.transaction(self._clock) as tx:
-            now = tx.now  # instante obtido após o lock
             _, actor = self._actor_in(tx, actor_id, office_id)
             req = tx.get_request(request_id)
+            if req is not None:
+                tx.lock_anchors(user_ids=(req.user_id,))   # pessoa que ingressa (escritório → pessoa)
+            now = tx.now  # DEPOIS das âncoras (relógio pós-lock)
             if req is None or req.office_id != office_id:
                 _raise(policy.NOT_FOUND)
             assert req is not None
@@ -510,9 +537,9 @@ class OrgService:
 
     def reject_request(self, actor_id: str, office_id: str, request_id: str) -> JoinRequest:
         with self._repo.transaction(self._clock) as tx:
-            now = tx.now  # instante obtido após o lock
             _, actor = self._actor_in(tx, actor_id, office_id)
             req = tx.get_request(request_id)
+            now = tx.now  # DEPOIS da âncora do escritório (relógio pós-lock)
             if req is None or req.office_id != office_id:
                 _raise(policy.NOT_FOUND)
             assert req is not None

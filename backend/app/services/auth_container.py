@@ -37,12 +37,12 @@ class AuthStorageConfigError(RuntimeError):
 @dataclass
 class AuthContainer:
     service: AuthService
-    store: MemoryAuthStore | None          # None no modo auth-postgres
+    store: MemoryAuthStore | None          # None no modo postgres
     clock: Clock
     ephemeral_secret: bool
     users: UserRepository                  # o MESMO repositório é usado pelo domínio (sem segunda cópia)
     storage: str = "memory"
-    engine: Any = None                     # Engine SQLAlchemy no modo auth-postgres
+    engine: Any = None                     # Engine SQLAlchemy no modo postgres (compartilhado com o domínio)
     _closed: bool = field(default=False, repr=False)
 
     def close(self) -> None:
@@ -63,7 +63,7 @@ def _memory_repositories(settings: Settings) -> tuple[MemoryAuthStore, UserRepos
 
 
 def _sql_repositories(settings: Settings, clock: Clock, checkpoint: Callable[[str], None] | None):
-    """Modo auth-postgres: imports TARDIOS (o modo memory não carrega SQLAlchemy nem psycopg)."""
+    """Modo postgres: imports TARDIOS (o modo memory não carrega SQLAlchemy nem psycopg)."""
     from app.db.config import DatabaseConfigError, database_config_from
     from app.db.engine import create_db_engine
     from app.repositories.sql import (
@@ -78,7 +78,7 @@ def _sql_repositories(settings: Settings, clock: Clock, checkpoint: Callable[[st
     try:
         cfg = database_config_from(settings)
     except DatabaseConfigError as exc:
-        raise AuthStorageConfigError(f"STORAGE=auth-postgres: {exc}") from None
+        raise AuthStorageConfigError(f"STORAGE=postgres: {exc}") from None
     engine = create_db_engine(cfg, application_name="prazoai-backend")
     try:
         ensure_schema_revision(engine)                     # somente leitura; nada é criado
@@ -89,7 +89,7 @@ def _sql_repositories(settings: Settings, clock: Clock, checkpoint: Callable[[st
         engine.dispose()
         cause = getattr(exc, "orig", None) or exc
         raise AuthStorageConfigError(
-            f"STORAGE=auth-postgres: não foi possível verificar o esquema em {cfg.describe()} "
+            f"STORAGE=postgres: não foi possível verificar o esquema em {cfg.describe()} "
             f"({type(cause).__name__})."
         ) from None
     ctx = SqlContext(engine=engine, clock=clock, **({"checkpoint": checkpoint} if checkpoint else {}))
@@ -123,7 +123,7 @@ def build_auth_container(
     clock = clock or SystemClock()
     store: MemoryAuthStore | None = None
     engine = None
-    if settings.storage == "auth-postgres":
+    if settings.storage == "postgres":
         engine, users, sessions, resets = _sql_repositories(settings, clock, sql_checkpoint)
     else:
         store, users, sessions, resets = _memory_repositories(settings)
