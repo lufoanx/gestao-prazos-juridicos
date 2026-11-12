@@ -23,13 +23,14 @@ from app.core.clock import Clock
 from app.core.errors import AppError
 from app.core.logging import get_logger
 from app.domain.deadlines import TRANSITIONS, Comment, Deadline, HistoryEvent, Scope, ScopeKind
+from app.domain.errors import CapacityError
 from app.domain.intimations import IntimationEvent
 from app.domain.org import Membership
 from app.policies import deadlines as policy
 from app.policies.org import NOT_FOUND, Denial
 from app.repositories.deadlines import UnitTransaction
-from app.repositories.deadlines_memory import CapacityError
-from app.repositories.unit_of_work import MemoryUnitOfWork
+from app.repositories.queries import DeadlineSearch, MonthSearch, Viewer
+from app.repositories.unit import UnitOfWork
 from app.services import deadline_ops as ops
 
 logger = get_logger("prazoai.deadlines")
@@ -88,19 +89,8 @@ class ListQuery:
     per_page: int = 20
 
 
-_STATUS_ORDER = {"open": 0, "completed": 1, "cancelled": 2}
-_PRIORITY_ORDER = {"high": 0, "normal": 1}
-_SORT_KEYS = {
-    "dueDate": lambda d: d.due_date,
-    "title": lambda d: d.title.casefold(),
-    "priority": lambda d: _PRIORITY_ORDER[d.priority],
-    "status": lambda d: _STATUS_ORDER[d.status],
-    "createdAt": lambda d: d.created_at,
-}
-
-
 class DeadlineService:
-    def __init__(self, *, unit_of_work: MemoryUnitOfWork, clock: Clock, timezone: str, soon_days: int) -> None:
+    def __init__(self, *, unit_of_work: UnitOfWork, clock: Clock, timezone: str, soon_days: int) -> None:
         self._uow = unit_of_work
         self._clock = clock
         self._tz = ZoneInfo(timezone)
@@ -118,6 +108,12 @@ class DeadlineService:
                 yield tx
         except CapacityError as exc:
             raise AppError(409, exc.code, exc.message) from None
+
+    @contextmanager
+    def _read(self) -> Iterator[UnitTransaction]:
+        """Leitura consistente (PostgreSQL: REPEATABLE READ READ ONLY, um snapshot)."""
+        with self._uow.read(self._clock) as tx:
+            yield tx
 
     def today(self, now: datetime | None = None) -> date:
         """Data civil de referência (fuso DEADLINES_TIMEZONE) para urgência."""
@@ -177,10 +173,6 @@ class DeadlineService:
             _raise(policy.FORBIDDEN)
         return Scope.office(m.office_id), m
 
-    @staticmethod
-    def _visible(actor_id: str, m: Membership | None, items: list[Deadline]) -> list[Deadline]:
-        return [d for d in items if policy.can_read(actor_id, m, d)]
-
     # ------------------------------------------------------------------- criar
     def create(self, actor_id: str, kind: ScopeKind, data: dict[str, Any]) -> Deadline:
         with self._unit() as tx:
@@ -190,58 +182,33 @@ class DeadlineService:
 
     # ------------------------------------------------------------------ leitura
     def get(self, actor_id: str, deadline_id: str) -> Deadline:
-        with self._unit() as tx:
+        with self._read() as tx:
             return self._readable(tx, actor_id, deadline_id)[0]
 
     def list_deadlines(self, actor_id: str, query: ListQuery) -> tuple[Page, date]:
-        with self._unit() as tx:
+        with self._read() as tx:
             scope, m = self._scope_for(tx, actor_id, query.scope)
-            items = self._visible(actor_id, m, tx.deadlines.in_scope(scope))   # autoriza ANTES de filtrar/contar
             today = self.today(tx.now)
-        items = [d for d in items if self._matches(d, query, today)]
-        items.sort(key=lambda d: d.id)
-        items.sort(key=_SORT_KEYS[query.sort], reverse=query.direction == "desc")  # estável: desempate por id
-        start = (query.page - 1) * query.per_page
-        return Page(items[start:start + query.per_page], len(items), query.page, query.per_page), today
-
-    def _matches(self, d: Deadline, q: ListQuery, today: date) -> bool:
-        if q.status and d.status != q.status:
-            return False
-        if q.urgency:
-            u = self.urgency(d, today)
-            if u is None or u["level"] != q.urgency:
-                return False
-        if q.area and d.practice_area.casefold() != q.area.casefold():
-            return False
-        if q.responsible_id and d.responsible_id != q.responsible_id:
-            return False
-        if q.due_from and d.due_date < q.due_from:
-            return False
-        if q.due_to and d.due_date > q.due_to:
-            return False
-        if q.q:
-            hay = f"{d.title} {d.case_number} {d.court} {d.practice_area}".casefold()
-            if q.q.casefold() not in hay:
-                return False
-        return True
+            # Autorização, filtros, ordenação e paginação no repositório (SQL no PostgreSQL), no mesmo snapshot.
+            items, total = tx.queries.deadlines(DeadlineSearch(
+                scope=scope, viewer=Viewer(actor_id, m), today=today, soon_days=self._soon, q=query.q,
+                status=query.status, urgency=query.urgency, area=query.area, responsible_id=query.responsible_id,
+                due_from=query.due_from, due_to=query.due_to, sort=query.sort, direction=query.direction,
+                page=query.page, per_page=query.per_page,
+            ))
+        return Page(items, total, query.page, query.per_page), today
 
     def calendar(
         self, actor_id: str, kind: ScopeKind, year: int, month: int, status: str | None, page: int, per_page: int
     ) -> tuple[Page, dict[str, int], date]:
-        with self._unit() as tx:
+        with self._read() as tx:
             scope, m = self._scope_for(tx, actor_id, kind)
-            items = self._visible(actor_id, m, tx.deadlines.in_scope(scope))
             today = self.today(tx.now)
-        items = [
-            d for d in items
-            if d.due_date.year == year and d.due_date.month == month and (status is None or d.status == status)
-        ]
-        items.sort(key=lambda d: (d.due_date, d.agenda_time or time(23, 59, 59), d.id))
-        counts: dict[str, int] = {}
-        for d in items:
-            counts[d.due_date.isoformat()] = counts.get(d.due_date.isoformat(), 0) + 1
-        start = (page - 1) * per_page
-        return Page(items[start:start + per_page], len(items), page, per_page), counts, today
+            items, total, counts = tx.queries.month(MonthSearch(
+                scope=scope, viewer=Viewer(actor_id, m), year=year, month=month, status=status, page=page,
+                per_page=per_page,
+            ))
+        return Page(items, total, page, per_page), counts, today
 
     # ------------------------------------------------------------------- editar
     def update(self, actor_id: str, deadline_id: str, version: int, changes: dict[str, Any]) -> Deadline:
@@ -315,6 +282,9 @@ class DeadlineService:
         self, actor_id: str, deadline_id: str, version: int, office_id: str, share_linked_intimation: bool = False
     ) -> Deadline:
         with self._unit() as tx:
+            # Duas âncoras (escritório de destino e escopo pessoal do ator), na ordem aprovada;
+            # tudo abaixo é relido e revalidado depois delas.
+            tx.lock_anchors(office_ids=(office_id,), user_ids=(actor_id,))
             m = self._membership(tx, actor_id)
             d = tx.deadlines.get(deadline_id)
             if d is None:
@@ -355,18 +325,14 @@ class DeadlineService:
         return comment
 
     def comments(self, actor_id: str, deadline_id: str, page: int, per_page: int) -> tuple[list[Comment], int]:
-        with self._unit() as tx:
+        with self._read() as tx:
             d, _ = self._readable(tx, actor_id, deadline_id)
-            items = list(tx.deadlines.comments(d.id))
-        start = (page - 1) * per_page
-        return items[start:start + per_page], len(items)
+            return tx.queries.comments(d.id, page, per_page)
 
     def history(self, actor_id: str, deadline_id: str, page: int, per_page: int) -> tuple[list[HistoryEvent], int]:
-        with self._unit() as tx:
+        with self._read() as tx:
             d, m = self._readable(tx, actor_id, deadline_id)
-            items = list(tx.deadlines.history(d.id))
-            start = (page - 1) * per_page
-            # Mesma projeção autorizada das intimações (referências a recursos protegidos).
-            page_items = [replace(e, details=ops.project_details(tx, actor_id, m, e.details))
-                          for e in items[start:start + per_page]]
-        return page_items, len(items)
+            items, total = tx.queries.history(d.id, page, per_page)
+            # Mesma projeção autorizada das intimações (referências a recursos protegidos), no mesmo snapshot.
+            page_items = [replace(e, details=ops.project_details(tx, actor_id, m, e.details)) for e in items]
+        return page_items, total

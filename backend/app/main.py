@@ -89,7 +89,7 @@ def create_app(
     async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
         try:
             yield
-        finally:  # encerramento: fecha o engine do modo auth-postgres (nada a fazer em memória)
+        finally:  # encerramento: fecha o engine do modo postgres (nada a fazer em memória)
             auth = getattr(app_.state, "auth", None)
             if auth is not None:
                 auth.close()
@@ -142,11 +142,8 @@ def create_app(
                 sql_checkpoint=sql_checkpoint,
             )
             app.state.auth = container
-            if container.storage == "auth-postgres":
-                logger.warning(
-                    "storage_auth_postgres_volatile_domain: autenticação no PostgreSQL, mas escritórios, prazos, "
-                    "intimações e notificações continuam EM MEMÓRIA e se perdem ao reiniciar (modo de teste da P3)."
-                )
+            if container.storage == "postgres":
+                logger.info("storage_postgres: autenticação e domínio no PostgreSQL (sessões do BFF ficam fora).")
             else:
                 logger.warning(
                     "auth_in_memory_store: dados perdidos ao reiniciar; incompatível com múltiplos workers; "
@@ -161,7 +158,8 @@ def create_app(
         app.state.org = None
         if settings.offices_active and app.state.auth is not None:
             app.state.org = build_org_container(
-                settings, users=app.state.auth.users, clock=app.state.auth.clock, responsibilities=responsibility_port
+                settings, users=app.state.auth.users, clock=app.state.auth.clock, responsibilities=responsibility_port,
+                engine=app.state.auth.engine, sql_checkpoint=sql_checkpoint,
             )
         # Prazos (Etapa 4): mesma unidade de trabalho (ordem de locks escritórios → prazos).
         app.state.deadlines = None
@@ -214,7 +212,7 @@ def create_app(
 
         logger.info("app_ready environment=%s api_base=%s", settings.environment, settings.api_base)
     except BaseException:
-        # Falha depois de criar recursos (ex.: engine do modo auth-postgres): encerra antes de propagar.
+        # Falha depois de criar recursos (ex.: engine do modo postgres): encerra antes de propagar.
         if getattr(app.state, "auth", None) is not None:
             app.state.auth.close()
         raise

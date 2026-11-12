@@ -1,6 +1,6 @@
 """Repositórios de AUTENTICAÇÃO no PostgreSQL (P3), com SQLAlchemy Core e psycopg síncrono.
 
-Importado SOMENTE quando STORAGE=auth-postgres (o modo memory não carrega SQLAlchemy).
+Importado SOMENTE quando STORAGE=postgres (o modo memory não carrega SQLAlchemy).
 Protocolos detalhados em docs/backend/15-projeto-persistencia-postgresql.md, §4.3, e
 docs/backend/18-p3-autenticacao-postgresql.md.
 """

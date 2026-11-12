@@ -75,6 +75,10 @@ def test_evento_de_transferencia_tambem_e_projetado(env):
     assert did in history(o, ana, i["id"]).text
 
 
+@pytest.mark.memory_only(
+    "compara identidade do estado em memória; equivalente SQL: "
+    "test_domain_sql_equivalents::test_projecao_nao_altera_o_evento_armazenado_sql"
+)
 def test_projecao_nao_altera_o_evento_armazenado(env):
     o, oid, ana, bia, caio = env
     i = register(o, bia)
@@ -114,7 +118,8 @@ def test_sequencia_da_auditoria_recusada_sem_efeito(env):
     r = _patch(o, caio, i["id"], suggestedResponsibleId=None)
     assert r.status_code == 409 and r.json()["error"]["code"] == "operational_responsible_required"
     after = full_state(o)
-    assert all(a is b for a, b in zip(after[0], before[0], strict=True)) and after[1] == before[1]
+    # Memória: referências intactas; PostgreSQL (sem referências): conteúdo integral idêntico.
+    assert (after[0] is None or all(a is b for a, b in zip(after[0], before[0], strict=True))) and after[1] == before[1]
     r = o.http.post(f"{API}/offices/{oid}/leave", headers=caio.headers, json={})
     assert r.status_code == 409 and r.json()["error"]["code"] == "reassign_required"   # ainda é responsável
 

@@ -9,8 +9,8 @@ from sqlalchemy import Engine, text
 
 from app.db.config import SCHEMA
 
-#: Revisão Alembic exigida pela autenticação SQL (14 tabelas da P2).
-REQUIRED_REVISION = "0002"
+#: Revisão Alembic exigida (P4: 0003 — ordem interna `seq` de históricos, eventos e comentários).
+REQUIRED_REVISION = "0003"
 
 
 class SchemaNotReadyError(RuntimeError):

@@ -147,21 +147,21 @@ def _head_tables() -> list[str]:
     return sorted([*BASE_TABLES, *TABLE_NAMES])
 
 
-# P2: a revisão head passou de 0001 para 0002 (as 14 tabelas aprovadas). As expectativas da P1 que
-# afirmavam "head = 0001, nenhuma tabela de negócio" foram atualizadas para o novo head, e os ciclos
-# pedidos na P2 foram acrescentados. O marcador da fixture e objetos externos à revisão sobrevivem.
+# P2: a revisão head passou de 0001 para 0002 (as 14 tabelas aprovadas). P4: head = 0003 (coluna
+# interna `seq`, sem tabelas novas). As expectativas foram atualizadas para o novo head; os ciclos
+# pedidos na P2 continuam, e o ciclo 0003 ↔ 0002 foi acrescentado. Marcador e objetos externos sobrevivem.
 def test_alembic_upgrade_downgrade_upgrade_ate_head(pg_clean):
     _migrate(pg_clean, "base", "downgrade")                            # parte de um estado conhecido
     assert _state(pg_clean)[:2] == (BASE_TABLES, None)
     _migrate(pg_clean, "head")
     tables, rev, public = _state(pg_clean)
-    assert rev == "0002"
+    assert rev == "0003"
     assert tables == _head_tables()
     assert public == 0                                                  # nada fora do esquema explícito
     _migrate(pg_clean, "base", "downgrade")
     assert _state(pg_clean)[:2] == (BASE_TABLES, None)                  # marcador preservado
     _migrate(pg_clean, "head")
-    assert _state(pg_clean)[1] == "0002"
+    assert _state(pg_clean)[1] == "0003"
 
 
 def test_banco_sem_historico_de_migrations_vai_ao_head(pg_clean):
@@ -174,7 +174,7 @@ def test_banco_sem_historico_de_migrations_vai_ao_head(pg_clean):
     assert _state(pg_clean)[:2] == ([MARKER_TABLE], None)
     _migrate(pg_clean, "head")
     tables, rev, _ = _state(pg_clean)
-    assert (tables, rev) == (_head_tables(), "0002")
+    assert (tables, rev) == (_head_tables(), "0003")
 
 
 def test_banco_em_0001_avanca_para_0002_e_volta(pg_clean):
@@ -187,6 +187,11 @@ def test_banco_em_0001_avanca_para_0002_e_volta(pg_clean):
     assert _state(pg_clean)[:2] == (BASE_TABLES, "0001")
     _migrate(pg_clean, "0002")                                          # 0001 → 0002
     assert _state(pg_clean)[1] == "0002"
+    _migrate(pg_clean, "0003")                                          # 0002 → 0003 (P4)
+    assert _state(pg_clean)[:2] == (_head_tables(), "0003")
+    _migrate(pg_clean, "0002", "downgrade")                            # 0003 → 0002
+    assert _state(pg_clean)[:2] == (_head_tables(), "0002")
+    _migrate(pg_clean, "head")
 
 
 def test_downgrade_preserva_objetos_externos_a_revisao(pg_clean):

@@ -35,6 +35,10 @@ def test_adaptador_controlado_percorre_os_estados_reservados(org):
         svc.apply_processing_result(i["id"], "completed")            # fora de "processing"
 
 
+@pytest.mark.memory_only(
+    "injeta estado reservado no armazenamento em memória; equivalente SQL: "
+    "test_domain_sql_equivalents::test_retry_sem_processamento_disponivel_sql"
+)
 def test_retry_sem_processamento_disponivel(org):
     o = org()
     ana = o.person("ana")
@@ -48,6 +52,9 @@ def test_retry_sem_processamento_disponivel(org):
 
 
 # ---------- retenção e capacidade ----------
+@pytest.mark.memory_only(
+    "retenção (expurgo) — no PostgreSQL é da P5; sem equivalente nesta entrega"
+)
 def test_descartadas_removidas_com_eventos_e_indices_apos_retencao(org, clock):
     o = org(INTIMATIONS_DISCARD_RETENTION_SECONDS=DAY)
     ana = o.person("ana")
@@ -102,6 +109,11 @@ def _uow(o):
     return o.app.state.org.unit_of_work
 
 
+@pytest.mark.memory_only(
+    "escreve estado inválido direto na transação em memória; no PostgreSQL a constraint recusa ANTES "
+    "(equivalente: test_domain_sql_equivalents::test_escritas_invalidas_diretas_recusadas_pelo_banco e "
+    "test_db_schema)"
+)
 def test_invariante_vinculo_unico_e_reciproco(org):
     o = org()
     ana = o.person("ana")
@@ -136,6 +148,10 @@ def test_invariante_mesmo_ambiente(org):
             tx.deadlines.put(replace(d, scope=Scope.office(tx.org.membership_of_user(ana.id).office_id)))
 
 
+@pytest.mark.memory_only(
+    "escreve estado inválido direto na transação em memória; equivalente SQL: "
+    "test_domain_sql_equivalents::test_escritas_invalidas_diretas_recusadas_pelo_banco"
+)
 def test_invariante_sugerido_fora_do_escritorio(org):
     o = org()
     ana = o.person("ana")
@@ -146,6 +162,10 @@ def test_invariante_sugerido_fora_do_escritorio(org):
             tx.intimations.put(replace(tx.intimations.get(i["id"]), suggested_responsible_id="fora"))
 
 
+@pytest.mark.memory_only(
+    "compara identidade do estado em memória; equivalente SQL: "
+    "test_domain_sql_equivalents::test_rollback_restaura_exclusoes_da_caixa_sql"
+)
 def test_rollback_inclui_exclusoes_da_caixa(org, clock):
     """Se a operação falhar, as notificações removidas pela política da caixa voltam intactas."""
     o = org(NOTIFICATIONS_MAX_PER_RECIPIENT=10)

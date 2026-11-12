@@ -8,6 +8,9 @@ from tests.org_utils import API
 DAY = 24 * 3600
 
 
+@pytest.mark.memory_only(
+    "retenção (expurgo) — no PostgreSQL é da P5; sem equivalente nesta entrega"
+)
 def test_convites_encerrados_e_expirados_sao_removidos_apos_retencao(org, clock):
     o = org(ORG_CLOSED_RETENTION_SECONDS=DAY)
     ana, bia = o.person("ana"), o.person("bia")
@@ -27,6 +30,9 @@ def test_convites_encerrados_e_expirados_sao_removidos_apos_retencao(org, clock)
     assert all(v for v in o.store.invitations_by_office.values())
 
 
+@pytest.mark.memory_only(
+    "retenção (expurgo) — no PostgreSQL é da P5; sem equivalente nesta entrega"
+)
 def test_solicitacoes_encerradas_sao_removidas_e_pendentes_mantidas(org, clock):
     o = org(ORG_CLOSED_RETENTION_SECONDS=DAY)
     ana, bia, caio = o.person("ana"), o.person("bia"), o.person("caio")

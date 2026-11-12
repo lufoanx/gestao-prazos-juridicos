@@ -111,16 +111,16 @@ def delivery() -> CapturingDelivery:
 def make_app(monkeypatch, request):
     """Fábrica de instâncias isoladas de create_app com relógio/entrega injetados.
 
-    Com PRAZOAI_TEST_STORAGE=auth-postgres (CI), apps sem STORAGE/ENVIRONMENT explícitos são criadas
-    em STORAGE=auth-postgres sobre o banco de TESTE autorizado (tabelas limpas antes de cada teste) e
-    com segredo JWT estável; testes marcados `memory_only` (inspecionam o armazenamento em memória)
-    são pulados nesse modo. Os engines das apps criadas são encerrados ao final do teste.
+    Com PRAZOAI_TEST_STORAGE=postgres (CI), apps sem STORAGE/ENVIRONMENT explícitos são criadas em
+    STORAGE=postgres (autenticação E domínio) sobre o banco de TESTE autorizado (tabelas limpas antes de
+    cada teste) e com segredo JWT estável; testes marcados `memory_only` (inspecionam o armazenamento
+    em memória) são pulados nesse modo. Os engines das apps criadas são encerrados ao final do teste.
     """
     import app.core.config as config_module
     from app.main import create_app
 
     created = []
-    sql_mode = os.environ.get("PRAZOAI_TEST_STORAGE") == "auth-postgres"
+    sql_mode = os.environ.get("PRAZOAI_TEST_STORAGE") == "postgres"
     if sql_mode and request.node.get_closest_marker("memory_only"):
         pytest.skip("teste específico do armazenamento em memória")
 
@@ -129,9 +129,9 @@ def make_app(monkeypatch, request):
         if sql_mode and not {"STORAGE", "ENVIRONMENT", "AUTH_STORAGE"} & set(env):
             request.getfixturevalue("pg_schema")
             url = request.getfixturevalue("pg_url")
-            env = {"STORAGE": "auth-postgres", "ENVIRONMENT": "test",
+            env = {"STORAGE": "postgres", "ENVIRONMENT": "test",
                    "DATABASE_URL": url.render_as_string(hide_password=False),
-                   "AUTH_JWT_SECRET": "segredo-jwt-estavel-dos-testes-auth-postgres-" + "y" * 24, **env}
+                   "AUTH_JWT_SECRET": "segredo-jwt-estavel-dos-testes-postgres-" + "y" * 24, **env}
         for k, v in env.items():
             monkeypatch.setenv(k, str(v))
         config_module.get_settings.cache_clear()
@@ -142,6 +142,10 @@ def make_app(monkeypatch, request):
                 sql_checkpoint=sql_checkpoint,
             )
             created.append(app)
+            if sql_mode:
+                from tests.sql_store_views import attach
+
+                attach(app)                       # visões somente leitura para as asserções de estado
             return app
         finally:
             config_module.get_settings.cache_clear()
@@ -176,7 +180,11 @@ from tests.org_utils import org  # noqa: E402,F401
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "postgres: requer PostgreSQL real (TEST_DATABASE_URL)")
-    config.addinivalue_line("markers", "memory_only: inspeciona o armazenamento em memória (pulado com auth-postgres)")
+    storage = os.environ.get("PRAZOAI_TEST_STORAGE")
+    if storage not in (None, "", "postgres"):
+        # Valor desconhecido (ex.: o antigo "auth-postgres") faria as suítes rodarem em MEMÓRIA em silêncio.
+        raise pytest.UsageError(f"PRAZOAI_TEST_STORAGE={storage!r} inválido: use 'postgres' ou deixe sem definir.")
+    config.addinivalue_line("markers", "memory_only: inspeciona o armazenamento em memória (pulado com postgres)")
 
 
 @pytest.fixture(scope="session")
@@ -276,13 +284,18 @@ STABLE_JWT_SECRET = "segredo-jwt-estavel-dos-testes-p3-" + "x" * 32   # reiníci
 
 @pytest.fixture
 def pg_app(pg_schema, pg_url, make_app):
-    """Fábrica de apps em STORAGE=auth-postgres sobre o banco de TESTE autorizado (relógio, entrega e
+    """Fábrica de apps em STORAGE=postgres sobre o banco de TESTE autorizado (relógio, entrega e
     pontos de controle injetáveis)."""
     raw = pg_url.render_as_string(hide_password=False)
 
-    def build(clock=None, delivery=None, sql_checkpoint=None, **env):
-        base = dict(STORAGE="auth-postgres", ENVIRONMENT="test", DATABASE_URL=raw, AUTH_JWT_SECRET=STABLE_JWT_SECRET)
+    def build(clock=None, delivery=None, sql_checkpoint=None, password_hasher=None, **env):
+        base = dict(STORAGE="postgres", ENVIRONMENT="test", DATABASE_URL=raw, AUTH_JWT_SECRET=STABLE_JWT_SECRET)
         base.update(env)
-        return make_app(clock=clock, delivery=delivery, sql_checkpoint=sql_checkpoint, **base)
+        app = make_app(clock=clock, delivery=delivery, sql_checkpoint=sql_checkpoint,
+                       password_hasher=password_hasher, **base)
+        from tests.sql_store_views import attach
+
+        attach(app)
+        return app
 
     return build

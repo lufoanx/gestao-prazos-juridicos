@@ -19,6 +19,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from app.domain.errors import JoinCodeCollisionError
 from app.domain.org import Invitation, JoinRequest, Membership, Office
 from app.repositories.memory_tx import Fork, add_to_index, empty_state, remove_from_index
 
@@ -86,6 +87,9 @@ class MemoryOrgStore:
 
 
 class MemoryOrgTransaction:
+    def lock_anchors(self, *, office_ids: tuple[str, ...] = (), user_ids: tuple[str, ...] = ()) -> None:
+        return None  # locks globais da memória já adquiridos
+
     """Visão transacional (escritas preparadas) — só existe com o lock de escritórios adquirido."""
 
     def __init__(self, store: MemoryOrgStore, now: datetime, *, allow_membership_delete: bool) -> None:
@@ -143,7 +147,7 @@ class MemoryOrgTransaction:
         previous = self.get_office(office.id)
         owner = self._f.r("office_by_code").get(office.join_code, office.id)
         if owner != office.id:
-            raise ValueError("código de ingresso já em uso")
+            raise JoinCodeCollisionError()
         if previous is not None and previous.join_code != office.join_code:
             self._f.w("office_by_code").pop(previous.join_code, None)
         self._f.w("offices")[office.id] = office

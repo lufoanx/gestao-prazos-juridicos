@@ -1,5 +1,9 @@
 # 18 — P3: autenticação no PostgreSQL
 
+> **Atualização da P4:** o modo intermediário `auth-postgres` (e `ALLOW_VOLATILE_DOMAIN`) descrito
+> abaixo foi REMOVIDO; os modos finais são `memory` e `postgres` (ver `19-p4-dominio-postgresql.md`).
+> O texto abaixo é mantido como registro da decisão da P3.
+>
 > **Base:** `main` `3717cf683733efaba5aeb3c6eea3934c957f3ee3` (merge do PR #19, P2). CI pós-merge
 > verde, incluindo o E2E. Branch: `feature/persistence-p3-auth`.
 >

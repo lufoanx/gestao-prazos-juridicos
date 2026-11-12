@@ -116,6 +116,10 @@ def _run(name, fn, out):
     return t
 
 
+@pytest.mark.memory_only(
+    "ordena as threads por um gate que só funciona com o lock global da memória; equivalente SQL: "
+    "test_domain_sql_concurrency::test_perda_de_permissao_concorrendo_com_emissao_ou_aprovacao_sql"
+)
 @pytest.mark.parametrize("operation", ["invite", "approve"])
 def test_perda_de_permissao_concorrendo_com_emissao_ou_aprovacao(office, operation):
     """ana retira deadline.create de gil DENTRO da transação; a operação de gil, iniciada
@@ -206,6 +210,10 @@ def _waiting_on_lock(o, name):
     return reached
 
 
+@pytest.mark.memory_only(
+    "segura o RLock da memória; equivalente SQL: "
+    "test_domain_sql_concurrency::test_convite_expira_durante_a_espera_pela_ancora"
+)
 def test_convite_expira_durante_a_espera_pelo_lock(expiring, clock):
     o, oid, ana, bia, token, inv = expiring
     reached = _waiting_on_lock(o, "accept")
@@ -220,6 +228,10 @@ def test_convite_expira_durante_a_espera_pelo_lock(expiring, clock):
     assert o.membership(bia) is None                          # nenhum vínculo
 
 
+@pytest.mark.memory_only(
+    "segura o RLock da memória; equivalente SQL: "
+    "test_domain_sql_concurrency::test_convite_no_instante_exato_apos_espera"
+)
 def test_expiracao_no_instante_exato(expiring, clock):
     o, oid, ana, bia, token, inv = expiring
     clock.advance((inv.expires_at - clock.now()).total_seconds() - 1)
@@ -235,6 +247,10 @@ def test_expiracao_no_instante_exato(expiring, clock):
     assert o.membership(bia) is None and o.store.invitations[inv.id].status == "pending"
 
 
+@pytest.mark.memory_only(
+    "segura o RLock da memória; equivalente SQL: "
+    "test_domain_sql_concurrency::test_revogacao_usa_o_horario_pos_lock"
+)
 def test_consulta_e_revogacao_usam_o_horario_apos_o_lock(expiring, clock):
     o, oid, ana, bia, token, inv = expiring
     for name, fn, check in [
@@ -255,6 +271,10 @@ def test_consulta_e_revogacao_usam_o_horario_apos_o_lock(expiring, clock):
     assert o.store.invitations[inv.id].status == "pending"
 
 
+@pytest.mark.memory_only(
+    "segura o RLock da memória; equivalente SQL: "
+    "test_domain_sql_concurrency::test_teto_de_pendentes_usa_o_horario_pos_lock"
+)
 def test_teto_de_pendentes_conta_com_o_horario_apos_o_lock(org, clock):
     """Convite que expira durante a espera não conta mais no teto de pendentes."""
     o = org(ORG_INVITE_TTL_SECONDS=3600, ORG_MAX_PENDING_INVITES_PER_OFFICE=1)
@@ -274,6 +294,10 @@ def test_teto_de_pendentes_conta_com_o_horario_apos_o_lock(org, clock):
     assert new_inv.created_at == clock.now()            # carimbo também é o instante pós-lock
 
 
+@pytest.mark.memory_only(
+    "segura o RLock da memória; equivalente SQL: "
+    "test_domain_sql_concurrency::test_carimbos_da_aprovacao_pos_lock"
+)
 def test_carimbos_da_aprovacao_usam_o_horario_apos_o_lock(org, clock):
     o = org()
     ana, bia = o.person("ana"), o.person("bia")
@@ -290,6 +314,10 @@ def test_carimbos_da_aprovacao_usam_o_horario_apos_o_lock(org, clock):
     assert decided.decided_at == clock.now() and membership.joined_at == clock.now()
 
 
+@pytest.mark.memory_only(
+    "limpeza oportunista dentro da transação existe só na memória; no PostgreSQL a retenção global é da "
+    "P5"
+)
 def test_limpeza_usa_o_horario_apos_o_lock(org, clock):
     o = org(ORG_CLOSED_RETENTION_SECONDS=24 * 3600)
     ana = o.person("ana")

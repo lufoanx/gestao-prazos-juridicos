@@ -104,7 +104,8 @@ def test_falha_na_remocao_com_prazos_e_intimacoes_sem_efeito_parcial(env, point)
     r = remove(o, ana, oid, bia, caio)
     assert r.status_code == 500
     after = full_state(o)
-    assert all(a is b for a, b in zip(after[0], before[0], strict=True)) and after[1] == before[1]
+    # Memória: referências intactas; PostgreSQL (sem referências): conteúdo integral idêntico.
+    assert (after[0] is None or all(a is b for a, b in zip(after[0], before[0], strict=True))) and after[1] == before[1]
     o.app.state.org.unit_of_work.fault = None
     assert remove(o, ana, oid, bia, caio).status_code == 204
 

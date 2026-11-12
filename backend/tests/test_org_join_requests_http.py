@@ -118,6 +118,10 @@ def test_conflito_na_aprovacao_resulta_em_cancelled_e_409(org):
     assert r.status_code == 409 and r.json()["error"]["code"] == "request_not_pending"
 
 
+@pytest.mark.memory_only(
+    "injeta vínculo direto no armazenamento em memória; equivalente SQL: "
+    "test_domain_sql_equivalents::test_aprovacao_encontra_vinculo_em_outro_escritorio_e_cancela"
+)
 def test_aprovacao_encontra_conflito_e_cancela(org):
     """Conflito detectado NA aprovação (pendência ainda aberta): 409 + cancelled, nunca rejected."""
     o = org()

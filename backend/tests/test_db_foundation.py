@@ -38,13 +38,12 @@ def test_padrao_memory_sem_url():
     assert s.database_url is None
 
 
-@pytest.mark.parametrize("value", ["postgres", "Postgres "])
-def test_storage_futuro_recusado_explicitamente(value):
-    # P3: "auth-postgres" passou a ser aceito (com restrições de ambiente, ver test_auth_storage_modes.py);
-    # "postgres" continua recusado até a P4.
+@pytest.mark.parametrize("value", ["auth-postgres", "Auth-Postgres "])
+def test_modo_intermediario_removido_explicitamente(value):
+    # P4: os modos finais são "memory" e "postgres"; o intermediário "auth-postgres" (P3) foi removido.
     with pytest.raises(ValidationError) as exc:
         settings(STORAGE=value)
-    assert "ainda não está disponível" in str(exc.value)
+    assert "removido na P4" in str(exc.value)
 
 
 def test_storage_desconhecido_recusado():
@@ -363,14 +362,17 @@ def test_metadata_unico_com_as_14_tabelas_no_esquema_explicito():
     assert all(t.schema == SCHEMA for t in metadata.tables.values())
 
 
-def test_alembic_tem_0001_intacta_e_0002_explicita():
+def test_alembic_tem_0001_intacta_0002_e_0003_explicitas():
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(BACKEND / "alembic.ini")))
     revs = {r.revision: r for r in script.walk_revisions()}
-    assert set(revs) == {"0001", "0002"}
+    assert set(revs) == {"0001", "0002", "0003"}
     assert revs["0001"].down_revision is None and revs["0002"].down_revision == "0001"
+    assert revs["0003"].down_revision == "0002"
+    third = (BACKEND / "migrations" / "versions" / "0003_ordem_interna_eventos.py").read_text(encoding="utf-8")
+    assert "from app" not in third and "import app" not in third and "DROP TABLE" not in third
     first = (BACKEND / "migrations" / "versions" / "0001_fundacao.py").read_text(encoding="utf-8")
     assert "op." not in first                                         # 0001 continua vazia
     second = (BACKEND / "migrations" / "versions" / "0002_esquema_inicial.py").read_text(encoding="utf-8")

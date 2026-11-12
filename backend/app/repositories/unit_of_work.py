@@ -81,6 +81,15 @@ class MemoryUnitTransaction:
         if self._fault is not None:
             self._fault(name)
 
+    def lock_anchors(self, *, office_ids: tuple[str, ...] = (), user_ids: tuple[str, ...] = ()) -> None:
+        return None  # locks globais já adquiridos na abertura da unidade
+
+    @property
+    def queries(self):
+        from app.repositories.queries import MemoryQueries
+
+        return MemoryQueries(self)
+
 
 _DEFAULT_INTIMATION_LIMITS = IntimationLimits(5_000, 500, 30 * 24 * 3600)
 _DEFAULT_NOTIFICATION_LIMITS = NotificationLimits(1_000, 90 * 24 * 3600)
@@ -117,6 +126,12 @@ class MemoryUnitOfWork:
                 self.org_store.state = tx.build()
             if tx.purged:
                 self.org_store.last_purge = now
+
+    @contextmanager
+    def read(self, clock: Clock) -> Iterator[MemoryUnitTransaction]:
+        """Leitura consistente: em memória, a própria unidade (locks globais; nada é publicado)."""
+        with self.unit(clock) as tx:
+            yield tx
 
     def purge(self, now: datetime) -> int:
         with self.org_store.lock:

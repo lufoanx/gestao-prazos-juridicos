@@ -78,6 +78,9 @@ def create_deadline(
     if (d := policy.check_create(actor_id, m, kind)):
         raise_denial(d)
     scope = Scope.personal(actor_id) if kind == "personal" else Scope.office(m.office_id)  # type: ignore[union-attr]
+    # Âncora do escopo de destino ANTES do relógio e da revalidação do responsável.
+    tx.lock_anchors(office_ids=(scope.office_id,) if scope.office_id else (),
+                    user_ids=(scope.owner_id,) if scope.owner_id else ())
     responsible = data.get("responsible_id") or actor_id
     if (d := policy.check_assignment(actor_id, m, kind, responsible)):
         raise_denial(d)

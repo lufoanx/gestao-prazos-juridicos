@@ -1,5 +1,8 @@
 # 15 — Projeto técnico: persistência em PostgreSQL
 
+> **P4 implementada:** domínio no PostgreSQL (`19-p4-dominio-postgresql.md`); migration `0003`
+> (coluna interna `seq`) aprovada na auditoria para ordenar eventos de mesmo instante.
+>
 > **Documento de projeto. Nada aqui foi implementado.** Não há ORM, migrations, dependências
 > novas nem mudança de comportamento na aplicação. A implementação só começa após a aprovação das
 > decisões da §12.
