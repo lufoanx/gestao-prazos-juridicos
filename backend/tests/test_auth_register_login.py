@@ -92,6 +92,7 @@ def test_cadastro_rejeita_campos_privilegiados(client, extra):
     assert register(client).status_code == 201
 
 
+@pytest.mark.memory_only
 def test_senha_armazenada_somente_como_hash_argon2id(client, auth_app):
     user_id = register(client).json()["id"]
     stored = auth_app.state.auth.store.users_by_id[user_id]

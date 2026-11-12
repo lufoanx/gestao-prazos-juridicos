@@ -38,8 +38,10 @@ def test_padrao_memory_sem_url():
     assert s.database_url is None
 
 
-@pytest.mark.parametrize("value", ["postgres", "auth-postgres", "Postgres "])
+@pytest.mark.parametrize("value", ["postgres", "Postgres "])
 def test_storage_futuro_recusado_explicitamente(value):
+    # P3: "auth-postgres" passou a ser aceito (com restrições de ambiente, ver test_auth_storage_modes.py);
+    # "postgres" continua recusado até a P4.
     with pytest.raises(ValidationError) as exc:
         settings(STORAGE=value)
     assert "ainda não está disponível" in str(exc.value)

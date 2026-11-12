@@ -179,6 +179,12 @@ class InMemorySessionRepository:
             s = self._s.sessions.get(session_id)
             return s.view() if s else None  # sem copiar o histórico de hashes
 
+    def get_with_user(self, session_id: str) -> tuple[SessionView, User] | None:
+        with self._s.lock:  # sessão e usuário no mesmo instante
+            s = self._s.sessions.get(session_id)
+            user = self._s.users_by_id.get(s.user_id) if s else None
+            return (s.view(), replace(user)) if s and user else None
+
     def rotate_refresh(
         self, refresh_hash: str, new_refresh_hash: str, now: datetime
     ) -> tuple[RotationResult, SessionView | None]:
@@ -240,11 +246,13 @@ class InMemoryPasswordResetRepository:
             if h != keep and t.user_id == user_id and t.used_at is None and t.invalidated_at is None:
                 t.invalidated_at = now
 
-    def issue_replacing_active(self, token: PasswordResetToken, now: datetime) -> None:
+    def issue_replacing_active(self, token: PasswordResetToken, now: datetime) -> PasswordResetToken:
         with self._s.lock:
             self._s.maybe_purge_locked(now)
             self._invalidate_user_locked(token.user_id, now)
-            self._s.reset_tokens[token.token_hash] = replace(token)
+            stored = replace(token)
+            self._s.reset_tokens[token.token_hash] = stored
+            return replace(stored)
 
     def is_active(self, token_hash: str, now: datetime) -> bool:
         with self._s.lock:

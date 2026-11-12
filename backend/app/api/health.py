@@ -9,8 +9,16 @@ from app.schemas import HealthResponse
 router = APIRouter(tags=["health"])
 
 
-@router.get("/health", response_model=HealthResponse, summary="Verificação de saúde do serviço")
+@router.get("/health", response_model=HealthResponse, response_model_exclude_none=True,
+            summary="Verificação de saúde do serviço")
 def health() -> HealthResponse:
-    """Retorna o estado do serviço. Sem dados sensíveis."""
+    """Retorna o estado do serviço. Sem dados sensíveis.
+
+    No modo padrão (STORAGE=memory) a resposta continua `{"status", "service"}`. No modo
+    intermediário da P3, informa `storage="auth-postgres"` e `durable=false` (domínio volátil).
+    """
     settings = get_settings()
-    return HealthResponse(status="ok", service=settings.service_name)
+    if settings.storage == "memory":
+        return HealthResponse(status="ok", service=settings.service_name)
+    return HealthResponse(status="ok", service=settings.service_name, storage=settings.storage,
+                          durable=settings.storage_durable)

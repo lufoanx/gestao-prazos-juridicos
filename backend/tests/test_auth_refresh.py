@@ -2,6 +2,8 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from tests.auth_utils import API, bearer, error_code, register_and_login
 
 
@@ -23,6 +25,7 @@ def test_refresh_valido_gira_o_token(client):
     assert again.json()["refreshToken"] not in (tokens["refreshToken"], body["refreshToken"])
 
 
+@pytest.mark.memory_only
 def test_refresh_token_armazenado_somente_como_hash(client, auth_app):
     tokens = register_and_login(client)
     store = auth_app.state.auth.store

@@ -202,12 +202,15 @@ class AuthService:
             claims = self._tokens.decode(access_token)
         except InvalidAccessTokenError:
             raise _unauthorized("invalid_token", "Token inválido ou expirado.") from None
-        session = self._sessions.get(claims.session_id)
+        # Sessão e usuário lidos de forma CONSISTENTE (um único instante), sem bloqueio.
+        found = self._sessions.get_with_user(claims.session_id)
         now = self._clock.now()
-        if session is None or session.revoked or session.user_id != claims.user_id or now >= session.expires_at:
+        if found is None:
             raise _unauthorized("invalid_token", "Token inválido ou expirado.")
-        user = self._users.get_by_id(claims.user_id)
-        if user is None or user.credential_version != session.credential_version:
+        session, user = found
+        if session.revoked or session.user_id != claims.user_id or now >= session.expires_at:
+            raise _unauthorized("invalid_token", "Token inválido ou expirado.")
+        if user.credential_version != session.credential_version:   # sessão anterior a um reset
             raise _unauthorized("invalid_token", "Token inválido ou expirado.")
         return AuthenticatedUser(user=user, session_id=session.id)
 
@@ -237,9 +240,11 @@ class AuthService:
             token_hash=hash_opaque_token(token), user_id=user.id, created_at=now, expires_at=now + self._reset_ttl
         )
         # Atômico: invalida o token ativo anterior e registra o novo (no máximo um ativo).
-        self._resets.issue_replacing_active(record, now)
+        # A entrega usa a expiração EFETIVAMENTE persistida (no PostgreSQL, relógio pós-lock) e só
+        # acontece depois do COMMIT; se a transação falhar, nada é entregue.
+        issued = self._resets.issue_replacing_active(record, now)
         try:
-            self._delivery.send(PasswordResetMessage(user.id, user.email, token, record.expires_at))
+            self._delivery.send(PasswordResetMessage(user.id, user.email, token, issued.expires_at))
         except Exception:  # falha de entrega não pode revelar existência do e-mail
             logger.error("password_reset_delivery_failed")
 

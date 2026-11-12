@@ -186,11 +186,12 @@ test("calendário: mês do servidor com mais resultados que uma página (todas a
   await seedDeadlines(ana.email, 505, { dueDate: day, startDate: `${ref.slice(0, 8)}01` });   // > 500 por página
   const pages: string[] = [];
   ana.page.on("request", (r) => { if (r.url().includes("/bff/api/calendar?")) pages.push(new URL(r.url()).searchParams.get("page") ?? ""); });
-  const secondPage: Array<{ id: string; title: string }> = [];
-  ana.page.on("response", async (r) => {
-    if (r.url().includes("/bff/api/calendar?") && new URL(r.url()).searchParams.get("page") === "2") secondPage.push(...(await r.json()).items);
-  });
+  // Espera EXATAMENTE a página 2 do primeiro carregamento (sem listener permanente: um listener que
+  // continua lendo corpos de respostas posteriores falhava de forma intermitente ao fechar o contexto).
+  const secondPageResponse = ana.page.waitForResponse(
+    (r) => r.url().includes("/bff/api/calendar?") && new URL(r.url()).searchParams.get("page") === "2");
   await ana.page.goto("/app/calendario");
+  const secondPage: Array<{ id: string; title: string }> = (await (await secondPageResponse).json()).items;
   await expect(ana.page.getByTestId("calendar-total")).toContainText("505 prazo(s) no mês · 2 páginas carregadas");
   await expect(ana.page.getByTestId(`count-${day}`)).toHaveText("505");
   expect(pages).toEqual(["1", "2"]);

@@ -77,6 +77,16 @@ jobs:
           ENVIRONMENT: test
           TEST_DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_test
           PRAZOAI_REQUIRE_POSTGRES_TESTS: "1"
+      - name: Autenticação em STORAGE=auth-postgres (suítes HTTP existentes contra PostgreSQL real)
+        run: >-
+          pytest -p no:cacheprovider
+          tests/test_auth_cost_protection.py tests/test_auth_password_reset.py tests/test_auth_refresh.py
+          tests/test_auth_register_login.py tests/test_auth_tokens.py tests/test_users_me.py
+        env:
+          ENVIRONMENT: test
+          TEST_DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_test
+          PRAZOAI_REQUIRE_POSTGRES_TESTS: "1"
+          PRAZOAI_TEST_STORAGE: auth-postgres
       - name: Migrations pela linha de comando (vazio → head; 0002 → 0001 → 0002; base → head; banco separado)
         env:
           PGPASSWORD: prazoai-ci-only
