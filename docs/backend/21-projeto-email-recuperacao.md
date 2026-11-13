@@ -11,6 +11,13 @@
 >
 > **Status:** aguardando auditoria e aprovação das decisões (§4 e §12) antes de implementar.
 >
+> **Revisão 3** (commit incremental sobre `ccff5c2`):
+> - D-E8: prazo total do SMTP por **subprocesso supervisionado** (§4.6);
+> - D-E11: **protocolo de encerramento** em etapas, separando encerramento limpo de prazo rígido
+>   (§4.7);
+> - remoção das frases que prometiam tempo igual;
+> - testes planejados e decisões atualizados.
+>
 > **Revisão 2** (commit incremental sobre `2e8509d`, auditoria do projeto). Itens:
 > - contrato completo do `RecoveryDispatcher` (§4.5);
 > - limites de tempo garantidos (§4.6);
@@ -152,13 +159,14 @@ webhooks ou estatísticas.
 | Alternativa | Como funciona | Consequências |
 |---|---|---|
 | A. Síncrona com timeout (como hoje, mas real) | `send` dentro da requisição, depois do COMMIT | simples; **piora a enumeração por tempo** (SMTP leva centenas de ms só para contas existentes); requisição presa ao provedor; timeout ≠ não entregue |
-| B. **Segundo plano em memória, limitado** | requisição só valida, limita e enfileira; worker faz busca + emissão + envio | tempo da requisição igual para conta existente e inexistente; requisição não depende do provedor; **perde pedidos ao reiniciar** (ainda não emitidos ou não enviados); fila cheia descarta |
+| B. **Segundo plano em memória, limitado** | requisição só valida, limita e enfileira; worker faz busca + emissão + envio | **mesmo caminho público** para conta existente e inexistente, sem banco e sem transporte na requisição; requisição não depende do provedor; **perde pedidos ao reiniciar** (ainda não emitidos ou não enviados); fila cheia descarta |
 | C. Outbox durável **com token ou link** | tabela com o conteúdo a enviar; worker envia e marca | sobrevive a reinícios; **exige guardar o token** (cifrado) → muda o modelo de segurança (hoje o banco só tem hashes); chaves, acesso, retenção e migration |
 | D. Outbox durável **de intenção** (sem token) | tabela com a intenção e `solicitado_em`; o worker emite o token **no momento do envio**. Duas variantes, abaixo | sobrevive a reinícios sem guardar segredo; exige migration, tabela nova, concorrência e retenção da intenção |
 
 **Recomendação (D-E2):** **B** nesta fase.
-- **Por quê:** resolve a neutralidade de tempo, mantém o banco só com hashes e não introduz
-  tabela nova.
+- **Por quê:** o caminho público fica o mesmo para qualquer e-mail, sem consulta ao banco nem
+  espera pelo transporte na requisição (garantia verificável; riscos residuais em §5). O banco
+  continua só com hashes, sem tabela nova.
 - **Consequência aceita:** um pedido pode se perder num reinício ou com fila cheia. A pessoa vê a
   mesma mensagem neutra e pode pedir de novo; o limite por e-mail continua valendo.
 - **Evolução:** **D** é o caminho durável recomendado, caso a perda em reinício seja inaceitável,
@@ -252,8 +260,9 @@ descartado, contador `queue_full` e **a mesma resposta 202**.
 
 **Ciclo de vida:**
 1. **Inicialização:** no `lifespan` da aplicação, **depois** de criar o engine e os repositórios,
-   e só com `EMAIL_TRANSPORT=smtp`. A thread é criada uma vez, `daemon=True`, com nome fixo. Com
-   `disabled`, não há worker e `status` responde `available=false`.
+   e só com `EMAIL_TRANSPORT=smtp`. A thread é criada uma vez, com nome fixo. `daemon=True` serve
+   só para não impedir a saída do processo no caso não limpo; **não** é mecanismo de encerramento
+   (§4.7). Com `disabled`, não há worker e `status` responde `available=false`.
 2. **Falha ao processar um item:** a exceção é capturada, gera log só da categoria (`issue_failed`,
    `transport_timeout`, `transport_refused`, `transport_error`, `deadline_exceeded`) e o worker
    segue para o próximo item.
@@ -263,17 +272,7 @@ descartado, contador `queue_full` e **a mesma resposta 202**.
    - pendências são descartadas e contadas;
    - **nenhuma thread substituta é criada automaticamente** (sem crescimento ilimitado de threads);
      a recuperação volta com o reinício do processo.
-4. **Encerramento**, na ordem:
-   1. parar de aceitar (novos pedidos → 503);
-   2. drenar e **descartar** as pendências, contando-as (`shutdown_discarded`, sem destinatários);
-   3. sinalizar o worker e esperar o item em curso por no máximo
-      `RECOVERY_SHUTDOWN_GRACE_SECONDS` (padrão 5);
-   4. se o worker não terminar no prazo, registrar `dispatcher_shutdown_timeout` e **seguir**: a
-      thread é `daemon` e termina com o processo, sem substituta;
-   5. só então o engine é encerrado (`dispose`), como hoje no `lifespan`.
-
-   Se o worker ainda estiver na fase de banco, essa fase tem limite próprio (§4.6). Na fase SMTP,
-   ele não usa o engine.
+4. **Encerramento:** protocolo em etapas, em §4.7.
 
 **Quatro ordens diferentes, que não se confundem:**
 
@@ -306,28 +305,122 @@ de credencial. Ele exigiria comparar instantes de parede com a troca persistida.
 |---|---|---|---|
 | Requisição pública | sem banco e sem transporte | caminho do código (§5) | só validação, limitadores e `put_nowait` |
 | Espera na fila | o item **não é processado** depois de `RECOVERY_QUEUE_MAX_WAIT_SECONDS` | verificação ao retirar | um item pode **ficar** na fila mais tempo se o worker estiver bloqueado, mas é descartado ao ser retirado; a memória é limitada por `RECOVERY_QUEUE_MAX` |
-| Busca + emissão (banco) | `lock_timeout` 5 s e `statement_timeout` 15 s por comando | PostgreSQL (P1/P3) | erro → 409 interno ou falha de categoria; sem repetição |
-| Cada operação SMTP | `SMTP_TIMEOUT_SECONDS` | timeout de socket do `smtplib` | vale **por operação** (conexão, cada leitura e escrita), **não** para o envio inteiro |
-| Envio inteiro | **não garantido** sem mecanismo extra | — | um servidor que responde devagar, porém dentro do timeout por operação, pode prolongar o envio |
-| Encerramento | `RECOVERY_SHUTDOWN_GRACE_SECONDS` de espera | `join(timeout)` | depois disso o processo segue o encerramento; a thread `daemon` não bloqueia a saída |
+| Busca + emissão (banco) | por comando: `RECOVERY_DB_LOCK_TIMEOUT_MS` (1000) e `RECOVERY_DB_STATEMENT_TIMEOUT_MS` (3000), aplicados com `SET LOCAL` na transação do worker | PostgreSQL | mais curtos que os da API (5 s/15 s); a etapa tem poucos comandos; erro → falha de categoria, sem repetição; no encerramento, também cancelamento ativo (§4.7) |
+| Envio SMTP inteiro (DNS, conexão, TLS, autenticação, `DATA`) | `SMTP_SEND_DEADLINE_SECONDS` (30), **prazo total** | subprocesso supervisionado (D-E8, abaixo) | no vencimento, o processo filho é encerrado e coletado; resultado **incerto** se já tinha passado de `DATA` |
+| Cada operação SMTP dentro do filho | `SMTP_TIMEOUT_SECONDS` | timeout de socket do `smtplib` | só por operação; o prazo total é dado pelo supervisor, não por este timeout |
+| Encerramento da aplicação | `RECOVERY_SHUTDOWN_GRACE_SECONDS` (5) para o caminho limpo | protocolo de §4.7 | ver §4.7 para o que é garantido em cada caminho |
 
-**Prazo total do envio (D-E8, para aprovação):**
-- **Alternativa recomendada:** `SMTP_SEND_DEADLINE_SECONDS` (ex.: 30). Um único temporizador
-  (`threading.Timer`, um por envio, sem criar workers) fecha o socket do SMTP no vencimento
-  (`sock.shutdown(SHUT_RDWR)`), e a operação bloqueada termina com erro.
-  - Custo: pouco código;
-  - Risco: fechar o socket durante `DATA` torna o resultado incerto, o que já é aceito (sem
-    repetição);
-  - Teste: servidor SMTP lento controlado.
-- **Alternativa mais pesada:** enviar num subprocesso com prazo e encerrá-lo no vencimento.
-  - Custo: processo por envio, serialização da mensagem e mais superfície.
-- **Sem prazo total:** aceitar só o timeout por operação; um servidor patologicamente lento atrasa
-  a fila, cujos itens vencem e são descartados sem emitir token.
-  - Degrada, mas com memória limitada.
-- **Rejeitado:** abandonar a thread bloqueada e criar outra (crescimento ilimitado de threads e
-  conexões).
+**Prazo total do envio: decisão D-E8 revisada.**
 
-## 5. Falhas, concorrência e segurança
+*Por que o temporizador não basta:* fechar o socket com um `Timer` só age sobre um socket já
+publicado. Ele **não** cobre:
+- a resolução DNS (`getaddrinfo`, bloqueante e sem timeout no `smtplib`);
+- a conexão antes de o socket ser atribuído ao objeto SMTP;
+- a **substituição do socket** durante STARTTLS (o `Timer` pode fechar o socket antigo enquanto o
+  novo, cifrado, continua bloqueado);
+- a corrida entre o vencimento e a publicação do socket.
+
+Por isso o temporizador **não é usado como garantia**, nem como mecanismo auxiliar.
+
+*Solução escolhida: isolamento em subprocesso supervisionado.* Para cada envio, o worker inicia
+um processo filho dedicado:
+- **Início:** `subprocess.Popen` com o caminho absoluto de um script mínimo de envio e
+  `start_new_session=True`; o script não importa `app.db` nem cria engine, conexões ou
+  repositórios.
+- **Ambiente:** mínimo (`PATH`, localidade), **sem** `DATABASE_URL`, `SMTP_PASSWORD` nem outros
+  segredos herdados.
+- **Entrada:** configuração SMTP (incluindo a senha) e mensagem (destinatário, assunto, corpo com
+  o link) chegam **só pela entrada padrão** (pipe), em JSON. Nunca por argumentos (visíveis em
+  `ps`), arquivos temporários ou variáveis de ambiente.
+- **No filho:**
+  - executa DNS, conexão, TLS, autenticação e envio com `smtplib`, mantendo o timeout por
+    operação;
+  - desativa core dumps (`RLIMIT_CORE=0`);
+  - não configura logging;
+  - escreve na saída padrão **só** uma categoria de resultado (`accepted`, `refused`, `tls_error`,
+    `auth_error`, `timeout`, `error`).
+- **Supervisão:** o pai chama `communicate(input, timeout=SMTP_SEND_DEADLINE_SECONDS)`. No
+  vencimento:
+  1. `SIGTERM` ao grupo do processo;
+  2. espera curta (1 s);
+  3. `SIGKILL`;
+  4. `wait()` para coletar o processo (sem zumbis);
+  5. resultado `deadline_killed`, tratado como entrega **incerta** e sem repetição.
+- **Saída de erro:** o `stderr` do filho é descartado. Só a categoria vai para o log do pai.
+- **Concorrência:** com um worker, há no máximo **um** filho por vez (sem crescimento de
+  processos).
+- **Custos:**
+  - inicializar o interpretador por e-mail (ordem de 50–150 ms) e memória transitória do filho
+    (dezenas de MB);
+  - mais código de supervisão;
+  - testes com servidores SMTP e DNS controlados.
+
+  São aceitáveis para o volume limitado da recuperação.
+
+*Alternativa mantida para comparação:* `smtplib` na própria thread, com timeout por operação e
+cancelamento cooperativo (a flag de parada é checada entre as etapas).
+- Mais leve, mas **sem limite total garantido**: um DNS lento ou um servidor que responde devagar
+  dentro do timeout por operação prolongam o envio.
+- Se a auditoria preferir essa alternativa, o documento passa a declarar explicitamente a ausência
+  de prazo total.
+
+*Rejeitado:* abandonar a thread bloqueada e criar substituta (crescimento ilimitado de threads e
+conexões).
+
+### 4.7 Protocolo de encerramento (D-E11 revisada) **[PROPOSTA]**
+
+**Estados do despachante:** `running` → `stopping` → `stopped_clean` ou `stopped_unclean`.
+
+1. **Parar a admissão e descartar a fila, de forma coordenada.** Sob o mesmo `Lock` que protege o
+   enfileiramento, o despachante passa a `stopping`, e todo `submit` posterior recebe 503. Ainda
+   sob o lock, a fila é drenada e os itens são contados em `shutdown_discarded`, sem
+   destinatários. Assim não há corrida em que um pedido entre na fila depois da drenagem.
+2. **Solicitar a parada do item em curso.** O despachante sinaliza um `threading.Event` de parada
+   e age conforme a etapa registrada pelo worker:
+   - *fila ou entre etapas:* nada a fazer além do evento;
+   - *banco:* o worker publica o PID do processo PostgreSQL da sua conexão
+     (`pg_backend_pid()`) ao iniciar a etapa. O despachante, por **outra** conexão curta, chama
+     `pg_cancel_backend(pid)` e repete a cada 200 ms enquanto a etapa durar (um cancelamento que
+     chega entre dois comandos não age). O comando cancelado gera erro, a transação sofre
+     **rollback** e a conexão é devolvida pelo gerenciador de contexto;
+   - *SMTP:* o despachante encerra o grupo do processo filho (`SIGTERM`, depois `SIGKILL`) e o
+     worker coleta o processo.
+3. **Impedir que o worker inicie nova etapa depois de reconhecer a parada.** O worker checa o
+   evento antes de **cada** etapa: retirar item, abrir a transação de emissão, iniciar o
+   subprocesso SMTP.
+   - Com o evento sinalizado, não emite token nem tenta SMTP, e termina.
+   - **Corrida documentada:** se a emissão tiver feito COMMIT pouco antes do reconhecimento, o
+     token existe mas não é enviado. Ele expira e a P5 o remove; a pessoa pede outro link.
+4. **Devolver conexões antes de declarar encerramento limpo.** O despachante espera o fim **da
+   thread** com `join(RECOVERY_SHUTDOWN_GRACE_SECONDS)`. O resultado só é `stopped_clean` se:
+   - `is_alive()` for falso **e**
+   - o pool não tiver conexões emprestadas pelo worker (contador próprio do despachante e
+     `checkedout()`).
+
+   Só então o `lifespan` segue para `engine.dispose()`, que fecha as conexões ociosas do pool.
+5. **Caso em que o worker não termina** (`stopped_unclean`):
+   - registro `dispatcher_stop_unclean`, com a etapa em curso (só a categoria);
+   - **nenhuma** tentativa de cancelar por `dispose`: `dispose` não cancela uma transação em curso
+     nem fecha uma conexão emprestada;
+   - nenhuma thread substituta;
+   - o `lifespan` conclui, e o processo termina (a thread `daemon` não segura a saída);
+   - se ainda houver transação aberta, o PostgreSQL faz rollback ao perceber o fechamento da
+     conexão, no fim do processo;
+   - se houver filho SMTP, ele já recebeu `SIGKILL` (item 2).
+
+**O que é garantido, e o que não é:**
+- **Prazo rígido do encerramento da aplicação:** garantido, porque o `lifespan` nunca espera mais
+  que o prazo de graça e o processo sai.
+- **Encerramento limpo** (thread terminada e conexões devolvidas antes do `dispose`): garantido
+  **somente** quando o worker reconhece a parada dentro do prazo.
+  - O desenho torna esse o caso esperado: as etapas são canceláveis (cancelamento ativo do SQL e
+    morte do filho SMTP).
+  - Mas não é absoluto: uma thread presa num ponto não cancelável do próprio processo, como a
+    abertura de conexão com o banco, termina pelo caminho não limpo.
+- **Não prometemos os dois simultaneamente.** Priorizamos o prazo rígido e **informamos**
+  explicitamente quando o encerramento não foi limpo.
+
+## 5. Falhas, concorrência e segurança## 5. Falhas, concorrência e segurança
 | Tema | Garantia | Origem |
 |---|---|---|
 | Resposta neutra (verificável) | **mesmo caminho público** para qualquer e-mail: validação → limite por IP → limite por e-mail → `put_nowait` → 202 com a mesma mensagem. **Sem consulta ao banco e sem espera pelo transporte na requisição** | **[PROPOSTA]**; teste estrutural planejado (§9) |
@@ -404,8 +497,9 @@ Todas as rotas:
 | `SMTP_TIMEOUT_SECONDS` | 10 (2–30) | conexão e operações |
 | `RECOVERY_QUEUE_MAX` | 100 (10–10000) | teto da fila; cheia → descarte neutro |
 | `RECOVERY_QUEUE_MAX_WAIT_SECONDS` | 60 (10–600) | prazo de permanência (relógio monotônico) |
-| `RECOVERY_SHUTDOWN_GRACE_SECONDS` | 5 (1–60) | espera máxima no encerramento |
-| `SMTP_SEND_DEADLINE_SECONDS` | 30 (5–120) | só se D-E8 for aprovada |
+| `RECOVERY_SHUTDOWN_GRACE_SECONDS` | 5 (1–60) | espera pelo caminho limpo no encerramento (§4.7) |
+| `RECOVERY_DB_LOCK_TIMEOUT_MS` / `RECOVERY_DB_STATEMENT_TIMEOUT_MS` | 1000 / 3000 | `SET LOCAL` na transação do worker |
+| `SMTP_SEND_DEADLINE_SECONDS` | 30 (5–120) | prazo total do subprocesso de envio (D-E8) |
 | (sem `EMAIL_WORKERS`) | 1 worker fixo | D-E10 |
 | `AUTH_FORGOT_IP_MAX_REQUESTS` / `_WINDOW_SECONDS` | 10 / 900 | limite novo por IP |
 
@@ -416,8 +510,8 @@ continua cobrindo os erros de validação. Produção segue bloqueada.
 ## 8. Plano de implementação (entregas pequenas, cada uma com auditoria)
 | # | Entrega | Critérios de aceite |
 |---|---|---|
-| E1 | Configuração + `EmailTransport` + `SmtpTransport` + composer (backend, ainda sem usar no fluxo) | validação completa no startup (TLS, origem, remetente); testes unitários de cabeçalhos, TLS obrigatório e timeout; nenhuma mudança de comportamento com `disabled` |
-| E2 | `RecoveryDispatcher` (§4.5) + caminho de requisição sem banco + limite por IP + `status` | resposta pública sem banco e sem transporte (teste estrutural); prazo de fila, fila cheia, falha e morte do worker, e encerramento com espera limitada e contagem, conforme §4.5 e §4.6; um worker; garantias da P3 intactas (suítes atuais verdes) |
+| E1 | Configuração + `EmailTransport` + `SmtpTransport` **em subprocesso supervisionado** + composer (backend, ainda sem usar no fluxo) | validação completa no startup (TLS, origem, remetente); prazo total cobrindo DNS, conexão e TLS; nenhum segredo ou token em argumentos, arquivos, ambiente ou logs; processo sempre coletado; nenhuma mudança de comportamento com `disabled` |
+| E2 | `RecoveryDispatcher` (§4.5) + caminho de requisição sem banco + limite por IP + `status` | resposta pública sem banco e sem transporte (teste estrutural); prazo de fila, fila cheia, falha e morte do worker; protocolo de encerramento de §4.7 (admissão coordenada, cancelamento ativo do SQL, nenhuma etapa nova após a parada, distinção limpo/não limpo); um worker; garantias da P3 intactas (suítes atuais verdes) |
 | E3 | Capturador SMTP local no CI + testes de integração do transporte e do fluxo com PostgreSQL | e-mail recebido no capturador com o link correto; falha e timeout do transporte; nenhum token em logs |
 | E4 | Rotas BFF públicas (`status`, `forgot`, `reset`) | allowlist; CSRF e Origin; corpo exato; `no-store`; cookies intocados; resultado desconhecido sem repetição; testes de integração BFF × FastAPI |
 | E5 | Telas integradas + remoção de `/redefinir-senha/[token]` + E2E | E2E: pedido → capturador → link → nova senha → senha antiga recusada → nova aceita → sessões anteriores revogadas; nenhum token em URL de requisição, storage ou logs |
@@ -453,7 +547,15 @@ executado. Nesta entrega nenhum teste novo foi escrito ou executado.
 | Falha e morte do worker | exceção por item: worker segue; morte da thread: `available=false`, 503, nenhuma thread substituta, número de threads constante | planejado (E2) |
 | Dois pedidos do mesmo destinatário em ordem controlada | gates no worker: emissão na ordem de retirada; só o segundo token vale; ambos chegam ao capturador e o primeiro link é recusado | planejado (E3) |
 | Pedido pendente atravessando uma redefinição | item retido por gate; reset concluído com outro link; ao liberar, novo token emitido e enviado (sem cancelamento prometido); senha redefinida continua válida | planejado (E3) |
-| SMTP lento: por operação × total | servidor que responde dentro do timeout por operação, mas prolonga o envio: sem D-E8 o envio passa do timeout por operação (documentado); com D-E8, encerrado no prazo total com resultado incerto e sem repetição | planejado (E1/E3) |
+| SMTP lento: por operação × total | servidor que responde dentro do timeout por operação, mas prolonga o envio: o supervisor encerra o filho no prazo total; resultado `deadline_killed` (incerto), sem repetição | planejado (E1/E3) |
+| Prazo vencendo antes de existir socket | resolução DNS lenta simulada no processo filho de teste; o supervisor encerra no prazo total; processo coletado | planejado (E1) |
+| Vencimento durante conexão e negociação TLS | servidor de teste que aceita TCP e não responde ao banner, ou que trava o handshake TLS depois de STARTTLS; encerramento no prazo total | planejado (E1) |
+| Segredos fora de argumentos, arquivos e ambiente | inspeção da linha de comando e do ambiente do filho; nenhum arquivo temporário criado; senha e token ausentes de logs e `stderr` | planejado (E1) |
+| Encerramento enquanto o worker aguarda bloqueio SQL | conexão de controle segura a linha do usuário; worker bloqueado na emissão; encerramento → `pg_cancel_backend` → rollback; nenhum token emitido; conexão devolvida | planejado (E2, PostgreSQL real) |
+| Nada novo após a parada reconhecida | gates entre etapas: evento sinalizado antes da emissão ou do SMTP; nenhuma linha em `password_reset_tokens` e nenhum processo filho iniciado | planejado (E2) |
+| Caminho limpo | encerramento com o worker ocioso, na etapa de banco ou na de SMTP: `is_alive()` falso, `checkedout()` zero antes do `dispose`, estado `stopped_clean` | planejado (E2) |
+| Caminho não limpo explícito | worker preso num ponto não cancelável simulado: `stopped_unclean` registrado no prazo de graça, `dispose` não usado como cancelamento, nenhuma thread substituta, `lifespan` concluído no prazo | planejado (E2) |
+| Admissão coordenada | `submit` concorrente com o encerramento: nenhum item entra depois da drenagem; todos os descartes contados | planejado (E2) |
 | Resposta pública sem banco e sem transporte | engine e transporte instrumentados para falhar se tocados durante a requisição; 202 para e-mail existente e inexistente | planejado (E2) |
 | Token fora de URLs, storage e logs | E2E inspecionando requisições, `localStorage`, `sessionStorage`, cookies e logs | planejado (E5) |
 | Proteções do BFF | CSRF, Origin, corpo, `no-store`, cookies intocados, resultado desconhecido | padrão **existe** (convites); rotas novas: planejado (E4) |
@@ -467,7 +569,12 @@ executado. Nesta entrega nenhum teste novo foi escrito ou executado.
 - Nenhum provedor real foi avaliado com credenciais. A escolha do provedor e do domínio de envio
   (SPF, DKIM, DMARC) fica para a entrega de prontidão de produção.
 - Nenhum experimento de SMTP foi executado nesta entrega.
-- Sem D-E8, a duração total de um envio SMTP não tem limite garantido, só o timeout por operação.
+- Com D-E8 (subprocesso), o envio tem prazo total, mas custa um processo por e-mail. Na
+  alternativa sem subprocesso, **não há** limite total garantido.
+- Encerramento: prazo rígido garantido; encerramento **limpo** só quando o worker reconhece a
+  parada dentro do prazo. O caso não limpo é informado, não escondido (§4.7).
+- Uma emissão confirmada pouco antes do reconhecimento da parada deixa um token que não será
+  enviado (expira e é removido pela P5).
 - Neutralidade de tempo: garantida só no **caminho** da requisição. Disputa de CPU, banco e fila
   são riscos residuais; não há promessa de ausência absoluta de enumeração.
 - Logs de proxies e hospedagem dependem de configuração operacional (rota antiga).
@@ -493,10 +600,10 @@ executado. Nesta entrega nenhum teste novo foi escrito ou executado.
 | D-E5 | Pedido com transporte desabilitado | 503 `password_recovery_unavailable` + `status` (alternativa: 202 neutro) |
 | D-E6 | Caminho antigo `/redefinir-senha/[token]` | remover da aplicação (página estática sem eco e com `no-referrer`); mascarar nos logs de proxy e hospedagem como item operacional |
 | D-E7 | Origem do link | `PUBLIC_APP_ORIGIN` no backend, igual à do BFF, validada |
-| D-E8 | Prazo total do envio SMTP | temporizador que fecha o socket no vencimento (`SMTP_SEND_DEADLINE_SECONDS`); alternativas: subprocesso, ou nenhum prazo total |
+| D-E8 | Prazo total do envio SMTP | **subprocesso supervisionado** com `SMTP_SEND_DEADLINE_SECONDS` (`SIGTERM` → `SIGKILL` → coleta; segredos e token só pela entrada padrão); alternativa: `smtplib` na thread **sem** limite total, declarado; temporizador que fecha o socket **não** é garantia e não é usado |
 | D-E9 | Pedido pendente × redefinição | não cancelar nesta fase (comportamento documentado); cancelamento como opção futura |
 | D-E10 | Workers | exatamente um nesta fase; particionar por destinatário só se houver necessidade comprovada |
-| D-E11 | Prazo de fila e encerramento | `RECOVERY_QUEUE_MAX_WAIT_SECONDS=60`, `RECOVERY_SHUTDOWN_GRACE_SECONDS=5`, descarte contado e sem substituta de thread |
+| D-E11 | Prazo de fila e encerramento | `RECOVERY_QUEUE_MAX_WAIT_SECONDS=60`; protocolo de §4.7 (admissão e drenagem sob lock, evento de parada, `pg_cancel_backend`, morte do filho SMTP, `stopped_clean` só com a thread terminada e as conexões devolvidas, `stopped_unclean` explícito); prazo rígido priorizado sobre encerramento limpo |
 
 ## 13. Roteiro de apresentação (TCC, cerca de 5 minutos)
 1. **Ponto de partida (45 s):** a recuperação já é segura no banco (token só como hash, um ativo
@@ -512,4 +619,5 @@ executado. Nesta entrega nenhum teste novo foi escrito ou executado.
 5. **Como vamos provar (1 min):** um capturador SMTP local no CI recebe o e-mail; o navegador abre
    o link, troca a senha e confirma que a senha antiga e as sessões antigas deixaram de valer.
    Também mostramos o que **não** prometemos: ausência absoluta de enumeração, ordem de chegada
-   dos e-mails ou duração total do SMTP sem o prazo extra (D-E8).
+   dos e-mails, ou encerramento sempre limpo. Garantimos o prazo do encerramento e avisamos quando
+   ele não foi limpo.
