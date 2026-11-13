@@ -1,5 +1,8 @@
 # 19 — P4: domínio no PostgreSQL
 
+> **Atualização da P5:** a retenção global descrita abaixo como pendente foi implementada
+> (`20-p5-manutencao-operacao.md`); `SqlUnitOfWork.purge()` não devolve mais 0. Texto mantido como registro.
+>
 > **Base:** `main` `ad53f4a7d4e5aa9740c95b001f94f5d983027844` (merge do PR #20, P3). CI pós-merge
 > `43234166893` conferido verde (incluindo integração e E2E) antes de começar. Branch:
 > `feature/persistence-p4-domain`.

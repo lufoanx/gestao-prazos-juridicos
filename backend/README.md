@@ -158,7 +158,11 @@ O frontend usa um BFF no Next.js; o backend não mudou seus contratos. Única ad
 padrão o uvicorn confia em `X-Forwarded-For` vindo de 127.0.0.1. Ver
 `docs/backend/10-etapa-6-1-sessao-bff.md`.
 
-## Persistência — P1 (fundação), P2 (esquema), P3 (autenticação) e P4 (domínio)
+## Persistência — P1 (fundação), P2 (esquema), P3 (autenticação), P4 (domínio) e P5 (manutenção)
+**P5:** expurgo de retenção no PostgreSQL em lotes (`SKIP LOCKED`), oportunista (≤ 1 por intervalo
+e por processo, depois da resposta) ou pelo comando `python -m app.maintenance purge` (códigos de
+saída e limites em `docs/backend/20-p5-manutencao-operacao.md`).
+
 Modos finais: `STORAGE=memory` (padrão) e `STORAGE=postgres` (autenticação **e** domínio no banco;
 `development`/`test`; exige `alembic upgrade head` até `0003`). O modo intermediário `auth-postgres`
 da P3 foi removido na P4. Detalhes em `docs/backend/17-…`, `18-…` e

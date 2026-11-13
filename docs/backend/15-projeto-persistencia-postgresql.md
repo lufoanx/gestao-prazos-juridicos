@@ -1,5 +1,7 @@
 # 15 — Projeto técnico: persistência em PostgreSQL
 
+> **P5 implementada:** manutenção e operação (`20-p5-manutencao-operacao.md`).
+>
 > **P4 implementada:** domínio no PostgreSQL (`19-p4-dominio-postgresql.md`); migration `0003`
 > (coluna interna `seq`) aprovada na auditoria para ordenar eventos de mesmo instante.
 >

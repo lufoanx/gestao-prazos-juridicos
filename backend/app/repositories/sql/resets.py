@@ -6,7 +6,7 @@ de todas as sessões. Argon2 já foi calculado ANTES, fora da transação (no se
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import Connection, delete, insert, or_, select, update
 
@@ -78,8 +78,11 @@ class SqlPasswordResetRepository:
         return to_hex(uid)
 
     def purge_expired(self, now: datetime) -> int:
-        with self._ctx.transaction() as conn:
-            tx_now = self._ctx.now()
-            result = conn.execute(delete(T).where(or_(
-                T.c.used_at.is_not(None), T.c.invalidated_at.is_not(None), T.c.expires_at <= tx_now)))
-        return result.rowcount
+        """Remove tokens usados, invalidados ou expirados pela MESMA rotina limitada da manutenção (P5).
+        A limpeza por usuário em `issue_replacing_active` (mesma política, só do próprio usuário) continua."""
+        from app.maintenance.purge import MaintenanceLimits, RetentionPolicy, run_maintenance
+
+        policy = RetentionPolicy(timedelta(0), timedelta(0), timedelta(0))   # não usada nesta categoria
+        result = run_maintenance(self._ctx.engine, self._ctx.clock, policy, MaintenanceLimits(),
+                                 categories=("password_reset_tokens",), operation="auth_reset_tokens")
+        return result.removed.get("password_reset_tokens", 0)

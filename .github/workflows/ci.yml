@@ -107,8 +107,31 @@ jobs:
           test -z "$(alembic current 2>/dev/null)"
           alembic upgrade head
           test "$(alembic current 2>/dev/null)" = "0003 (head)"
+      - name: Prova do comando de manutenção (banco descartável do CI; nunca banco real)
+        env:
+          ENVIRONMENT: test
+          STORAGE: postgres
+          DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_ci_migrations
+        run: |
+          set +e
+          python -m app.maintenance purge --batch-size 50 > purge.json; code=$?
+          set -e
+          cat purge.json
+          test "$code" = "0"
+          python -c "import json; d=json.load(open('purge.json')); assert d['status']=='ok' and not d['interrupted'], d"
+          alembic downgrade 0002
+          set +e
+          python -m app.maintenance purge > purge-schema.json; code=$?
+          set -e
+          cat purge-schema.json
+          test "$code" = "4"                       # esquema desatualizado: recusa sem apagar
+          alembic upgrade head
+          set +e
+          STORAGE=memory python -m app.maintenance purge > /dev/null; code=$?
+          set -e
+          test "$code" = "3"                       # memória: não finge limpar outro processo
       - run: ruff check app tests migrations
-      - run: mypy app
+      - run: mypy --no-incremental app
       - run: python -m compileall app migrations
 
   # Etapa 6.1: integração REAL BFF ↔ FastAPI e E2E no navegador (Next em modo integrado).

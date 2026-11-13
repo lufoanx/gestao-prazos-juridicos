@@ -185,6 +185,21 @@ class Settings(BaseSettings):
         default=90 * 24 * 3600, alias="NOTIFICATIONS_READ_RETENTION_SECONDS", ge=24 * 3600, le=730 * 24 * 3600
     )
 
+    # --- Manutenção (P5): expurgo global de retenção no PostgreSQL ---
+    # Lotes pequenos com FOR UPDATE SKIP LOCKED, transações próprias e curtas (doc 20).
+    maintenance_batch_size: int = Field(default=200, alias="MAINTENANCE_BATCH_SIZE", ge=1, le=1_000)
+    maintenance_max_batches_per_run: int = Field(default=50, alias="MAINTENANCE_MAX_BATCHES_PER_RUN", ge=1, le=10_000)
+    maintenance_lock_timeout_ms: int = Field(default=200, alias="MAINTENANCE_LOCK_TIMEOUT_MS", ge=10, le=5_000)
+    maintenance_statement_timeout_ms: int = Field(
+        default=5_000, alias="MAINTENANCE_STATEMENT_TIMEOUT_MS", ge=100, le=60_000
+    )
+    # Execução oportunista (no máximo uma por intervalo e por processo; só em STORAGE=postgres).
+    maintenance_opportunistic_enabled: bool = Field(default=True, alias="MAINTENANCE_OPPORTUNISTIC_ENABLED")
+    maintenance_interval_seconds: int = Field(default=300, alias="MAINTENANCE_INTERVAL_SECONDS", ge=10, le=86_400)
+    maintenance_opportunistic_max_batches: int = Field(
+        default=4, alias="MAINTENANCE_OPPORTUNISTIC_MAX_BATCHES", ge=1, le=100
+    )
+
     @field_validator("deadlines_timezone")
     @classmethod
     def _valid_timezone(cls, v: str) -> str:

@@ -129,7 +129,8 @@ def test_politica_da_caixa_remove_lidas_e_depois_nao_lidas(org, clock):
 
 
 @pytest.mark.memory_only(
-    "retenção (expurgo) — no PostgreSQL é da P5; sem equivalente nesta entrega"
+    "retenção dentro das transações em memória; equivalente SQL (P5): "
+    "test_maintenance_operation::test_sql_notificacoes_lidas_removidas_apos_retencao_sem_recriar"
 )
 def test_retencao_de_lidas_remove_indices_e_nao_recria(org, clock):
     o = org()

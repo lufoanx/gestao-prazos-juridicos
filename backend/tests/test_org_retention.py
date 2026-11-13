@@ -9,7 +9,9 @@ DAY = 24 * 3600
 
 
 @pytest.mark.memory_only(
-    "retenção (expurgo) — no PostgreSQL é da P5; sem equivalente nesta entrega"
+    "retenção dentro das transações em memória; equivalente SQL (P5): "
+    "test_maintenance_operation::test_sql_convites_e_solicitacoes_encerrados_removidos_apos_retencao e "
+    "test_maintenance_postgres::test_convites_por_encerramento_ou_expiracao_na_fronteira"
 )
 def test_convites_encerrados_e_expirados_sao_removidos_apos_retencao(org, clock):
     o = org(ORG_CLOSED_RETENTION_SECONDS=DAY)
@@ -31,7 +33,9 @@ def test_convites_encerrados_e_expirados_sao_removidos_apos_retencao(org, clock)
 
 
 @pytest.mark.memory_only(
-    "retenção (expurgo) — no PostgreSQL é da P5; sem equivalente nesta entrega"
+    "retenção dentro das transações em memória; equivalente SQL (P5): "
+    "test_maintenance_operation::test_sql_convites_e_solicitacoes_encerrados_removidos_apos_retencao e "
+    "test_maintenance_postgres::test_solicitacoes_decididas_apos_retencao"
 )
 def test_solicitacoes_encerradas_sao_removidas_e_pendentes_mantidas(org, clock):
     o = org(ORG_CLOSED_RETENTION_SECONDS=DAY)

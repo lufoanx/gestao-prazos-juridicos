@@ -53,7 +53,9 @@ def test_retry_sem_processamento_disponivel(org):
 
 # ---------- retenção e capacidade ----------
 @pytest.mark.memory_only(
-    "retenção (expurgo) — no PostgreSQL é da P5; sem equivalente nesta entrega"
+    "retenção dentro das transações em memória; equivalente SQL (P5): "
+    "test_maintenance_operation::test_sql_intimacao_descartada_removida_com_eventos_apos_retencao e "
+    "test_maintenance_postgres::test_intimacao_descartada_sai_com_eventos_e_notificacoes"
 )
 def test_descartadas_removidas_com_eventos_e_indices_apos_retencao(org, clock):
     o = org(INTIMATIONS_DISCARD_RETENTION_SECONDS=DAY)

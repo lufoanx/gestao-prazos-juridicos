@@ -60,6 +60,39 @@ def validar_data_inicial(valor: str) -> str:
 DataInicial = Annotated[str, AfterValidator(validar_data_inicial)]
 
 
+def _attach_opportunistic_maintenance(app: FastAPI, settings, checkpoint) -> None:
+    """P5: manutenção oportunista em STORAGE=postgres — DEPOIS da resposta, no máximo uma vez por
+    intervalo e por processo, com trabalho limitado e conexões próprias. Falha nunca afeta a resposta."""
+    app.state.maintenance = None
+    auth = getattr(app.state, "auth", None)
+    if auth is None or auth.engine is None or not settings.maintenance_opportunistic_enabled:
+        return
+    from starlette.background import BackgroundTask, BackgroundTasks
+
+    from app.maintenance.opportunistic import OpportunisticMaintenance
+    from app.maintenance.purge import MaintenanceLimits, RetentionPolicy
+
+    maintenance = OpportunisticMaintenance(
+        auth.engine, auth.clock, RetentionPolicy.from_settings(settings),
+        MaintenanceLimits.from_settings(settings, max_batches=settings.maintenance_opportunistic_max_batches),
+        settings.maintenance_interval_seconds, checkpoint=checkpoint,
+    )
+    app.state.maintenance = maintenance
+
+    @app.middleware("http")
+    async def opportunistic_maintenance(request, call_next):
+        response = await call_next(request)            # operação de negócio já concluída e confirmada
+        task = BackgroundTask(maintenance.maybe_run)   # roda depois de enviar a resposta
+        if response.background is None:
+            response.background = task
+        else:
+            tasks = BackgroundTasks()
+            tasks.add_task(response.background)
+            tasks.add_task(maintenance.maybe_run)
+            response.background = tasks
+        return response
+
+
 def create_app(
     *,
     clock: Clock | None = None,
@@ -68,6 +101,7 @@ def create_app(
     responsibility_port: ResponsibilityPort | None = None,
     processing_port: ProcessingPort | None = None,
     sql_checkpoint: Callable[[str], None] | None = None,
+    maintenance_checkpoint: Callable[[str], None] | None = None,
 ) -> FastAPI:
     """Cria uma instância isolada da aplicação.
 
@@ -211,6 +245,7 @@ def create_app(
             return {"data_inicial": data_inicial, "dias": dias, "data_final": resultado}
 
         logger.info("app_ready environment=%s api_base=%s", settings.environment, settings.api_base)
+        _attach_opportunistic_maintenance(app, settings, maintenance_checkpoint)
     except BaseException:
         # Falha depois de criar recursos (ex.: engine do modo postgres): encerra antes de propagar.
         if getattr(app.state, "auth", None) is not None:
