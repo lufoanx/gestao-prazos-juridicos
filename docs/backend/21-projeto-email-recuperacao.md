@@ -10,6 +10,18 @@
 > **base**, não este projeto. Branch: `docs/projeto-email-recuperacao`.
 >
 > **Status:** aguardando auditoria e aprovação das decisões (§4 e §12) antes de implementar.
+>
+> **Revisão 2** (commit incremental sobre `2e8509d`, auditoria do projeto). Itens:
+> - contrato completo do `RecoveryDispatcher` (§4.5);
+> - limites de tempo garantidos (§4.6);
+> - garantias reescritas de forma verificável (§5);
+> - outbox de intenção corrigida (§4.2);
+> - matriz de testes ampliada (§9);
+> - decisões D-E8 a D-E11.
+>
+> Desenho mantido: SMTP genérico, capturador local, origem configurada, 503 com recuperação
+> desabilitada e nenhuma repetição automática de envio. A fila em memória continua como proposta
+> **temporária**.
 
 Convenção usada em todo o documento:
 **[EXISTE]** está implementado na base;
@@ -89,7 +101,7 @@ Navegador ──► BFF (Next) ────────────────�
 |---|---|
 | `EmailTransport` (Protocol) | enviar um `OutgoingEmail` já montado; implementações `SmtpTransport`, `DisabledTransport` |
 | `PasswordResetEmailComposer` | montar assunto e corpo (texto, e HTML opcional) e o link `PUBLIC_APP_ORIGIN/redefinir-senha#TOKEN`; sem dados jurídicos |
-| `RecoveryDispatcher` | fila em memória limitada + worker(s); executa o pedido **fora** da requisição (§4.2) |
+| `RecoveryDispatcher` | fila em memória limitada e com prazo, com **um** worker; executa o pedido **fora** da requisição (contrato em §4.5) |
 | `PasswordResetDelivery` (existente) | passa a ser implementado por um adaptador que usa o composer + transporte; o Noop continua como "desabilitado" |
 | Rotas BFF públicas | `forgot`, `reset`, `status`, no padrão da consulta de convite |
 | Telas | `/esqueci-senha` e `/redefinir-senha` (sem segmento de token), integradas ao BFF |
@@ -106,6 +118,7 @@ Navegador ──► BFF (Next) ────────────────�
 
    O caminho da requisição é o mesmo para conta existente e inexistente.
 4. O worker do `RecoveryDispatcher`:
+   - descarta o item se passou do prazo de fila (§4.5), antes de qualquer consulta;
    - busca o usuário (inexistente → descarta, com log só de contagem);
    - gera o token e chama `issue_replacing_active` (bloqueio, relógio pós-lock, expiração
      persistida, COMMIT);
@@ -141,7 +154,7 @@ webhooks ou estatísticas.
 | A. Síncrona com timeout (como hoje, mas real) | `send` dentro da requisição, depois do COMMIT | simples; **piora a enumeração por tempo** (SMTP leva centenas de ms só para contas existentes); requisição presa ao provedor; timeout ≠ não entregue |
 | B. **Segundo plano em memória, limitado** | requisição só valida, limita e enfileira; worker faz busca + emissão + envio | tempo da requisição igual para conta existente e inexistente; requisição não depende do provedor; **perde pedidos ao reiniciar** (ainda não emitidos ou não enviados); fila cheia descarta |
 | C. Outbox durável **com token ou link** | tabela com o conteúdo a enviar; worker envia e marca | sobrevive a reinícios; **exige guardar o token** (cifrado) → muda o modelo de segurança (hoje o banco só tem hashes); chaves, acesso, retenção e migration |
-| D. Outbox durável **de intenção** (sem token) | tabela só com `(user_id, solicitado_em)`; o worker emite o token **no momento do envio** | sobrevive a reinícios sem guardar segredo; mas exige migration e tabela nova, além de definir concorrência e retenção da intenção |
+| D. Outbox durável **de intenção** (sem token) | tabela com a intenção e `solicitado_em`; o worker emite o token **no momento do envio**. Duas variantes, abaixo | sobrevive a reinícios sem guardar segredo; exige migration, tabela nova, concorrência e retenção da intenção |
 
 **Recomendação (D-E2):** **B** nesta fase.
 - **Por quê:** resolve a neutralidade de tempo, mantém o banco só com hashes e não introduz
@@ -157,12 +170,32 @@ webhooks ou estatísticas.
   - retenção curta (apagar ao enviar ou expirar);
   - nenhuma cópia em logs ou backups sem cifra.
 
-**Sem "exatamente uma vez":** a operação de negócio (emitir um token) acontece uma vez por
-pedido, com unicidade garantida pelo banco. O **envio** é "no máximo uma tentativa por token" na
-proposta B:
+**Variantes da outbox de intenção (D), só para comparação; nada a implementar agora:**
+
+| | D1: guardar `user_id` | D2: guardar o **e-mail normalizado** e resolver a conta no worker |
+|---|---|---|
+| Consulta ao banco na requisição | **sim**, para achar o `user_id` (reintroduz diferença de caminho entre conta existente e inexistente) | não (a requisição só grava a intenção, igual para qualquer e-mail) |
+| Dado pessoal em repouso | só de contas existentes | e-mails informados por qualquer pessoa, **inclusive inexistentes** (dado de terceiros; retenção curta obrigatória) |
+| Abuso de armazenamento | limitado às contas existentes | qualquer e-mail gera linha: precisa de teto e limpeza agressiva |
+| Mudança de e-mail entre pedido e envio | segue o `user_id` (envia ao e-mail atual) | resolve pelo e-mail informado (se mudou, nenhuma conta é encontrada) |
+| Hash no lugar do e-mail | — | não resolve: o worker precisa do e-mail para buscar a conta, e não há coluna de busca por hash em `users` |
+
+Em ambas, a intenção não contém token. A escolha só faria sentido junto com a decisão de tornar a
+recuperação durável.
+
+**Sem "exatamente uma vez":** cada pedido **processado** pelo worker gera **no máximo uma**
+emissão de token (a unicidade do token ativo é garantida pelo banco). Um pedido descartado (fila
+cheia, prazo vencido, reinício) não gera nenhuma. O **envio** é "no máximo uma tentativa por
+token" na proposta B:
 - um timeout depois do comando `DATA` do SMTP deixa a entrega **incerta** (pode ter chegado);
 - repetir o envio do mesmo token poderia duplicar o e-mail;
 - repetir a **emissão** invalidaria o token anterior.
+
+A **unicidade do token ativo** garante no máximo **um token válido** por pessoa a cada instante.
+Ela **não** garante processamento exatamente uma vez por intenção:
+- dois pedidos geram dois tokens, em sequência, e só o último vale;
+- um pedido perdido (reinício ou fila cheia) não gera nenhum;
+- um envio incerto pode ter chegado ou não.
 
 **Decisão pendente (D-E3):** sem repetição automática do envio. A pessoa pede de novo, dentro do
 limite. Uma única repetição só para falhas **antes** da conexão (recusa de conexão) fica como
@@ -189,20 +222,122 @@ Transporte sem TLS só para o capturador em `localhost`/rede de serviço, com
 |---|---|
 | Transporte desabilitado (`EMAIL_TRANSPORT=disabled`) | `status` → `unavailable`; o pedido responde **503 `password_recovery_unavailable`** e não emite token. A tela continua "Indisponível". Não se finge envio. **Decisão D-E5:** pode virar 202 neutro, se a auditoria preferir |
 | Provedor fora do ar ou timeout | o token já foi emitido e confirmado; o envio falha; log de categoria; a pessoa pede de novo; o token não enviado expira e a P5 remove |
-| Fila cheia | pedido descartado (métrica e log), resposta neutra igual |
-| Reinício com fila pendente | pedidos perdidos (B); documentado; só D resolveria |
+| Fila cheia | pedido descartado (contador `queue_full`, sem destinatário); resposta neutra igual (§4.5) |
+| Pedido que esperou demais | descartado **antes** de consultar o usuário ou emitir token (contador `queue_expired`) (§4.5) |
+| Reinício ou encerramento com fila pendente | pendências descartadas e contadas no encerramento (§4.5); pedidos perdidos (B); só D resolveria |
 | Resultado desconhecido no BFF (timeout do backend) | pedido: "Não foi possível confirmar; tente novamente em instantes" (sem repetição automática); reset: 504 `outcome: "unknown"` → "Não sabemos se a senha foi trocada. Tente entrar com a nova senha; se não funcionar, peça um novo link" |
+
+### 4.5 Contrato do `RecoveryDispatcher` **[PROPOSTA]**
+
+**Item da fila:** `(e-mail normalizado, enfileirado_em_monotônico, id_aleatório_do_pedido)`.
+- O id só serve para correlacionar logs; nunca é derivado do e-mail.
+- O e-mail fica só na memória do processo, nunca em log.
+
+**Capacidade:** `RECOVERY_QUEUE_MAX` itens (padrão 100). `put_nowait`: fila cheia → item
+descartado, contador `queue_full` e **a mesma resposta 202**.
+
+**Prazo de permanência:** `RECOVERY_QUEUE_MAX_WAIT_SECONDS` (padrão 60; faixa 10–600), medido com
+`time.monotonic()`, imune a ajustes do relógio de parede.
+- Ao retirar um item, o worker compara `agora_monotônico − enfileirado_em` com o prazo.
+- **Vencido → descartado ANTES de qualquer consulta ao usuário ou emissão de token** (contador
+  `queue_expired`).
+- O relógio injetável do domínio (wall clock) continua sendo usado só para a expiração do token.
+
+**Um único worker nesta fase (D-E10):**
+- a fila é FIFO e um único consumidor preserva a ordem de **retirada** por destinatário (e no
+  geral);
+- vários workers exigiriam particionar por destinatário (ex.: `hash(e-mail) mod N`, uma fila por
+  worker), o que não é proposto agora;
+- a vazão de um worker é suficiente para o volume previsto, que já é limitado por e-mail e por IP.
+
+**Ciclo de vida:**
+1. **Inicialização:** no `lifespan` da aplicação, **depois** de criar o engine e os repositórios,
+   e só com `EMAIL_TRANSPORT=smtp`. A thread é criada uma vez, `daemon=True`, com nome fixo. Com
+   `disabled`, não há worker e `status` responde `available=false`.
+2. **Falha ao processar um item:** a exceção é capturada, gera log só da categoria (`issue_failed`,
+   `transport_timeout`, `transport_refused`, `transport_error`, `deadline_exceeded`) e o worker
+   segue para o próximo item.
+3. **Morte inesperada da thread** (defeito):
+   - o despachante passa a `available=false`, e novos pedidos recebem 503
+     `password_recovery_unavailable`;
+   - pendências são descartadas e contadas;
+   - **nenhuma thread substituta é criada automaticamente** (sem crescimento ilimitado de threads);
+     a recuperação volta com o reinício do processo.
+4. **Encerramento**, na ordem:
+   1. parar de aceitar (novos pedidos → 503);
+   2. drenar e **descartar** as pendências, contando-as (`shutdown_discarded`, sem destinatários);
+   3. sinalizar o worker e esperar o item em curso por no máximo
+      `RECOVERY_SHUTDOWN_GRACE_SECONDS` (padrão 5);
+   4. se o worker não terminar no prazo, registrar `dispatcher_shutdown_timeout` e **seguir**: a
+      thread é `daemon` e termina com o processo, sem substituta;
+   5. só então o engine é encerrado (`dispose`), como hoje no `lifespan`.
+
+   Se o worker ainda estiver na fase de banco, essa fase tem limite próprio (§4.6). Na fase SMTP,
+   ele não usa o engine.
+
+**Quatro ordens diferentes, que não se confundem:**
+
+| Ordem | Quem define | Garantia |
+|---|---|---|
+| Solicitação | chegada das requisições ao processo | sem relação garantida com a percepção da pessoa (requisições concorrentes) |
+| Emissão do token | ordem de retirada da fila (um worker) | FIFO por processo; o último emitido é o **único** válido (P3) |
+| Aceitação SMTP | ordem de envio (um worker) | igual à da emissão, quando ambas têm sucesso |
+| Chegada à caixa | provedor e destinatário | **nenhuma**: atrasos e reordenações são normais |
+
+Por isso o texto do e-mail **não** diz "use o e-mail mais recente". O corpo informa:
+- "gerado em" (instante da emissão) e "válido até" (expiração persistida), no fuso configurado;
+- que, se chegarem vários e-mails, **apenas o link gerado por último funciona**, que os outros
+  abrirão "link inválido ou substituído" e que a tela oferece pedir outro.
+
+**Pedido enfileirado e redefinição de senha:**
+- se um pedido ainda estiver na fila quando a pessoa conclui uma redefinição (com outro link), o
+  worker processa o pedido depois;
+- **um novo token válido é emitido e enviado**;
+- o reset **não cancela intenções pendentes** nesta proposta, porque nada disso está implementado
+  nem é prometido;
+- o e-mail vai para o titular da conta e é uma recuperação legítima pedida antes; o efeito colateral
+  é um link válido a mais, até expirar.
+
+O cancelamento é opcional (D-E9): por exemplo, descartar itens enfileirados antes da última troca
+de credencial. Ele exigiria comparar instantes de parede com a troca persistida.
+
+### 4.6 Limites de tempo efetivamente garantidos
+| Etapa | Limite | Garantido por | Observação |
+|---|---|---|---|
+| Requisição pública | sem banco e sem transporte | caminho do código (§5) | só validação, limitadores e `put_nowait` |
+| Espera na fila | o item **não é processado** depois de `RECOVERY_QUEUE_MAX_WAIT_SECONDS` | verificação ao retirar | um item pode **ficar** na fila mais tempo se o worker estiver bloqueado, mas é descartado ao ser retirado; a memória é limitada por `RECOVERY_QUEUE_MAX` |
+| Busca + emissão (banco) | `lock_timeout` 5 s e `statement_timeout` 15 s por comando | PostgreSQL (P1/P3) | erro → 409 interno ou falha de categoria; sem repetição |
+| Cada operação SMTP | `SMTP_TIMEOUT_SECONDS` | timeout de socket do `smtplib` | vale **por operação** (conexão, cada leitura e escrita), **não** para o envio inteiro |
+| Envio inteiro | **não garantido** sem mecanismo extra | — | um servidor que responde devagar, porém dentro do timeout por operação, pode prolongar o envio |
+| Encerramento | `RECOVERY_SHUTDOWN_GRACE_SECONDS` de espera | `join(timeout)` | depois disso o processo segue o encerramento; a thread `daemon` não bloqueia a saída |
+
+**Prazo total do envio (D-E8, para aprovação):**
+- **Alternativa recomendada:** `SMTP_SEND_DEADLINE_SECONDS` (ex.: 30). Um único temporizador
+  (`threading.Timer`, um por envio, sem criar workers) fecha o socket do SMTP no vencimento
+  (`sock.shutdown(SHUT_RDWR)`), e a operação bloqueada termina com erro.
+  - Custo: pouco código;
+  - Risco: fechar o socket durante `DATA` torna o resultado incerto, o que já é aceito (sem
+    repetição);
+  - Teste: servidor SMTP lento controlado.
+- **Alternativa mais pesada:** enviar num subprocesso com prazo e encerrá-lo no vencimento.
+  - Custo: processo por envio, serialização da mensagem e mais superfície.
+- **Sem prazo total:** aceitar só o timeout por operação; um servidor patologicamente lento atrasa
+  a fila, cujos itens vencem e são descartados sem emitir token.
+  - Degrada, mas com memória limitada.
+- **Rejeitado:** abandonar a thread bloqueada e criar outra (crescimento ilimitado de threads e
+  conexões).
 
 ## 5. Falhas, concorrência e segurança
 | Tema | Garantia | Origem |
 |---|---|---|
-| Resposta neutra | 202 com a mesma mensagem e o mesmo tempo de caminho; nenhum indício de existência | **[PROPOSTA]** caminho de requisição sem banco (B) |
-| Tempo | sem `sleep` fixo: a neutralidade vem do **mesmo trabalho** na requisição (validar, limitar, enfileirar). O custo do worker não aparece na resposta | **[PROPOSTA]** |
-| Abuso e custo | limite por **IP** (novo) e por **e-mail** (existente), antes de enfileirar; fila com teto (`EMAIL_QUEUE_MAX`); workers fixos (`EMAIL_WORKERS`); chaves dos limitadores com teto (`max_keys`) | **[PROPOSTA]** + **[EXISTE]** |
+| Resposta neutra (verificável) | **mesmo caminho público** para qualquer e-mail: validação → limite por IP → limite por e-mail → `put_nowait` → 202 com a mesma mensagem. **Sem consulta ao banco e sem espera pelo transporte na requisição** | **[PROPOSTA]**; teste estrutural planejado (§9) |
+| Tempo (riscos residuais) | sem `sleep` fixo e **sem promessa de ausência absoluta de enumeração**. Riscos residuais: o worker disputa CPU (inclusive o GIL), pool de conexões e locks do banco com as requisições; um processamento pesado de contas existentes pode alterar a latência **de outras** requisições. A fila cheia descarta e responde igual, mas sua ocupação depende da carga | **[PROPOSTA]** + riscos documentados |
+| Abuso e custo | limite por **IP** (novo) e por **e-mail** (existente), antes de enfileirar; fila com teto (`RECOVERY_QUEUE_MAX`) e prazo (`RECOVERY_QUEUE_MAX_WAIT_SECONDS`); **um** worker; chaves dos limitadores com teto (`max_keys`) | **[PROPOSTA]** + **[EXISTE]** |
 | Limite por destinatário | o limite por e-mail também protege a caixa da vítima (bombardeio); conta pedidos para e-mails **inexistentes** do mesmo jeito | **[EXISTE]** |
 | Falha depois do COMMIT | token emitido e válido até expirar, sem e-mail; nada é desfeito | **[EXISTE]** + **[PROPOSTA]** log de categoria |
 | Segundo pedido invalida o primeiro | `issue_replacing_active` (bloqueio + índice parcial) | **[EXISTE]** |
-| Mensagens fora de ordem | o e-mail mais antigo traz um token já invalidado → "link inválido ou substituído". O corpo informa o horário de expiração persistido e "use o e-mail mais recente" | **[EXISTE]** semântica + **[PROPOSTA]** texto |
+| Mensagens fora de ordem | a chegada à caixa não segue a emissão (§4.5). Só o token emitido por último é válido; os outros abrem "link inválido ou substituído". O corpo traz "gerado em" e "válido até", e explica que só o link gerado por último funciona | **[EXISTE]** semântica + **[PROPOSTA]** texto |
+| Unicidade × exatamente uma vez | um token válido por pessoa a cada instante; **não** um processamento exatamente uma vez por intenção (§4.2) | **[EXISTE]** + esclarecimento |
 | Token expirado, usado ou invalidado | `invalid_reset_token` (400), igual para os três, sem distinguir; pré-validação sem Argon2 | **[EXISTE]** |
 | Redefinições concorrentes | `complete_reset` com bloqueio e revalidação; uma vence, a outra recebe 400 | **[EXISTE]** (testado com PostgreSQL) |
 | Sessões | o reset revoga todas e incrementa `credential_version`; sem login automático | **[EXISTE]** |
@@ -210,7 +345,8 @@ Transporte sem TLS só para o capturador em `localhost`/rede de serviço, com
 | Erros SMTP | capturar e registrar só a **classe** da exceção (respostas do servidor podem conter o destinatário) | **[PROPOSTA]** |
 | Origem do link | `PUBLIC_APP_ORIGIN` validada no startup (só a origem; `https` obrigatório fora de loopback; igual ao `PRAZOAI_APP_ORIGIN` do BFF, conferido em teste); **nunca** derivada de `Host` ou de cabeçalhos encaminhados | **[PROPOSTA]** |
 | Fragmento | o token vai em `#TOKEN`, que não é enviado ao servidor; a página remove-o imediatamente e o mantém só em memória; nunca em `localStorage`, `sessionStorage`, cookie, query ou caminho | **[PROPOSTA]** (reaproveita o padrão de `invite-token.mjs`) |
-| Caminho antigo `/redefinir-senha/[token]` | é removido. Como nenhum link real foi emitido nesse formato, não há compatibilidade a manter. Uma requisição antiga recebe página estática com `Referrer-Policy: no-referrer`, sem eco do token, sem chamadas e sem log do caminho | **[PROPOSTA]** |
+| Caminho antigo `/redefinir-senha/[token]` (aplicação) | é removido: a aplicação **não gera nem processa** novos links nesse formato. Uma requisição antiga recebe página estática com `Referrer-Policy: no-referrer`, sem eco do token e sem chamadas ao BFF; a aplicação não registra o caminho em seus próprios logs | **[PROPOSTA]** |
+| Caminho antigo (operação) | a remoção **não impede** que proxy, CDN, hospedagem ou o servidor HTTP registrem a URL recebida. Isso exige configuração operacional (filtrar ou mascarar `/redefinir-senha/*` nos logs de acesso), fora do código e para a entrega de prontidão. Hoje nenhum link real foi emitido nesse formato (só tokens demonstrativos) | operação futura |
 | SMTP | `SMTP_SECURITY=starttls` (padrão) ou `tls` (implícito), com `ssl.create_default_context()` (verifica certificado e nome); `none` só com a exceção local de §4.3; timeout de conexão e operação (`SMTP_TIMEOUT_SECONDS`); autenticação só depois do TLS | **[PROPOSTA]** |
 | Injeção de cabeçalhos | `EmailMessage` com `policy.SMTP` (recusa CR/LF em cabeçalhos); destinatário vindo do banco (e-mail validado e normalizado); assunto constante; `EMAIL_FROM` validado no startup | **[PROPOSTA]** |
 | Garantias da P3 | inalteradas: emissão e redefinição atômicas, relógio pós-lock, D6 (409), hashes apenas | **[EXISTE]** |
@@ -266,7 +402,11 @@ Todas as rotas:
 | `SMTP_SECURITY` | `starttls` \| `tls` \| `none` | `none` só com `SMTP_ALLOW_INSECURE_LOCAL=true`, host local e `ENVIRONMENT` em `development` ou `test` |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | — | `SecretStr`; nunca em logs, erros ou `/status`; exigem TLS |
 | `SMTP_TIMEOUT_SECONDS` | 10 (2–30) | conexão e operações |
-| `EMAIL_QUEUE_MAX` / `EMAIL_WORKERS` | 100 / 1 | tetos de memória e trabalho |
+| `RECOVERY_QUEUE_MAX` | 100 (10–10000) | teto da fila; cheia → descarte neutro |
+| `RECOVERY_QUEUE_MAX_WAIT_SECONDS` | 60 (10–600) | prazo de permanência (relógio monotônico) |
+| `RECOVERY_SHUTDOWN_GRACE_SECONDS` | 5 (1–60) | espera máxima no encerramento |
+| `SMTP_SEND_DEADLINE_SECONDS` | 30 (5–120) | só se D-E8 for aprovada |
+| (sem `EMAIL_WORKERS`) | 1 worker fixo | D-E10 |
 | `AUTH_FORGOT_IP_MAX_REQUESTS` / `_WINDOW_SECONDS` | 10 / 900 | limite novo por IP |
 
 **Segredos:** só por variáveis de ambiente ou gerenciador de segredos (futuro), nunca no
@@ -277,7 +417,7 @@ continua cobrindo os erros de validação. Produção segue bloqueada.
 | # | Entrega | Critérios de aceite |
 |---|---|---|
 | E1 | Configuração + `EmailTransport` + `SmtpTransport` + composer (backend, ainda sem usar no fluxo) | validação completa no startup (TLS, origem, remetente); testes unitários de cabeçalhos, TLS obrigatório e timeout; nenhuma mudança de comportamento com `disabled` |
-| E2 | `RecoveryDispatcher` + caminho de requisição sem banco + limite por IP + `status` | mesmo caminho para conta existente e inexistente (teste estrutural); fila e workers limitados; falha de transporte só com log de categoria; garantias da P3 intactas (suítes atuais verdes) |
+| E2 | `RecoveryDispatcher` (§4.5) + caminho de requisição sem banco + limite por IP + `status` | resposta pública sem banco e sem transporte (teste estrutural); prazo de fila, fila cheia, falha e morte do worker, e encerramento com espera limitada e contagem, conforme §4.5 e §4.6; um worker; garantias da P3 intactas (suítes atuais verdes) |
 | E3 | Capturador SMTP local no CI + testes de integração do transporte e do fluxo com PostgreSQL | e-mail recebido no capturador com o link correto; falha e timeout do transporte; nenhum token em logs |
 | E4 | Rotas BFF públicas (`status`, `forgot`, `reset`) | allowlist; CSRF e Origin; corpo exato; `no-store`; cookies intocados; resultado desconhecido sem repetição; testes de integração BFF × FastAPI |
 | E5 | Telas integradas + remoção de `/redefinir-senha/[token]` + E2E | E2E: pedido → capturador → link → nova senha → senha antiga recusada → nova aceita → sessões anteriores revogadas; nenhum token em URL de requisição, storage ou logs |
@@ -289,6 +429,9 @@ Cada entrega preserva:
 - a validação completa na árvore final, com artefatos reproduzíveis.
 
 ## 9. Matriz requisito → teste (**planejado**, salvo indicação)
+
+"Existe" = já implementado e executado na base. "Planejado" = só desenho, ainda não escrito nem
+executado. Nesta entrega nenhum teste novo foi escrito ou executado.
 | Requisito | Teste | Situação |
 |---|---|---|
 | Neutralidade (existente × inexistente) | resposta e caminho idênticos; worker descarta inexistente | resposta: **existe** (`test_auth_password_reset`); caminho: planejado (E2) |
@@ -303,7 +446,15 @@ Cada entrega preserva:
 | Injeção de cabeçalhos | destinatário ou remetente com CR/LF recusado | planejado (E1) |
 | Origem do link | `PUBLIC_APP_ORIGIN` inválida recusada; `Host` forjado não altera o link | planejado (E1/E2) |
 | Limites por IP e por e-mail, estado limitado | serviço com relógio injetável | e-mail: **existe**; IP: planejado (E2) |
-| Fila cheia e reinício | descarte com log; resposta neutra | planejado (E2) |
+| Fila cheia e reinício | descarte com contador; resposta neutra | planejado (E2) |
+| Pedido vencido na fila não emite token | relógio monotônico controlado; worker retira o item vencido; nenhuma consulta a `users` e nenhuma linha em `password_reset_tokens` | planejado (E2) |
+| Fila cheia + transporte indisponível | fila no teto com o transporte recusando conexão; 202 neutro; contadores `queue_full` e `transport_refused`; memória não cresce | planejado (E2/E3) |
+| Encerramento durante envio | servidor SMTP lento em curso; encerramento espera no máximo o prazo de graça; pendências descartadas e contadas; engine encerrado depois; nenhum destinatário em logs | planejado (E2/E3) |
+| Falha e morte do worker | exceção por item: worker segue; morte da thread: `available=false`, 503, nenhuma thread substituta, número de threads constante | planejado (E2) |
+| Dois pedidos do mesmo destinatário em ordem controlada | gates no worker: emissão na ordem de retirada; só o segundo token vale; ambos chegam ao capturador e o primeiro link é recusado | planejado (E3) |
+| Pedido pendente atravessando uma redefinição | item retido por gate; reset concluído com outro link; ao liberar, novo token emitido e enviado (sem cancelamento prometido); senha redefinida continua válida | planejado (E3) |
+| SMTP lento: por operação × total | servidor que responde dentro do timeout por operação, mas prolonga o envio: sem D-E8 o envio passa do timeout por operação (documentado); com D-E8, encerrado no prazo total com resultado incerto e sem repetição | planejado (E1/E3) |
+| Resposta pública sem banco e sem transporte | engine e transporte instrumentados para falhar se tocados durante a requisição; 202 para e-mail existente e inexistente | planejado (E2) |
 | Token fora de URLs, storage e logs | E2E inspecionando requisições, `localStorage`, `sessionStorage`, cookies e logs | planejado (E5) |
 | Proteções do BFF | CSRF, Origin, corpo, `no-store`, cookies intocados, resultado desconhecido | padrão **existe** (convites); rotas novas: planejado (E4) |
 | Isolamento entre usuários | token de A não redefine B; pedidos de A não afetam B | parcialmente **existe** (serviço); E2E planejado |
@@ -316,6 +467,11 @@ Cada entrega preserva:
 - Nenhum provedor real foi avaliado com credenciais. A escolha do provedor e do domínio de envio
   (SPF, DKIM, DMARC) fica para a entrega de prontidão de produção.
 - Nenhum experimento de SMTP foi executado nesta entrega.
+- Sem D-E8, a duração total de um envio SMTP não tem limite garantido, só o timeout por operação.
+- Neutralidade de tempo: garantida só no **caminho** da requisição. Disputa de CPU, banco e fila
+  são riscos residuais; não há promessa de ausência absoluta de enumeração.
+- Logs de proxies e hospedagem dependem de configuração operacional (rota antiga).
+- O reset não cancela pedidos pendentes (D-E9).
 
 ## 11. Glossário
 - **Outbox:** tabela de mensagens pendentes gravada na mesma transação da operação, processada
@@ -331,12 +487,16 @@ Cada entrega preserva:
 | ID | Decisão | Recomendação |
 |---|---|---|
 | D-E1 | Transporte | SMTP genérico (biblioteca padrão) |
-| D-E2 | Modo de entrega | B (segundo plano em memória, limitado); D como evolução durável; C rejeitado sem aprovação de segurança |
+| D-E2 | Modo de entrega | B (segundo plano em memória, limitado, **temporário**) com o contrato de §4.5; D (D1 ou D2) como evolução durável; C rejeitado sem aprovação de segurança |
 | D-E3 | Repetição do envio | nenhuma automática (opcional: 1 só para falha antes da conexão) |
 | D-E4 | Captura local | transporte em memória (unitário) + capturador SMTP em contêiner (integração/E2E) |
 | D-E5 | Pedido com transporte desabilitado | 503 `password_recovery_unavailable` + `status` (alternativa: 202 neutro) |
-| D-E6 | Caminho antigo `/redefinir-senha/[token]` | remover; página estática sem eco e com `no-referrer` |
+| D-E6 | Caminho antigo `/redefinir-senha/[token]` | remover da aplicação (página estática sem eco e com `no-referrer`); mascarar nos logs de proxy e hospedagem como item operacional |
 | D-E7 | Origem do link | `PUBLIC_APP_ORIGIN` no backend, igual à do BFF, validada |
+| D-E8 | Prazo total do envio SMTP | temporizador que fecha o socket no vencimento (`SMTP_SEND_DEADLINE_SECONDS`); alternativas: subprocesso, ou nenhum prazo total |
+| D-E9 | Pedido pendente × redefinição | não cancelar nesta fase (comportamento documentado); cancelamento como opção futura |
+| D-E10 | Workers | exatamente um nesta fase; particionar por destinatário só se houver necessidade comprovada |
+| D-E11 | Prazo de fila e encerramento | `RECOVERY_QUEUE_MAX_WAIT_SECONDS=60`, `RECOVERY_SHUTDOWN_GRACE_SECONDS=5`, descarte contado e sem substituta de thread |
 
 ## 13. Roteiro de apresentação (TCC, cerca de 5 minutos)
 1. **Ponto de partida (45 s):** a recuperação já é segura no banco (token só como hash, um ativo
@@ -351,3 +511,5 @@ Cada entrega preserva:
    o token para reenviar exigiria cifra e gestão de chaves, por isso fica para decisão.
 5. **Como vamos provar (1 min):** um capturador SMTP local no CI recebe o e-mail; o navegador abre
    o link, troca a senha e confirma que a senha antiga e as sessões antigas deixaram de valer.
+   Também mostramos o que **não** prometemos: ausência absoluta de enumeração, ordem de chegada
+   dos e-mails ou duração total do SMTP sem o prazo extra (D-E8).
