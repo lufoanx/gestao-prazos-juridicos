@@ -163,6 +163,10 @@ padrão o uvicorn confia em `X-Forwarded-For` vindo de 127.0.0.1. Ver
 e por processo, depois da resposta) ou pelo comando `python -m app.maintenance purge` (códigos de
 saída e limites em `docs/backend/20-p5-manutencao-operacao.md`).
 
+**Próxima fase (PROJETO, ainda não implementado):** e-mail transacional e recuperação de senha
+ponta a ponta — decisões pendentes de aprovação em `docs/backend/21-projeto-email-recuperacao.md`.
+Hoje a entrega continua `Noop` e as telas de recuperação seguem indisponíveis no modo integrado.
+
 Modos finais: `STORAGE=memory` (padrão) e `STORAGE=postgres` (autenticação **e** domínio no banco;
 `development`/`test`; exige `alembic upgrade head` até `0003`). O modo intermediário `auth-postgres`
 da P3 foi removido na P4. Detalhes em `docs/backend/17-…`, `18-…` e
