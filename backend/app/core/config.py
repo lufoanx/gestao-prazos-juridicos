@@ -185,6 +185,24 @@ class Settings(BaseSettings):
         default=90 * 24 * 3600, alias="NOTIFICATIONS_READ_RETENTION_SECONDS", ge=24 * 3600, le=730 * 24 * 3600
     )
 
+    # --- E-mail transacional (E1 do doc 21): configuração e transporte isolado ---
+    # Padrão `disabled`: nenhum e-mail é enviado e nada muda no comportamento existente. A E1 NÃO
+    # liga o transporte à recuperação de senha (isso é da E2, ainda não aprovada).
+    email_transport: str = Field(default="disabled", alias="EMAIL_TRANSPORT")
+    public_app_origin: str | None = Field(default=None, alias="PUBLIC_APP_ORIGIN")
+    email_from: str | None = Field(default=None, alias="EMAIL_FROM")
+    smtp_host: str | None = Field(default=None, alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, alias="SMTP_PORT", ge=1, le=65535)
+    smtp_security: str = Field(default="starttls", alias="SMTP_SECURITY")
+    smtp_allow_insecure_local: bool = Field(default=False, alias="SMTP_ALLOW_INSECURE_LOCAL")
+    smtp_username: str | None = Field(default=None, alias="SMTP_USERNAME")
+    smtp_password: SecretStr | None = Field(default=None, alias="SMTP_PASSWORD")
+    smtp_ca_file: str | None = Field(default=None, alias="SMTP_CA_FILE")
+    smtp_timeout_seconds: float = Field(default=10, alias="SMTP_TIMEOUT_SECONDS", ge=2, le=30)
+    smtp_send_deadline_seconds: float = Field(default=30, alias="SMTP_SEND_DEADLINE_SECONDS", ge=5, le=120)
+    smtp_term_grace_seconds: float = Field(default=1, alias="SMTP_TERM_GRACE_SECONDS", ge=0.1, le=10)
+    smtp_reap_timeout_seconds: float = Field(default=2, alias="SMTP_REAP_TIMEOUT_SECONDS", ge=0.5, le=10)
+
     # --- Manutenção (P5): expurgo global de retenção no PostgreSQL ---
     # Lotes pequenos com FOR UPDATE SKIP LOCKED, transações próprias e curtas (doc 20).
     maintenance_batch_size: int = Field(default=200, alias="MAINTENANCE_BATCH_SIZE", ge=1, le=1_000)
@@ -276,6 +294,19 @@ class Settings(BaseSettings):
         if isinstance(v, str) and not v.strip():
             return None  # variável vazia = não configurada (sem validar o conteúdo aqui)
         return v
+
+    @model_validator(mode="after")
+    def _consistent_email(self) -> Settings:
+        if self.email_transport not in {"disabled", "smtp"}:
+            raise ValueError("EMAIL_TRANSPORT inválido: use 'disabled' ou 'smtp'.")
+        if self.email_transport == "smtp":
+            from app.email.config import EmailConfig, EmailConfigError
+
+            try:
+                EmailConfig.from_settings(self)            # valida forma; plataforma é checada no transporte
+            except EmailConfigError as exc:
+                raise ValueError(str(exc)) from None
+        return self
 
     @model_validator(mode="after")
     def _consistent_storage(self) -> Settings:

@@ -9,7 +9,9 @@
 > verde (33/33 passos, incluindo integração nos dois modos e E2E em PostgreSQL). Esse CI valida a
 > **base**, não este projeto. Branch: `docs/projeto-email-recuperacao`.
 >
-> **Status:** aguardando auditoria e aprovação das decisões (§4 e §12) antes de implementar.
+> **Status:** **E1 implementada** (configuração, composição e transporte isolado; §14), aguardando
+> auditoria. **E2–E6 pendentes**: o despachante, as rotas públicas e a ligação com a recuperação de
+> senha **não** existem. E2 aguarda a auditoria dos contratos de §4.7 e §4.8, revisados junto da E1.
 >
 > **Revisão 3** (commit incremental sobre `ccff5c2`):
 > - D-E8: prazo total do SMTP por **subprocesso supervisionado** (§4.6);
@@ -406,11 +408,18 @@ do encerramento se encaixa nesse orçamento.
 2. **Solicitar a parada do item em curso.** Sinaliza o `threading.Event` de parada e, conforme a
    etapa publicada pelo worker:
    - *banco:* cancelamento sob o protocolo de propriedade de §4.8;
-   - *SMTP:* o supervisor do filho antecipa a fase 3 (`SIGTERM`, depois `SIGKILL` e coleta com
-     espera limitada). Criação e publicação do filho são coordenadas: o worker só cria o filho
-     depois de checar o evento **sob o lock do despachante** e publica o processo sob o mesmo lock.
-     Assim, ou o encerramento vê o filho publicado e o encerra, ou o worker vê o evento e não cria
-     o filho.
+   - *SMTP:* `transport.cancel()`. O transporte coordena criação e publicação do filho **sem
+     manter lock durante a criação** (implementado na E1, §14):
+     1. sob o lock do transporte, o envio checa a parada e **reserva** o estado "criando";
+     2. **solta o lock** e chama `Popen`, cuja duração não tem prazo garantido;
+     3. ao voltar, retoma o lock e **publica** o filho, ou reconhece a parada pedida enquanto
+        criava e encerra o filho (`SIGTERM` → `SIGKILL` → coleta limitada) **antes de transmitir a
+        mensagem** (resultado `cancelled`).
+     - `cancel()` só pega o lock por instantes: marca a parada e encerra um filho já publicado.
+       Ele **nunca espera** uma chamada de criação.
+     - Se a criação não voltar dentro do orçamento de desligamento, o encerramento segue pelo
+       caminho não limpo (item 5): a criação em curso é um recurso ainda não confirmado como
+       encerrado.
 3. **Nenhuma etapa nova depois de reconhecer a parada.** O worker checa o evento antes de **cada**
    etapa (retirar item, abrir a transação, criar o filho).
    - Com o evento sinalizado, não emite token, não cria filho e termina.
@@ -465,6 +474,24 @@ Por que essa escolha:
 - não exige privilégios adicionais no banco (cancelar a própria conexão é sempre permitido);
 - como a conexão nunca é compartilhada, um cancelamento que chegue atrasado só pode afetar o
   próprio worker. Ele já está parando, e a etapa falha e termina, sem tocar consultas alheias.
+
+**Capacidade real do cancelamento com timeout (verificada, não presumida):**
+- `cancel_safe(timeout=...)` só respeita o timeout com a API de cancelamento **não bloqueante da
+  libpq 17 ou superior**. Com libpq anterior, o psycopg recorre ao mecanismo antigo
+  (`PQcancel`), que **não tem timeout**.
+- **Verificação:** na inicialização do despachante (E2), checar `psycopg.pq.version() >= 170000`
+  **e** a existência de `Connection.cancel_safe`. O resultado (`cancel_with_timeout=true/false`)
+  vai para o log, sem dados sensíveis.
+- **Sem a capacidade:** **nenhum cancelamento ativo** é feito (nem `cancel()` nem `cancel_safe`,
+  que poderiam bloquear o encerramento sem prazo).
+  - O comando em curso termina pelos limites próprios da etapa (`RECOVERY_DB_LOCK_TIMEOUT_MS`,
+    `RECOVERY_DB_STATEMENT_TIMEOUT_MS`).
+  - Se isso não couber no orçamento de desligamento, o encerramento segue pelo caminho não limpo
+    (§4.7, item 5).
+- **Dependências:** nada é alterado nem instalado silenciosamente para obter a capacidade. No
+  ambiente de desenvolvimento desta entrega, o pacote fixado `psycopg[binary]==3.3.8` traz a libpq
+  18 embutida (verificado: `psycopg.pq.version() == 180006`), então a capacidade está presente. Um
+  psycopg com libpq do sistema anterior à 17 cairia no caminho sem cancelamento ativo.
 
 **Coordenação (um `Lock` do registro de cancelamento + geração):**
 1. **Publicação:** depois de abrir a conexão e **antes** do primeiro comando da etapa, o worker
@@ -582,6 +609,7 @@ Todas as rotas:
 | `SMTP_SECURITY` | `starttls` \| `tls` \| `none` | `none` só com `SMTP_ALLOW_INSECURE_LOCAL=true`, host local e `ENVIRONMENT` em `development` ou `test` |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | — | `SecretStr`; nunca em logs, erros ou `/status`; exigem TLS |
 | `SMTP_TIMEOUT_SECONDS` | 10 (2–30) | conexão e operações |
+| `SMTP_CA_FILE` | — | opcional: CA adicional confiável (relay privado ou testes); a verificação de certificado e nome continua obrigatória |
 | `RECOVERY_QUEUE_MAX` | 100 (10–10000) | teto da fila; cheia → descarte neutro |
 | `RECOVERY_QUEUE_MAX_WAIT_SECONDS` | 60 (10–600) | prazo de permanência (relógio monotônico) |
 | `RECOVERY_SHUTDOWN_GRACE_SECONDS` | 5 (1–60) | espera pelo caminho limpo no encerramento (§4.7) |
@@ -599,7 +627,7 @@ continua cobrindo os erros de validação. Produção segue bloqueada.
 ## 8. Plano de implementação (entregas pequenas, cada uma com auditoria)
 | # | Entrega | Critérios de aceite |
 |---|---|---|
-| E1 | Configuração + `EmailTransport` + `SmtpTransport` **em subprocesso supervisionado** + composer (backend, ainda sem usar no fluxo) | validação completa no startup (TLS, origem, remetente); supervisão em fases (§4.6) com orçamento monotônico e coleta com espera limitada; falha de coleta → transporte indisponível; nenhum segredo ou token em argumentos, arquivos, ambiente ou logs; recusa fora de Linux (§4.9); custos medidos; nenhuma mudança de comportamento com `disabled` |
+| E1 (**implementada, aguardando auditoria**) | Configuração + `EmailTransport` + `SmtpTransport` **em subprocesso supervisionado** + composer (backend, ainda sem usar no fluxo) | validação completa no startup (TLS, origem, remetente); supervisão em fases (§4.6) com orçamento monotônico e coleta com espera limitada; falha de coleta → transporte indisponível; nenhum segredo ou token em argumentos, arquivos, ambiente ou logs; recusa fora de Linux (§4.9); custos medidos; nenhuma mudança de comportamento com `disabled` |
 | E2 | `RecoveryDispatcher` (§4.5) + caminho de requisição sem banco + limite por IP + `status` | resposta pública sem banco e sem transporte (teste estrutural); prazo de fila, fila cheia, falha e morte do worker; protocolo de encerramento de §4.7 e propriedade da conexão de §4.8 (admissão coordenada, cancelamento pelo driver só com propriedade confirmada, nenhuma etapa nova após a parada, distinção limpo/não limpo, `lifespan` sem prova de término); um worker; garantias da P3 intactas (suítes atuais verdes) |
 | E3 | Capturador SMTP local no CI + testes de integração do transporte e do fluxo com PostgreSQL | e-mail recebido no capturador com o link correto; falha e timeout do transporte; nenhum token em logs |
 | E4 | Rotas BFF públicas (`status`, `forgot`, `reset`) | allowlist; CSRF e Origin; corpo exato; `no-store`; cookies intocados; resultado desconhecido sem repetição; testes de integração BFF × FastAPI |
@@ -725,3 +753,47 @@ executado. Nesta entrega nenhum teste novo foi escrito ou executado.
    Também mostramos o que **não** prometemos: ausência absoluta de enumeração, ordem de chegada
    dos e-mails, ou encerramento sempre limpo. Garantimos o prazo do encerramento e avisamos quando
    ele não foi limpo.
+
+## 14. O que a E1 implementou (e o que continua de fora)
+
+**Implementado (backend, padrão `EMAIL_TRANSPORT=disabled`, nada ligado ao fluxo de recuperação):**
+
+| Arquivo | Responsabilidade |
+|---|---|
+| `app/core/config.py` | variáveis `EMAIL_TRANSPORT`, `PUBLIC_APP_ORIGIN`, `EMAIL_FROM`, `SMTP_*` (com faixas); com `smtp`, valida tudo no carregamento |
+| `app/email/config.py` | `EmailConfig`: origem fixa (só esquema, host e porta; `https` fora de loopback em dev/test), remetente único sem CR/LF, segurança `starttls`/`tls`/`none` (exceção local explícita), credenciais juntas e só com TLS; erros sem a senha |
+| `app/email/message.py` | `OutgoingEmail` (sem conteúdo no `repr`) e `SendResult` (categorias de uma tentativa) |
+| `app/email/transport.py` | contrato `EmailTransport`; `DisabledTransport` (qualquer plataforma, sem subprocesso); `build_email_transport` |
+| `app/email/composer.py` | e-mail de recuperação: link `<origem>/redefinir-senha#TOKEN`, "gerado em" e "válido até" no fuso, aviso de que só o último link funciona, sem dados jurídicos |
+| `app/email/smtp_child.py` | **filho**: não importa `app` nem `logging`; lê JSON limitado do pipe; desativa core dumps; TLS com verificação de certificado e nome; STARTTLS ausente → `tls_error`; saída = uma categoria |
+| `app/email/smtp_subprocess.py` | **pai**: plataforma Linux exigida; criação fora do lock com reserva; orçamento monotônico; `communicate` com o restante; `SIGTERM` → `SIGKILL` → coleta limitada; falha de coleta → indisponível; um filho por vez; sem repetição; logs só com categoria e duração |
+
+**Testes da E1** (`tests/test_email_config.py`, `test_email_composer.py`, `test_email_transport.py`):
+- **Reais** (filho de verdade × servidor SMTP local em `127.0.0.1`, com certificados de uma CA de
+  teste gerados pelo `openssl`):
+  - aceito, recusado e autenticação inválida;
+  - STARTTLS e TLS implícito;
+  - certificado não confiável, nome divergente e STARTTLS não anunciado (sem downgrade);
+  - timeout por operação dentro do filho;
+  - prazo total vencendo **durante a negociação TLS**;
+  - linha de comando e ambiente do filho lidos em `/proc` **sem** token, destinatário ou senha.
+- **Simulações** (dublês):
+  - criação lenta com `cancel()` antes da publicação;
+  - cancelamento com o filho publicado;
+  - filho que ignora `SIGTERM` (escala para `SIGKILL`);
+  - saída inválida e código de saída diferente de zero;
+  - falha de coleta (transporte indisponível, sem novo filho);
+  - falha de criação;
+  - sem repetição e sem crescimento de processos;
+  - `disabled` sem importar `resource` nem o supervisor;
+  - plataforma não suportada.
+
+**Não implementado (E2–E6):** despachante e fila, rotas públicas, ligação com `forgot-password`,
+cancelamento no banco (§4.8), capturador no CI, telas e E2E. O `forgot-password` continua com a
+entrega `Noop` e as respostas HTTP não mudaram.
+
+**Explicação curta para a apresentação:** "O envio de e-mail roda num processo separado, que só
+sabe falar SMTP. Ele recebe tudo por um cano de entrada, nunca pela linha de comando, e responde
+uma palavra (aceito, recusado…). O processo principal mede o tempo com um relógio que não volta
+atrás. Se o prazo vence, pede para encerrar, força se for preciso e confirma o fim do processo.
+Se não conseguir confirmar, desliga o envio em vez de tentar de novo."
