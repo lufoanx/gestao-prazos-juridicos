@@ -315,8 +315,9 @@ def test_carimbos_da_aprovacao_usam_o_horario_apos_o_lock(org, clock):
 
 
 @pytest.mark.memory_only(
-    "limpeza oportunista dentro da transação existe só na memória; no PostgreSQL a retenção global é da "
-    "P5"
+    "limpeza oportunista DENTRO da transação de negócio existe só na memória; no PostgreSQL é proibida "
+    "por projeto (manutenção em transações próprias, relógio capturado após os bloqueios do lote: "
+    "test_maintenance_postgres)"
 )
 def test_limpeza_usa_o_horario_apos_o_lock(org, clock):
     o = org(ORG_CLOSED_RETENTION_SECONDS=24 * 3600)

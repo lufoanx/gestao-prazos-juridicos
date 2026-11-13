@@ -9,7 +9,7 @@ são CONFIRMADAS antes de o serviço responder.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import Connection, delete, func, insert, select, update
 from sqlalchemy.engine import Row
@@ -18,8 +18,6 @@ from app.db.tables import auth_sessions, auth_used_refresh_hashes, users
 from app.domain.auth import AuthSession, SessionView, User
 from app.repositories.auth import RotationResult
 from app.repositories.sql._base import SqlContext, to_hex, to_uuid
-
-PURGE_BATCH = 500
 
 
 def view_from_row(row: Row) -> SessionView:
@@ -197,17 +195,12 @@ class SqlSessionRepository:
         return result.rowcount
 
     def purge_expired(self, now: datetime) -> int:
-        """Remove sessões EXPIRADAS (e, por CASCADE, seu histórico) em lotes, pulando linhas
-        bloqueadas (SKIP LOCKED). Cada lote é uma transação: erro ou timeout → ROLLBACK do lote."""
-        total = 0
-        while True:
-            with self._ctx.transaction() as conn:
-                tx_now = self._ctx.now()
-                ids = conn.execute(select(auth_sessions.c.id).where(auth_sessions.c.expires_at <= tx_now)
-                                   .order_by(auth_sessions.c.id).limit(PURGE_BATCH)
-                                   .with_for_update(skip_locked=True)).scalars().all()
-                if ids:
-                    conn.execute(delete(auth_sessions).where(auth_sessions.c.id.in_(ids)))
-            total += len(ids)
-            if len(ids) < PURGE_BATCH:
-                return total
+        """Remove sessões EXPIRADAS com seus hashes usados, pela MESMA rotina limitada da manutenção
+        (P5: lotes com SKIP LOCKED, filhos antes, trabalho máximo por chamada; relógio pós-lock).
+        Mantido por compatibilidade do contrato; a execução global regular é `app.maintenance`."""
+        from app.maintenance.purge import MaintenanceLimits, RetentionPolicy, run_maintenance
+
+        policy = RetentionPolicy(timedelta(0), timedelta(0), timedelta(0))   # não usada nesta categoria
+        result = run_maintenance(self._ctx.engine, self._ctx.clock, policy, MaintenanceLimits(),
+                                 categories=("sessions",), operation="auth_sessions")
+        return result.removed.get("sessions", 0)

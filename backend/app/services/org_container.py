@@ -68,11 +68,17 @@ def build_org_container(
             intimations_per_scope=settings.intimations_max_per_scope,
             events_per_intimation=settings.intimations_max_events,
             notifications_per_recipient=settings.notifications_max_per_recipient,
-        ), checkpoint=sql_checkpoint)
+        ), checkpoint=sql_checkpoint, retention=_retention(settings))
         store = deadline_store = None
     else:
         uow, store, deadline_store = _memory_unit_of_work(settings)
     return _compose(settings, uow, store, deadline_store, users=users, clock=clock, responsibilities=responsibilities)
+
+
+def _retention(settings: Settings):
+    from app.maintenance.purge import RetentionPolicy
+
+    return RetentionPolicy.from_settings(settings)
 
 
 def _memory_unit_of_work(settings: Settings):

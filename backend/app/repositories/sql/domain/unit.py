@@ -185,9 +185,10 @@ class SqlUnitTransaction:
 
 class SqlUnitOfWork:
     def __init__(self, engine: Engine, limits: DomainLimits, *,
-                 checkpoint: Callable[[str], None] | None = None) -> None:
+                 checkpoint: Callable[[str], None] | None = None, retention=None) -> None:
         self.engine = engine
         self.limits = limits
+        self.retention = retention                            # RetentionPolicy (P5)
         self.fault: Callable[[str], None] | None = None      # injeção de falhas (testes), como na memória
         self._hook = checkpoint                               # gates de concorrência (testes)
 
@@ -260,8 +261,19 @@ class SqlUnitOfWork:
                 conn.rollback()
 
     def purge(self, now: datetime) -> int:
-        """Expurgo global de retenção: fica para a P5 (não é executado dentro das operações)."""
-        return 0
+        """Retenção EXPLÍCITA do domínio (P5): mesma rotina da manutenção, com o instante dado,
+        em transações próprias (nunca dentro de uma operação de negócio). Devolve o total confirmado."""
+        if self.retention is None:
+            return 0
+        from app.maintenance.purge import DOMAIN_CATEGORIES, MaintenanceLimits, run_maintenance
+
+        class _Fixed:
+            def now(self) -> datetime:
+                return now
+
+        result = run_maintenance(self.engine, _Fixed(), self.retention, MaintenanceLimits(),
+                                 categories=DOMAIN_CATEGORIES, operation="domain_purge")
+        return result.total
 
     # ------------------------------------------------------------ preparação final
     def _prepare(self, ctx: SqlContext) -> None:

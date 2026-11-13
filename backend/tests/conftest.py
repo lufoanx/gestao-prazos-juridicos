@@ -125,7 +125,7 @@ def make_app(monkeypatch, request):
         pytest.skip("teste específico do armazenamento em memória")
 
     def _make(clock=None, delivery=None, password_hasher=None, responsibility_port=None, processing_port=None,
-              sql_checkpoint=None, **env):
+              sql_checkpoint=None, maintenance_checkpoint=None, **env):
         if sql_mode and not {"STORAGE", "ENVIRONMENT", "AUTH_STORAGE"} & set(env):
             request.getfixturevalue("pg_schema")
             url = request.getfixturevalue("pg_url")
@@ -139,7 +139,7 @@ def make_app(monkeypatch, request):
             app = create_app(
                 clock=clock, password_reset_delivery=delivery, password_hasher=password_hasher,
                 responsibility_port=responsibility_port, processing_port=processing_port,
-                sql_checkpoint=sql_checkpoint,
+                sql_checkpoint=sql_checkpoint, maintenance_checkpoint=maintenance_checkpoint,
             )
             created.append(app)
             if sql_mode:
@@ -288,11 +288,12 @@ def pg_app(pg_schema, pg_url, make_app):
     pontos de controle injetáveis)."""
     raw = pg_url.render_as_string(hide_password=False)
 
-    def build(clock=None, delivery=None, sql_checkpoint=None, password_hasher=None, **env):
+    def build(clock=None, delivery=None, sql_checkpoint=None, password_hasher=None, maintenance_checkpoint=None,
+              **env):
         base = dict(STORAGE="postgres", ENVIRONMENT="test", DATABASE_URL=raw, AUTH_JWT_SECRET=STABLE_JWT_SECRET)
         base.update(env)
         app = make_app(clock=clock, delivery=delivery, sql_checkpoint=sql_checkpoint,
-                       password_hasher=password_hasher, **base)
+                       password_hasher=password_hasher, maintenance_checkpoint=maintenance_checkpoint, **base)
         from tests.sql_store_views import attach
 
         attach(app)
