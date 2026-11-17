@@ -183,8 +183,11 @@ saída e limites em `docs/backend/20-p5-manutencao-operacao.md`).
   docker compose -f test-infra/mailpit/compose.yaml down
   ```
   Sem as variáveis, os testes da E3 são pulados; com `PRAZOAI_REQUIRE_MAILPIT_TESTS=1` (CI), falham.
-- **E4–E6 pendentes:** rotas BFF, telas integradas e E2E da recuperação, documentação operacional. As
-  telas de recuperação seguem indisponíveis no modo integrado.
+- **E4 (implementada, aguardando auditoria):** rotas públicas do BFF `GET /bff/public/password/status`,
+  `POST /bff/public/password/forgot` e `POST /bff/public/password/reset` (destino fixo, corpo exato,
+  sem tocar na sessão) — doc 21, §20.
+- **E5–E6 pendentes:** telas integradas, captura do fragmento, E2E da recuperação, documentação
+  operacional. As telas de recuperação seguem indisponíveis no modo integrado.
 
 Modos finais: `STORAGE=memory` (padrão) e `STORAGE=postgres` (autenticação **e** domínio no banco;
 `development`/`test`; exige `alembic upgrade head` até `0003`). O modo intermediário `auth-postgres`

@@ -5,6 +5,9 @@ export function getBff(env?: Record<string, string | undefined>): {
   session(r: Request): Promise<Response>;
   proxy(r: Request, path: string): Promise<Response>;
   publicInvitationLookup(r: Request): Promise<Response>;
+  passwordStatus(r: Request): Promise<Response>;
+  passwordForgot(r: Request): Promise<Response>;
+  passwordReset(r: Request): Promise<Response>;
 } | null;
 export function runBff(handler: (bff: NonNullable<ReturnType<typeof getBff>>) => Promise<Response>): Promise<Response>;
 export function unavailableResponse(): Response;

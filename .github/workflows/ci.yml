@@ -199,11 +199,45 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
         working-directory: frontend
+      # E4 (doc 21): o capturador da E3 em LOOPBACK dentro deste job. O job roda no contêiner do Playwright,
+      # onde um serviço só seria alcançável por nome de host — e o backend só aceita SMTP sem TLS em
+      # loopback (regra da E1, não afrouxada). Mesmo software e versão do serviço do job `backend`
+      # (Mailpit v1.31.6), binário oficial da release com SHA-256 conferido; sem relay; só 127.0.0.1.
+      - name: Capturador SMTP local (Mailpit v1.31.6 em 127.0.0.1, binário oficial verificado)
+        run: |
+          python - <<'PY'
+          import hashlib, tarfile, urllib.request
+          url = "https://github.com/axllent/mailpit/releases/download/v1.31.6/mailpit-linux-amd64.tar.gz"
+          expected = "10fa12ccc610f653d4ed4df848c1817f9935dcf4e9a6a458a19ab0fa02093f91"
+          data = urllib.request.urlopen(url, timeout=60).read()
+          digest = hashlib.sha256(data).hexdigest()
+          if digest != expected:
+              raise SystemExit(f"SHA-256 inesperado do Mailpit: {digest}")
+          open("/tmp/mailpit.tgz", "wb").write(data)
+          with tarfile.open("/tmp/mailpit.tgz") as tar:
+              tar.extract("mailpit", "/tmp/mailpit-bin", filter="data")
+          PY
+          nohup /tmp/mailpit-bin/mailpit --listen 127.0.0.1:8025 --smtp 127.0.0.1:1025 --disable-version-check \
+            > /tmp/mailpit.log 2>&1 &
+          python - <<'PY'
+          import time, urllib.request
+          for _ in range(60):
+              try:
+                  if urllib.request.urlopen("http://127.0.0.1:8025/readyz", timeout=2).status == 200:
+                      print("capturador pronto"); break
+              except OSError:
+                  time.sleep(0.5)
+          else:
+              raise SystemExit("capturador não respondeu")
+          PY
       - name: Integração real (BFF + FastAPI, STORAGE=memory)
         run: npm run test:integration
         working-directory: frontend
         env:
           PRAZOAI_TEST_PYTHON: python
+          PRAZOAI_TEST_MAILPIT_SMTP: 127.0.0.1:1025
+          PRAZOAI_TEST_MAILPIT_API: http://127.0.0.1:8025
+          PRAZOAI_REQUIRE_MAILPIT_TESTS: "1"
       - name: Verificar armazenamento efetivo do backend (falha se não subir em postgres)
         working-directory: backend
         env:
@@ -235,6 +269,9 @@ jobs:
           PRAZOAI_TEST_PYTHON: python
           STORAGE: postgres
           DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/prazoai_integ
+          PRAZOAI_TEST_MAILPIT_SMTP: 127.0.0.1:1025
+          PRAZOAI_TEST_MAILPIT_API: http://127.0.0.1:8025
+          PRAZOAI_REQUIRE_MAILPIT_TESTS: "1"
       - name: Confirmar dados persistidos pela integração no PostgreSQL
         run: |
           python - <<'PY'

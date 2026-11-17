@@ -106,7 +106,14 @@ intimações (somente metadados, revisão humana e confirmação) e notificaçõ
 integrados", sem dados demonstrativos. Configuração em `.env.example`; detalhes e limitações em
 `docs/backend/10-etapa-6-1-sessao-bff.md`.
 
-- `npm run test:integration` — BFF contra FastAPI real (`PRAZOAI_TEST_PYTHON`).
+- `npm run test:integration` — BFF contra FastAPI real (`PRAZOAI_TEST_PYTHON`). Os cenários da
+  recuperação de senha com e-mail (E4) usam o capturador local: `PRAZOAI_TEST_MAILPIT_SMTP=127.0.0.1:1025`
+  e `PRAZOAI_TEST_MAILPIT_API=http://127.0.0.1:8025` (pulados sem elas; obrigatórios no CI).
+
+Rotas públicas de recuperação de senha no BFF (E4, doc 21 §20; as telas só as usarão na E5):
+`GET /bff/public/password/status` (`{ available }`), `POST /bff/public/password/forgot` (`{ email }`) e
+`POST /bff/public/password/reset` (`{ token, newPassword }`). Destino fixo, CSRF/Origin, `no-store`,
+nenhum acesso a cookies ou à sessão; timeout depois do envio = resultado desconhecido (504), sem repetição.
 - `npm run test:e2e` — navegador (Playwright) + Next integrado + FastAPI real, numa única execução;
   cada contexto de navegador simula um cliente com IP próprio (ver `docs/backend/13-ambiente-e2e-identidade-de-rede.md`).
 - Sessões do BFF ficam em memória: um processo Node, perdidas ao reiniciar; não publicar em
