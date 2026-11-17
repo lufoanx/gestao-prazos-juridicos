@@ -62,6 +62,17 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U prazoai -d prazoai_test"
           --health-interval 5s --health-timeout 5s --health-retries 10
+      # E3 (doc 21): capturador SMTP LOCAL e descartável (Mailpit, imagem oficial, versão FIXADA).
+      # Sem relay configurado (nada sai do capturador); usado só pelos testes de integração da E3.
+      # A prontidão é verificada pela fixture (`/readyz`), sem healthcheck dependente da imagem.
+      mailpit:
+        image: axllent/mailpit:v1.31.6
+        env:
+          MP_DISABLE_VERSION_CHECK: "true"
+          MP_MAX_MESSAGES: "500"
+        ports:
+          - 1025:1025
+          - 8025:8025
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -71,12 +82,15 @@ jobs:
           cache-dependency-path: backend/requirements-dev.txt
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements-dev.txt
-      - name: pytest (inclui os testes com PostgreSQL real; falha se o banco não estiver configurado)
+      - name: pytest (inclui PostgreSQL real e a E3 contra o capturador; falha se algum não estiver configurado)
         run: pytest
         env:
           ENVIRONMENT: test
           TEST_DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_test
           PRAZOAI_REQUIRE_POSTGRES_TESTS: "1"
+          PRAZOAI_TEST_MAILPIT_SMTP: 127.0.0.1:1025
+          PRAZOAI_TEST_MAILPIT_API: http://127.0.0.1:8025
+          PRAZOAI_REQUIRE_MAILPIT_TESTS: "1"
       - name: Suítes HTTP em STORAGE=postgres (autenticação e domínio contra PostgreSQL real)
         run: >-
           pytest -p no:cacheprovider -rs

@@ -9,13 +9,12 @@
 > verde (33/33 passos, incluindo integração nos dois modos e E2E em PostgreSQL). Esse CI valida a
 > **base**, não este projeto. Branch: `docs/projeto-email-recuperacao`.
 >
-> **Status:** **E1 e E2 implementadas** (E1: configuração, composição e transporte isolado, §14;
-> E2: `RecoveryDispatcher`, ligação com `forgot-password`, limite por IP e `status`, §15; correção da
-> auditoria do orçamento de encerramento, §16; espera residual no cancelamento SMTP e diagnóstico do
-> E2E de convite, §17). **E3–E6
-> pendentes**: capturador SMTP no CI, rotas BFF, telas integradas e E2E da recuperação, documentação
-> operacional. A E2 aguarda auditoria. Produção continua bloqueada; nenhum provedor foi contratado e
-> nenhum e-mail externo foi enviado.
+> **Status:** **E1, E2 e E3 implementadas** (E1: configuração, composição e transporte isolado, §14;
+> E2: `RecoveryDispatcher`, ligação com `forgot-password`, limite por IP e `status`, §15, com as
+> correções de auditoria em §16–§17; E3: capturador SMTP local no CI e integração real com PostgreSQL,
+> §18, aguardando auditoria). **E4–E6 pendentes**: rotas BFF, telas integradas e E2E da recuperação,
+> documentação operacional. Produção continua bloqueada; nenhum provedor foi contratado e nenhum
+> e-mail externo foi enviado.
 >
 > **Revisão 3** (commit incremental sobre `ccff5c2`):
 > - D-E8: prazo total do SMTP por **subprocesso supervisionado** (§4.6);
@@ -637,7 +636,7 @@ continua cobrindo os erros de validação. Produção segue bloqueada.
 |---|---|---|
 | E1 (**implementada, aguardando auditoria**) | Configuração + `EmailTransport` + `SmtpTransport` **em subprocesso supervisionado** + composer (backend, ainda sem usar no fluxo) | validação completa no startup (TLS, origem, remetente); supervisão em fases (§4.6) com orçamento monotônico e coleta com espera limitada; falha de coleta → transporte indisponível; nenhum segredo ou token em argumentos, arquivos, ambiente ou logs; recusa fora de Linux (§4.9); custos medidos; nenhuma mudança de comportamento com `disabled` |
 | E2 | `RecoveryDispatcher` (§4.5) + caminho de requisição sem banco + limite por IP + `status` | resposta pública sem banco e sem transporte (teste estrutural); prazo de fila, fila cheia, falha e morte do worker; protocolo de encerramento de §4.7 e propriedade da conexão de §4.8 (admissão coordenada, cancelamento pelo driver só com propriedade confirmada, nenhuma etapa nova após a parada, distinção limpo/não limpo, `lifespan` sem prova de término); um worker; garantias da P3 intactas (suítes atuais verdes) |
-| E3 | Capturador SMTP local no CI + testes de integração do transporte e do fluxo com PostgreSQL | e-mail recebido no capturador com o link correto; falha e timeout do transporte; nenhum token em logs |
+| E3 (**implementada, aguardando auditoria — §18**) | Capturador SMTP local no CI + testes de integração do transporte e do fluxo com PostgreSQL | e-mail recebido no capturador com o link correto; falha e timeout do transporte; nenhum token em logs |
 | E4 | Rotas BFF públicas (`status`, `forgot`, `reset`) | allowlist; CSRF e Origin; corpo exato; `no-store`; cookies intocados; resultado desconhecido sem repetição; testes de integração BFF × FastAPI |
 | E5 | Telas integradas + remoção de `/redefinir-senha/[token]` + E2E | E2E: pedido → capturador → link → nova senha → senha antiga recusada → nova aceita → sessões anteriores revogadas; nenhum token em URL de requisição, storage ou logs |
 | E6 | Documentação operacional e revisão de observabilidade | doc atualizado; roteiro de operação do transporte |
@@ -657,11 +656,11 @@ atualizadas nas entregas correspondentes (resultados reais em §14 e §15).
 | Neutralidade (existente × inexistente) | resposta e caminho idênticos; worker descarta inexistente | **existe (E2)**: `test_auth_password_reset`, `test_recovery_dispatcher::test_resposta_neutra…`, `test_recovery_postgres::test_caminho_publico_sem_banco…` |
 | Token só como hash | inspeção do banco | **existe** (P3) |
 | Segundo pedido invalida o primeiro | serviço + PostgreSQL | **existe** |
-| Fora de ordem | dois e-mails no capturador; o mais antigo recusado, o mais novo aceito | planejado (E3/E5) |
+| Fora de ordem | dois e-mails no capturador; o mais antigo recusado, o mais novo aceito | **existe (E3)**: `test_recovery_mailpit::test_dois_pedidos_em_ordem…` (capturador real); E5 planejado |
 | Expirado, usado, invalidado | serviço + E2E | serviço: **existe**; E2E: planejado |
 | Resets concorrentes | PostgreSQL real com gates | **existe** |
 | Sessões revogadas, senha antiga recusada | serviço; E2E pelo navegador | serviço: **existe**; E2E: planejado |
-| Falha e timeout do transporte | capturador indisponível; servidor SMTP lento (timeout) | planejado (E3) |
+| Falha e timeout do transporte | capturador indisponível; servidor SMTP lento (timeout) | **existe (E3)**: `test_recovery_mailpit::test_servidor_smtp_inacessivel…`, `…test_smtp_lento_vence_o_prazo_total…` (simulações controladas) |
 | TLS e certificado | `SmtpTransport` recusa `none` fora da exceção local; contexto verifica o certificado | planejado (E1) |
 | Injeção de cabeçalhos | destinatário ou remetente com CR/LF recusado | planejado (E1) |
 | Origem do link | `PUBLIC_APP_ORIGIN` inválida recusada; `Host` forjado não altera o link | planejado (E1/E2) |
@@ -1072,3 +1071,96 @@ botão, nenhum estado de envio, nenhum erro, nenhum convite). Não é defeito da
 - *A confirmar no CI oficial:* repetir o E2E com a imagem `mcr.microsoft.com/playwright:v1.64.1-noble`
   (Chromium 156; aqui foi usado o Chromium 153 pré-instalado), de preferência com rastreamento de rede
   sanitizado em caso de falha.
+
+## 18. O que a E3 implementou: capturador SMTP local e integração real com PostgreSQL
+
+**Base:** `main` `7701b062304a667ad8a375d7abd185f5ad685d48` (merge do PR #24), árvore
+`209769d61db890eeebab9a25c17a5da6e0ad846e` (idêntica à E2 auditada); CI pós-merge `44004535772` verde
+nos quatro jobs (conferido pela API do GitHub). Branch `feature/email-e3-smtp-capture`. Nenhum código
+de produto mudou: a E3 só acrescenta configuração de testes, cliente de teste, fixtures, cenários e CI.
+
+### 18.1 Escolha do capturador
+- **Mailpit**, imagem oficial `axllent/mailpit`, versão **fixada `v1.31.6`** (publicada em 15/10/2026;
+  nunca `latest`). Oferece SMTP (porta 1025) e API REST de consulta (8025): `GET /api/v1/messages`,
+  `GET /api/v1/search?query=to:"…"`, `GET /api/v1/message/{ID}`, `DELETE /api/v1/messages`, `/readyz`.
+  As rotas foram conferidas empiricamente contra o binário oficial da mesma versão.
+- **Sem relay:** o Mailpit só encaminha mensagens com `MP_SMTP_RELAY_*`/`--smtp-relay-*`, que não são
+  configurados em lugar nenhum; `MP_DISABLE_VERSION_CHECK=true` evita chamadas de saída.
+- **Sem TLS nem autenticação:** usa a exceção já existente e explícita da E1 (`SMTP_SECURITY=none` só com
+  `SMTP_ALLOW_INSECURE_LOCAL=true`, host loopback e `ENVIRONMENT=development|test`). Nada foi afrouxado.
+
+### 18.2 Mapa dos arquivos
+| Arquivo | Papel |
+|---|---|
+| `backend/test-infra/mailpit/compose.yaml` | configuração do capturador local (portas só em 127.0.0.1, sem relay) |
+| `.github/workflows/ci.yml` (job `backend`) | serviço `mailpit` (mesma imagem e versão) ao lado do PostgreSQL; variáveis `PRAZOAI_TEST_MAILPIT_*` e `PRAZOAI_REQUIRE_MAILPIT_TESTS=1` no passo `pytest` |
+| `backend/tests/mailpit_client.py` | cliente de TESTE da API (só loopback; `repr` das mensagens sem corpo, link nem destinatário) |
+| `backend/tests/mailpit_support.py` | fixture `mailpit` (pula sem configuração; falha no CI; esvazia a caixa antes e depois, em `finally`) e `smtp_env` (configuração real do transporte apontando ao capturador) |
+| `backend/tests/conftest.py` | registra a fixture e o marcador `mailpit` |
+| `backend/tests/test_recovery_mailpit.py` | cenários de integração (10) |
+
+O código do produto não conhece o capturador: a aplicação só vê `SMTP_HOST`/`SMTP_PORT`.
+
+### 18.3 Fluxo exercitado
+`POST /api/v1/auth/forgot-password` → limites (IP, e-mail) → fila → worker → busca do usuário (conexão
+exclusiva) → `issue_replacing_active` (bloqueio, relógio pós-lock, só o hash) → **COMMIT** → composição com
+os instantes persistidos → subprocesso SMTP da E1 → Mailpit → o teste lê a mensagem pela API, extrai o
+token do **fragmento** do link e chama `POST /api/v1/auth/reset-password` diretamente (BFF e telas ficam
+para E4/E5).
+
+### 18.4 Matriz requisito → teste (E3)
+| Requisito | Teste (`tests/test_recovery_mailpit.py`) | Tipo |
+|---|---|---|
+| Resposta neutra; existente recebe, inexistente não | `test_conta_existente_recebe_e_inexistente_nao…` | real (PostgreSQL + transporte + Mailpit) |
+| Caminho público sem banco e sem esperar o SMTP | `test_caminho_publico_sem_banco_e_sem_esperar_o_smtp` (202 com o envio retido por gate; eventos dos dois engines e do envio no contexto da requisição) | real + gate |
+| Remetente, origem, assunto, texto; token só no fragmento; "gerado em"/"válido até" = registro persistido; só o hash no banco | `test_mensagem_remetente_origem_fragmento_instantes_e_hash` | real |
+| Token redefine; senha antiga recusada, nova aceita; sessões revogadas; consumo único | `test_token_recebido_redefine_senha_e_revoga_sessoes` | real |
+| Dois pedidos em ordem: duas mensagens, só o último token vale | `test_dois_pedidos_em_ordem…` | real |
+| Logs sem token, link, corpo ou destinatário | `test_logs_sem_token_link_corpo_ou_destinatario` | real |
+| Transporte desabilitado → 503, sem token nem mensagem | `test_transporte_desabilitado_503…` | real (PostgreSQL + Mailpit) |
+| Servidor inacessível: falha depois do COMMIT, uma tentativa, nada entregue | `test_servidor_smtp_inacessivel…` | simulação (porta local fechada) |
+| SMTP lento: prazo total, resultado incerto (`deadline_killed`), sem repetição, log sem "aceito" | `test_smtp_lento_vence_o_prazo_total…` | simulação (servidor local que retém a saudação) |
+| Nenhum filho nem worker restante; um filho por pedido | fixture `no_leftover_children` em todos os cenários com envio + `test_nenhum_filho_ou_worker_restante…` | real |
+
+Coberturas reaproveitadas (não duplicadas): TLS, certificados, injeção de cabeçalhos, falha de coleta e
+supervisão em fases (E1, `test_email_transport`); fila, encerramento e orçamento (E2,
+`test_recovery_*`). **Ainda planejado:** BFF (E4); telas, E2E no navegador e verificação de token fora
+de URLs/storage do navegador (E5).
+
+### 18.5 Segurança dos testes
+- Contas fictícias (`@exemplo.com`) e bancos descartáveis pelas fixtures protegidas existentes.
+- O capturador só aceita API/SMTP em loopback; a caixa é esvaziada antes e depois de cada teste.
+- Nenhuma asserção imprime corpo, link ou token (`CapturedMessage.__repr__` é opaco; a extração do link
+  não o inclui em mensagens de falha). Nada do conteúdo vai para logs ou artefatos do CI.
+
+### 18.6 Comandos locais reproduzíveis
+```bash
+docker compose -f backend/test-infra/mailpit/compose.yaml up -d
+cd backend
+ENVIRONMENT=test TEST_DATABASE_URL=postgresql+psycopg://prazoai:<senha>@localhost:5432/prazoai_test \
+  PRAZOAI_REQUIRE_POSTGRES_TESTS=1 PRAZOAI_TEST_MAILPIT_SMTP=127.0.0.1:1025 \
+  PRAZOAI_TEST_MAILPIT_API=http://127.0.0.1:8025 PRAZOAI_REQUIRE_MAILPIT_TESTS=1 \
+  pytest tests/test_recovery_mailpit.py
+docker compose -f backend/test-infra/mailpit/compose.yaml down
+```
+
+### 18.7 Limitações
+- Fila, limites e capturador continuam por processo/locais; nenhuma entrega externa é testada ou prometida
+  ("aceito pelo SMTP" ≠ "entregue na caixa").
+- No ambiente desta entrega, o Docker Hub e o GHCR estavam bloqueados pela rede: a imagem não pôde ser
+  baixada aqui. A validação local usou o **binário oficial da mesma versão** (`mailpit-linux-amd64.tar.gz`
+  da release `v1.31.6` no GitHub; SHA-256 `10fa12ccc610f653d4ed4df848c1817f9935dcf4e9a6a458a19ab0fa02093f91`;
+  a release não publica arquivo de checksums). A execução com a **imagem** e o serviço do CI precisa ser
+  confirmada no próprio CI.
+- As pendências separadas continuam inalteradas: fuso das notificações (§16.4) e deslocamento de layout
+  no convite (§17.2).
+
+### 18.8 Roteiro curto para o TCC (cerca de 2 minutos)
+1. "Para provar a recuperação de ponta a ponta sem mandar e-mail de verdade, usamos um capturador: um
+   servidor SMTP de mentira que guarda as mensagens e deixa o teste lê-las por uma API."
+2. "O teste pede a recuperação pela API, espera o trabalhador em segundo plano e lê o e-mail capturado:
+   confere remetente, a origem do link, que o token está só depois do `#`, e que os horários batem com o
+   banco — onde só existe o hash do token."
+3. "Com o token do e-mail, redefinimos a senha: a antiga para de funcionar, a nova funciona e as sessões
+   antigas caem. Dois pedidos geram dois e-mails, mas só o último link vale. E quando o SMTP falha ou fica
+   lento, nada é repetido e nada é prometido."
