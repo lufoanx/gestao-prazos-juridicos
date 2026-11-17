@@ -182,7 +182,9 @@ def client(auth_app):
         yield test_client
 
 
-# Fixture `org` da Etapa 3 (escritórios/equipe).
+# Fixtures `org` (Etapa 3, escritórios/equipe) e `mailpit` (E3: capturador SMTP local; pulada sem
+# configuração, obrigatória no CI).
+from tests.mailpit_support import mailpit  # noqa: E402,F401
 from tests.org_utils import org  # noqa: E402,F401
 
 # ---------------------------------------------------------------- PostgreSQL (P1: fundação)
@@ -193,6 +195,7 @@ from tests.org_utils import org  # noqa: E402,F401
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "postgres: requer PostgreSQL real (TEST_DATABASE_URL)")
+    config.addinivalue_line("markers", "mailpit: requer o capturador SMTP local (PRAZOAI_TEST_MAILPIT_*)")
     storage = os.environ.get("PRAZOAI_TEST_STORAGE")
     if storage not in (None, "", "postgres"):
         # Valor desconhecido (ex.: o antigo "auth-postgres") faria as suítes rodarem em MEMÓRIA em silêncio.

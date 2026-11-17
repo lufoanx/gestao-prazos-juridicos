@@ -173,7 +173,17 @@ saída e limites em `docs/backend/20-p5-manutencao-operacao.md`).
   protocolo de encerramento com orçamento. `forgot-password` agora só valida, aplica os limites por IP
   e por e-mail e enfileira (202 neutro); emissão e envio acontecem no worker, depois do COMMIT. Com
   `disabled` (padrão), `status` → `available=false` e `forgot-password` → 503 — §15.
-- **E3–E6 pendentes:** capturador SMTP no CI, rotas BFF, telas integradas e E2E da recuperação. As
+- **E3 (implementada, aguardando auditoria):** capturador SMTP local (Mailpit `axllent/mailpit:v1.31.6`,
+  sem relay) no CI e testes de integração do fluxo completo com PostgreSQL — §18. Localmente:
+  ```bash
+  docker compose -f test-infra/mailpit/compose.yaml up -d          # ou o binário oficial da mesma versão
+  ENVIRONMENT=test TEST_DATABASE_URL=postgresql+psycopg://...prazoai_test \
+    PRAZOAI_TEST_MAILPIT_SMTP=127.0.0.1:1025 PRAZOAI_TEST_MAILPIT_API=http://127.0.0.1:8025 \
+    pytest tests/test_recovery_mailpit.py
+  docker compose -f test-infra/mailpit/compose.yaml down
+  ```
+  Sem as variáveis, os testes da E3 são pulados; com `PRAZOAI_REQUIRE_MAILPIT_TESTS=1` (CI), falham.
+- **E4–E6 pendentes:** rotas BFF, telas integradas e E2E da recuperação, documentação operacional. As
   telas de recuperação seguem indisponíveis no modo integrado.
 
 Modos finais: `STORAGE=memory` (padrão) e `STORAGE=postgres` (autenticação **e** domínio no banco;

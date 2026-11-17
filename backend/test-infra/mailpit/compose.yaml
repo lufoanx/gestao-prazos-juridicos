@@ -1,0 +1,18 @@
+# Capturador SMTP LOCAL para testes (E3 do doc 21). Somente desenvolvimento/testes.
+# - Imagem oficial do Mailpit com versão FIXADA (nunca `latest`); a mesma do serviço do CI.
+# - Portas publicadas apenas em 127.0.0.1 (SMTP 1025, API/UI 8025).
+# - Nenhum relay configurado: o Mailpit só ENCAMINHA mensagens com MP_SMTP_RELAY_* / --smtp-relay-*,
+#   que NÃO são definidos aqui; as mensagens ficam só no capturador descartável.
+# - Sem autenticação nem TLS: o PrazoAI só aceita SMTP_SECURITY=none com SMTP_ALLOW_INSECURE_LOCAL=true,
+#   host loopback e ENVIRONMENT=development|test (validação da E1).
+# Uso: docker compose -f backend/test-infra/mailpit/compose.yaml up -d   (e `down` ao terminar)
+services:
+  mailpit:
+    image: axllent/mailpit:v1.31.6
+    container_name: prazoai-test-mailpit
+    environment:
+      MP_DISABLE_VERSION_CHECK: "true"     # nenhuma chamada de saída para checar versão
+      MP_MAX_MESSAGES: "500"
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
