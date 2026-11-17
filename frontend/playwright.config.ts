@@ -5,6 +5,13 @@
 import { randomBytes } from "node:crypto";
 import { defineConfig } from "@playwright/test";
 
+// Diagnósticos sem segredos (E5): falhas podem ocorrer em telas com campos de senha e depois de
+// abrir links com token no fragmento. Por isso NÃO há trace, screenshot, vídeo nem o "error context"
+// com o snapshot ARIA da página (que pode conter valores de campos); o reporter é só `list` e as
+// verificações sensíveis dos specs usam mensagens sanitizadas (tests/helpers/sensitive.mjs).
+// As falhas continuam visíveis: mensagem sanitizada, arquivo e linha do teste.
+process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
+
 // Porta PÚBLICA do E2E = proxy de borda simulado (e2e/edge-proxy.mjs); o Next escuta em PORT+1.
 const PORT = Number(process.env.PRAZOAI_E2E_PORT || 3100);
 const NEXT_PORT = PORT + 1;
@@ -45,6 +52,9 @@ export default defineConfig({
   globalTeardown: "./e2e/global-teardown.mjs",
   use: {
     baseURL: E2E.origin,
+    trace: "off",
+    screenshot: "off",
+    video: "off",
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
       ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE, args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"] }
       : {},

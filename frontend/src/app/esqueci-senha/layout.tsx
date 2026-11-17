@@ -1,13 +1,9 @@
 import type { ReactNode } from "react";
-import { NoticePage } from "@/integrated/Unavailable";
+import { IntegratedForgotPassword } from "@/integrated/RecoveryScreens";
 import { APP_MODE } from "@/lib/integration/mode.mjs";
 
-// Modo integrado (6.1): a recuperação de senha depende do envio de e-mail, que ainda não existe.
-export default function UnavailableFlowLayout({ children }: { children: ReactNode }) {
-  if (APP_MODE !== "integrated") return children;
-  return (
-    <NoticePage title="Indisponível nesta fase">
-      A recuperação de senha depende do envio de e-mail, que ainda não existe. Nenhum e-mail é enviado.
-    </NoticePage>
-  );
+// Modo integrado (E5): pedido real pelo BFF (/bff/public/password/*), com consulta de
+// disponibilidade e resposta neutra. Modo demonstração: a página simulada (nenhum e-mail sai).
+export default function ForgotPasswordLayout({ children }: { children: ReactNode }) {
+  return APP_MODE === "integrated" ? <IntegratedForgotPassword /> : children;
 }

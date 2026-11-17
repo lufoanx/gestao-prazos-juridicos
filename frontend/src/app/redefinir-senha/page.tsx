@@ -1,39 +1,43 @@
 "use client";
-import { useState } from "react";
+// MODO DEMONSTRAÇÃO (no modo integrado o layout renderiza a tela real). Mesmo formato de link do
+// fluxo real (/redefinir-senha#…), com códigos demonstrativos no fragmento:
+// "#demo" = válido · "#expirado" · "#usado" · ausente ou outro = inválido. Nada é enviado.
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Info, ShieldAlert, CheckCircle2 } from "lucide-react";
 import { AuthShell } from "@/components/public/AuthShell";
 import { PasswordInput } from "@/components/public/PasswordInput";
 import { Button } from "@/components/ui";
 
-type TokenState = "valid" | "expired" | "used" | "invalid";
+type DemoState = "reading" | "valid" | "expired" | "used" | "invalid";
 
-// Tokens demonstrativos para exercitar cada estado:
-// "demo" = válido · "expirado" · "usado" · qualquer outro = inválido.
-function resolveToken(token: string): TokenState {
-  if (token === "demo") return "valid";
-  if (token === "expirado") return "expired";
-  if (token === "usado") return "used";
+function resolveDemo(code: string): DemoState {
+  if (code === "demo") return "valid";
+  if (code === "expirado") return "expired";
+  if (code === "usado") return "used";
   return "invalid";
 }
 
-const BAD_COPY: Record<Exclude<TokenState, "valid">, string> = {
+const BAD_COPY: Record<"expired" | "used" | "invalid", string> = {
   expired: "Este link de redefinição expirou. Solicite um novo para continuar.",
   used: "Este link já foi utilizado. Solicite um novo se precisar redefinir novamente.",
   invalid: "Este link de redefinição é inválido ou está incompleto.",
 };
 
-export default function RedefinirSenhaPage() {
-  const params = useParams<{ token: string }>();
+export default function RedefinirSenhaDemoPage() {
   const router = useRouter();
-  const token = Array.isArray(params.token) ? params.token[0] : params.token;
-  const state = resolveToken(token ?? "");
-
+  const [state, setState] = useState<DemoState>("reading");
   const [form, setForm] = useState({ pw: "", pw2: "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [done, setDone] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const code = window.location.hash.slice(1);
+    if (window.location.hash) window.history.replaceState(null, "", window.location.pathname);
+    setState((s) => (s === "reading" ? resolveDemo(code) : s));            // efeito repetido não relê
+  }, []);
 
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -49,7 +53,8 @@ export default function RedefinirSenhaPage() {
     setTimeout(() => { setLoading(false); setDone(true); }, 700);
   }
 
-  // Sucesso
+  if (state === "reading") return <AuthShell title="Redefinir senha"><p aria-busy="true">Lendo o link…</p></AuthShell>;
+
   if (done) {
     return (
       <AuthShell title="Senha redefinida">
@@ -64,7 +69,6 @@ export default function RedefinirSenhaPage() {
     );
   }
 
-  // Token inválido/expirado/usado
   if (state !== "valid") {
     return (
       <AuthShell title="Link indisponível">
@@ -80,7 +84,6 @@ export default function RedefinirSenhaPage() {
     );
   }
 
-  // Token válido → formulário
   return (
     <AuthShell title="Redefinir senha" subtitle="Escolha uma nova senha para sua conta.">
       <div className="form-note">

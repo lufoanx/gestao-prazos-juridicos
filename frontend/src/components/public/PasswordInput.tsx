@@ -1,11 +1,13 @@
 "use client";
-import { useId, useState, type InputHTMLAttributes } from "react";
+import { useId, useState, type InputHTMLAttributes, type Ref } from "react";
 import { Eye, EyeOff } from "lucide-react";
 
 interface PasswordInputProps extends InputHTMLAttributes<HTMLInputElement> {
   label: string;
   hint?: string;
   error?: string;
+  /** React 19: `ref` chega como prop e é repassado ao <input> (foco após erro). */
+  ref?: Ref<HTMLInputElement>;
 }
 
 export function PasswordInput({ label, hint, error, id, required, ...rest }: PasswordInputProps) {

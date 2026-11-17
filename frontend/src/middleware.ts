@@ -5,15 +5,21 @@ import { NextResponse, type NextRequest } from "next/server";
 import { routeDecision } from "@/lib/integration/routes.mjs";
 import { APP_MODE } from "@/lib/integration/mode.mjs";
 
+// E5: o formato antigo do link de redefinição (/redefinir-senha/<token>) é reescrito, nos dois
+// modos, para uma página estática; o caminho recebido nunca chega a uma página que o leia.
 export function middleware(request: NextRequest) {
   const decision = routeDecision(request.nextUrl.pathname, APP_MODE);
+  let response: NextResponse;
   if (decision.action === "rewrite") {
     const url = request.nextUrl.clone();
     url.pathname = decision.to;
     url.search = "";
-    return NextResponse.rewrite(url);
+    response = NextResponse.rewrite(url);
+  } else {
+    response = NextResponse.next();
   }
-  return NextResponse.next();
+  if (decision.noReferrer) response.headers.set("Referrer-Policy", "no-referrer");
+  return response;
 }
 
 export const config = {

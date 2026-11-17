@@ -295,13 +295,17 @@ jobs:
             await browser.close();
           })().catch(error => { console.error(error); process.exit(1); });
           NODE
-      - name: E2E completo numa única execução (navegador + Next integrado + FastAPI em STORAGE=postgres)
+      - name: E2E completo numa única execução (navegador + Next integrado + FastAPI em STORAGE=postgres + Mailpit local)
         run: npm run test:e2e
         working-directory: frontend
         env:
           PRAZOAI_TEST_PYTHON: python
           STORAGE: postgres
           DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/prazoai_e2e
+          # E5: recuperação de senha real no navegador; o capturador do passo anterior (só loopback).
+          PRAZOAI_TEST_MAILPIT_SMTP: 127.0.0.1:1025
+          PRAZOAI_TEST_MAILPIT_API: http://127.0.0.1:8025
+          PRAZOAI_REQUIRE_MAILPIT_TESTS: "1"
       - name: Confirmar dados persistidos pelo E2E no PostgreSQL
         run: |
           python - <<'PY'

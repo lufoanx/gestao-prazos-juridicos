@@ -9,13 +9,13 @@
 > verde (33/33 passos, incluindo integração nos dois modos e E2E em PostgreSQL). Esse CI valida a
 > **base**, não este projeto. Branch: `docs/projeto-email-recuperacao`.
 >
-> **Status:** **E1–E4 implementadas** (E1: configuração, composição e transporte isolado, §14;
+> **Status:** **E1–E5 implementadas** (E1: configuração, composição e transporte isolado, §14;
 > E2: `RecoveryDispatcher`, ligação com `forgot-password`, limite por IP e `status`, §15, com as
 > correções de auditoria em §16–§17; E3: capturador SMTP local no CI e integração real com PostgreSQL,
-> §18–§19; E4: rotas públicas de recuperação no BFF, §20, aguardando auditoria). **E5–E6 pendentes**:
-> telas integradas, captura do fragmento no navegador, remoção da rota antiga e E2E da recuperação;
-> documentação operacional. Produção continua bloqueada; nenhum provedor foi contratado e nenhum
-> e-mail externo foi enviado.
+> §18–§19; E4: rotas públicas de recuperação no BFF, §20, com a correção do CI em §21; E5: telas
+> integradas, captura do fragmento, remoção da rota antiga e E2E da recuperação, §22, com a correção
+> da auditoria em §23, aguardando nova auditoria). **E6 pendente:** documentação operacional. Produção continua bloqueada; nenhum provedor
+> foi contratado e nenhum e-mail externo foi enviado.
 >
 > **Revisão 3** (commit incremental sobre `ccff5c2`):
 > - D-E8: prazo total do SMTP por **subprocesso supervisionado** (§4.6);
@@ -638,8 +638,8 @@ continua cobrindo os erros de validação. Produção segue bloqueada.
 | E1 (**implementada, aguardando auditoria**) | Configuração + `EmailTransport` + `SmtpTransport` **em subprocesso supervisionado** + composer (backend, ainda sem usar no fluxo) | validação completa no startup (TLS, origem, remetente); supervisão em fases (§4.6) com orçamento monotônico e coleta com espera limitada; falha de coleta → transporte indisponível; nenhum segredo ou token em argumentos, arquivos, ambiente ou logs; recusa fora de Linux (§4.9); custos medidos; nenhuma mudança de comportamento com `disabled` |
 | E2 | `RecoveryDispatcher` (§4.5) + caminho de requisição sem banco + limite por IP + `status` | resposta pública sem banco e sem transporte (teste estrutural); prazo de fila, fila cheia, falha e morte do worker; protocolo de encerramento de §4.7 e propriedade da conexão de §4.8 (admissão coordenada, cancelamento pelo driver só com propriedade confirmada, nenhuma etapa nova após a parada, distinção limpo/não limpo, `lifespan` sem prova de término); um worker; garantias da P3 intactas (suítes atuais verdes) |
 | E3 (**implementada, aguardando auditoria — §18**) | Capturador SMTP local no CI + testes de integração do transporte e do fluxo com PostgreSQL | e-mail recebido no capturador com o link correto; falha e timeout do transporte; nenhum token em logs |
-| E4 (**implementada, aguardando auditoria — §20**) | Rotas BFF públicas (`status`, `forgot`, `reset`) | allowlist; CSRF e Origin; corpo exato; `no-store`; cookies intocados; resultado desconhecido sem repetição; testes de integração BFF × FastAPI |
-| E5 | Telas integradas + remoção de `/redefinir-senha/[token]` + E2E | E2E: pedido → capturador → link → nova senha → senha antiga recusada → nova aceita → sessões anteriores revogadas; nenhum token em URL de requisição, storage ou logs |
+| E4 (**implementada — §20; correção do CI em §21**) | Rotas BFF públicas (`status`, `forgot`, `reset`) | allowlist; CSRF e Origin; corpo exato; `no-store`; cookies intocados; resultado desconhecido sem repetição; testes de integração BFF × FastAPI |
+| E5 (**implementada, aguardando auditoria — §22**) | Telas integradas + remoção de `/redefinir-senha/[token]` + E2E | E2E: pedido → capturador → link → nova senha → senha antiga recusada → nova aceita → sessões anteriores revogadas; nenhum token em URL de requisição, storage ou logs |
 | E6 | Documentação operacional e revisão de observabilidade | doc atualizado; roteiro de operação do transporte |
 
 Cada entrega preserva:
@@ -657,10 +657,10 @@ atualizadas nas entregas correspondentes (resultados reais em §14 e §15).
 | Neutralidade (existente × inexistente) | resposta e caminho idênticos; worker descarta inexistente | **existe (E2)**: `test_auth_password_reset`, `test_recovery_dispatcher::test_resposta_neutra…`, `test_recovery_postgres::test_caminho_publico_sem_banco…` |
 | Token só como hash | inspeção do banco | **existe** (P3) |
 | Segundo pedido invalida o primeiro | serviço + PostgreSQL | **existe** |
-| Fora de ordem | dois e-mails no capturador; o mais antigo recusado, o mais novo aceito | **existe (E3)**: `test_recovery_mailpit::test_dois_pedidos_em_ordem…` (capturador real); E5 planejado |
-| Expirado, usado, invalidado | serviço + E2E | serviço: **existe**; E2E: planejado |
+| Fora de ordem | dois e-mails no capturador; o mais antigo recusado, o mais novo aceito | **existe (E3)**: `test_recovery_mailpit::test_dois_pedidos_em_ordem…` (capturador real); **E2E (E5)**: `recovery.spec.ts` "link substituído, usado e expirado" |
+| Expirado, usado, invalidado | serviço + E2E | serviço: **existe**; E2E: **existe (E5)** (expiração por fixture no banco descartável, §22.6) |
 | Resets concorrentes | PostgreSQL real com gates | **existe** |
-| Sessões revogadas, senha antiga recusada | serviço; E2E pelo navegador | serviço: **existe**; E2E: planejado |
+| Sessões revogadas, senha antiga recusada | serviço; E2E pelo navegador | serviço: **existe**; E2E: **existe (E5)** ("ponta a ponta") |
 | Falha e timeout do transporte | capturador indisponível; servidor SMTP lento (timeout) | **existe (E3)**: `test_recovery_mailpit::test_servidor_smtp_inacessivel…`, `…test_smtp_lento_vence_o_prazo_total…` (simulações controladas) |
 | TLS e certificado | `SmtpTransport` recusa `none` fora da exceção local; contexto verifica o certificado | planejado (E1) |
 | Injeção de cabeçalhos | destinatário ou remetente com CR/LF recusado | planejado (E1) |
@@ -691,8 +691,8 @@ atualizadas nas entregas correspondentes (resultados reais em §14 e §15).
 | Recuperação indisponível após falha de encerramento | depois de `stopped_unclean` ou `smtp_reap_failed`: `status` → `available=false`, `forgot` → 503, nenhum item aceito | **existe (E2)**: `…test_encerramento_nao_limpo…`, `test_recovery_smtp::test_falha_de_coleta…` |
 | Plataforma | `EMAIL_TRANSPORT=smtp` recusado no startup sem `os.killpg` ou `resource` (simulado); `disabled` inicia normalmente | planejado (E1) |
 | Resposta pública sem banco e sem transporte | engine e transporte instrumentados para falhar se tocados durante a requisição; 202 para e-mail existente e inexistente | **existe (E2)**: memória (`test_recovery_dispatcher::test_caminho_publico…`) e PostgreSQL (`test_recovery_postgres::test_caminho_publico…`, eventos dos dois engines) |
-| Token fora de URLs, storage e logs | E2E inspecionando requisições, `localStorage`, `sessionStorage`, cookies e logs | planejado (E5) |
-| Proteções do BFF | CSRF, Origin, corpo, `no-store`, cookies intocados, resultado desconhecido | padrão **existe** (convites); rotas novas: planejado (E4) |
+| Token fora de URLs, storage e logs | E2E inspecionando requisições, `localStorage`, `sessionStorage`, cookies e logs | **existe (E5)**: `expectTokenNowhere` em `recovery.spec.ts` (URLs, cabeçalhos, DOM, storage, cookies); o backend do E2E não grava saída (`stdio: "ignore"`); do Next só o `stderr` chega ao console, e o BFF registra apenas categorias |
+| Proteções do BFF | CSRF, Origin, corpo, `no-store`, cookies intocados, resultado desconhecido | **existe (E4)**; no navegador: **existe (E5)** |
 | Isolamento entre usuários | token de A não redefine B; pedidos de A não afetam B | parcialmente **existe** (serviço); E2E planejado |
 
 ## 10. Limitações deste projeto
@@ -1434,3 +1434,258 @@ antes e depois. No CI, a prova no ambiente exato continua sendo o passo de integ
 - Outros testes do backend que iniciam sondas Python com ambiente só com `PATH`
   (`test_auth_storage_modes`, `test_maintenance_operation`) teriam o mesmo problema nesse interpretador;
   não rodam no job `integration` e não foram alterados.
+
+## 22. O que a E5 implementou: telas integradas, captura do fragmento e E2E completo
+
+**Base:** `main` `db3cf91ffd1e8fc8034684b03b9e7fb135058fb6` (merge do PR #26), árvore
+`7ee4d6e94debdec23d1a5f5bef57ab5b2f355622` (idêntica à correção da E4 auditada); CI pós-merge
+`44162668195` concluído com sucesso nos quatro jobs (conferido pela API do GitHub). Branch
+`feature/email-e5-recovery-screens`. **Nenhum código do backend mudou.** No frontend mudaram telas,
+rotas, middleware e testes; no CI, só as variáveis do capturador no passo do E2E.
+
+### 22.1 Mapa dos arquivos
+| Arquivo | Papel |
+|---|---|
+| `frontend/src/lib/integration/recovery-rules.mjs` (novo) | regras de forma (e-mail, senha, token) **compartilhadas** pelo BFF da E4 e pelas telas; o BFF passou a importá-las (antes eram locais em `public-recovery.mjs`) |
+| `frontend/src/lib/integration/fragment-token.mjs` (novo) | leitura e remoção do fragmento (`#TOKEN`) e captura idempotente (`createFragmentTokenHolder`); `invite-token.mjs` passou a reutilizá-lo, com o mesmo comportamento |
+| `frontend/src/lib/integration/recovery-client.mjs` (novo) | cliente HTTP **público**: só `GET status`, `POST forgot`, `POST reset` do BFF, numa instância própria do cliente (fora da "época" da sessão) |
+| `frontend/src/lib/integration/recovery-flow.mjs` (novo) | estados e transições das duas telas, classificação dos erros do BFF, textos, Retry-After e guarda de envio único — sem React |
+| `frontend/src/integrated/useRecoveryFlows.ts` (novo) | efeitos: consulta de disponibilidade, captura do fragmento, envio único, fim da espera do Retry-After |
+| `frontend/src/integrated/RecoveryScreens.tsx` (novo) | apresentação (`AuthShell`, `Input`, `PasswordInput` com mostrar/ocultar), foco e mensagens acessíveis |
+| `frontend/src/app/esqueci-senha/layout.tsx`, `src/app/redefinir-senha/layout.tsx` | modo integrado → telas reais; modo demonstração → páginas simuladas |
+| `frontend/src/app/redefinir-senha/page.tsx` (novo) | página **demonstrativa** com o mesmo formato de link (`#demo`, `#expirado`, `#usado`); substitui `redefinir-senha/[token]` (**removido**) |
+| `frontend/src/app/redefinir-senha-antigo/page.tsx` (novo) | página **estática** (componente de servidor) para o formato antigo |
+| `frontend/src/lib/integration/routes.mjs`, `src/middleware.ts` | `/redefinir-senha/*` → página estática nos **dois** modos; `Referrer-Policy: no-referrer` nela e em `/redefinir-senha`; recuperação deixou de estar em `UNAVAILABLE_PUBLIC` |
+| `frontend/src/integrated/IntegratedLogin.tsx` | "Esqueci minha senha" virou link para `/esqueci-senha` |
+| `frontend/src/components/ui/Field.tsx`, `components/public/PasswordInput.tsx` | aceitam `ref` (React 19) para devolver o foco ao campo com erro |
+| `frontend/e2e/recovery.spec.ts`, `e2e/recovery-helpers.ts` (novos) | E2E da recuperação e harness sanitizado |
+| `frontend/e2e/global-setup.mjs` | backend do E2E com `EMAIL_TRANSPORT=smtp` apontando ao capturador local quando configurado (mesma exceção explícita de SMTP sem TLS em loopback e `ENVIRONMENT=test`); sem capturador, `disabled`; com `PRAZOAI_REQUIRE_MAILPIT_TESTS=1`, falha |
+| `frontend/playwright.config.ts` | `trace`, `screenshot` e `video` desligados explicitamente; sem snapshot ARIA no contexto de erro (`PLAYWRIGHT_NO_COPY_PROMPT`) |
+| `frontend/tests/recovery-screens.test.mjs` (novo) | unitários das peças acima |
+| `.github/workflows/ci.yml` (job `integration`) | variáveis do capturador no passo do E2E (o Mailpit do passo anterior, em 127.0.0.1) |
+
+### 22.2 Caminho de ponta a ponta
+1. `/login` → "Esqueci minha senha" → `/esqueci-senha` → `GET /bff/public/password/status`.
+2. Formulário → `POST /bff/public/password/forgot {email}` → FastAPI (limites, fila) → **202 neutro**
+   → a tela mostra "Se houver uma conta com esse e-mail, enviaremos um link. Verifique a caixa de
+   entrada e o spam." (nunca "e-mail enviado"; o e-mail digitado não é ecoado).
+3. Worker → token emitido (só o hash no banco) → SMTP → capturador. O e-mail traz
+   `PUBLIC_APP_ORIGIN/redefinir-senha#TOKEN`.
+4. O navegador abre o link: o fragmento não vai ao servidor; a página carrega, o efeito de captura lê
+   `location.hash`, chama `history.replaceState` (a barra passa a mostrar só `/redefinir-senha`) e
+   guarda o token num objeto fora do estado do React.
+5. Nova senha + confirmação → `POST /bff/public/password/reset {token, newPassword}` → 204 → tela de
+   sucesso; token e senhas descartados; link para `/login`, **sem login automático**.
+6. O backend revogou as sessões: uma sessão BFF antiga descobre isso no uso normal (`/app/...` → 401 →
+   login). As rotas públicas não leem, criam nem apagam cookies.
+
+### 22.3 Estados das telas
+| `/esqueci-senha` | Quando | O que a tela faz |
+|---|---|---|
+| verificando | ao abrir | "Verificando disponibilidade…" (`aria-busy`) |
+| indisponível | `available=false`, ou `503 password_recovery_unavailable` no pedido | aviso, **sem formulário**, sem fingir envio |
+| falha da consulta | rede/5xx no `status` | aviso + "Verificar novamente" (nova consulta só por clique) |
+| formulário / enviando | disponível | campo de e-mail; botão desabilitado durante o envio; guarda síncrono contra duplo clique |
+| pedido aceito | 202 | mensagem neutra + "só o link mais recente funciona" + "Fazer outro pedido" (explícito) |
+| limite | 429 | "Aguarde N segundos" com o valor do `Retry-After`; botão liberado só depois do prazo |
+| sem confirmação | 504 `outcome: "unknown"` ou falha de rede **após o clique** | "pode ter sido registrado", orienta conferir a caixa antes de pedir de novo; nenhum reenvio |
+
+| `/redefinir-senha` | Quando | O que a tela faz |
+|---|---|---|
+| lendo | antes do efeito de captura | "Lendo o link…" |
+| link incompleto | fragmento ausente ou malformado (inclusive depois de recarregar) | aviso + "Pedir novo link"; o fragmento malformado também é removido da barra |
+| formulário / enviando | token em memória | nova senha + confirmação (mostrar/ocultar), aviso de que o link vive só nesta aba |
+| senhas divergentes / fora do limite | validação local | erro no campo e foco nele; **nada é enviado** |
+| senha recusada | 422 do BFF | erro no campo de senha e foco nele; **token preservado** para nova tentativa explícita |
+| link inválido | 400 `invalid_reset_token` (inválido, expirado, usado ou substituído) | **a mesma mensagem** para os quatro casos; token descartado; "Pedir novo link" |
+| limite | 429 | `Retry-After` respeitado; token preservado |
+| resultado desconhecido | 504 `unknown` ou falha de rede após o clique | não afirma falha; explica como conferir entrando com a **nova** senha; nenhum reenvio; volta ao formulário só por clique |
+| sucesso | 204 | token e senhas descartados; "Ir para o login"; sem login automático |
+
+Foco: a cada mudança de fase o foco vai para a região da fase (anunciada pelo título); erros de campo
+levam o foco ao campo. A mesma moldura é usada em todas as fases (sem saltos de layout); durante o
+envio o formulário continua visível, desabilitado.
+
+**Modo demonstração:** as páginas simuladas continuam (nenhum e-mail sai, nenhuma chamada ao BFF),
+rotuladas como demonstrativas; o link demonstrativo passou a usar o mesmo formato
+(`/redefinir-senha#demo`). Nada fictício aparece no modo integrado.
+
+### 22.4 Segurança do fragmento
+- Fora do servidor: o fragmento não é enviado em requisições HTTP nem no `Referer`; a política
+  `no-referrer` (cabeçalho do middleware e `<meta name="referrer">`) reforça isso nas páginas de
+  redefinição.
+- Fora da barra: `history.replaceState` substitui a entrada atual do histórico **antes** de qualquer
+  requisição da tela; o malformado também sai.
+- Só em memória: o token fica num objeto da tela (`useRef`), **nunca** em estado renderizado, DOM,
+  atributo, mensagem, `localStorage`, `sessionStorage`, cookie, caminho, query ou redirecionamento;
+  não sobrevive ao recarregamento (documentado na própria tela). Não há analytics na aplicação.
+- Trafega só no corpo do `POST /bff/public/password/reset` (mesmo cliente com `x-prazoai-csrf`).
+- Efeitos repetidos: a captura é idempotente por instância da tela (a segunda execução do efeito
+  devolve o mesmo token sem reler a barra); outro link aberto na mesma aba (`hashchange`) substitui o
+  anterior; um novo link durante o envio segue o protocolo de revisões de §23 (corrigido na auditoria).
+- Rota antiga: `/redefinir-senha/<qualquer coisa>` é reescrita no middleware, nos dois modos, para uma
+  página estática que não lê o caminho, não ecoa nada, não chama o BFF e não leva o token a outro
+  endereço; resposta com `Referrer-Policy: no-referrer`.
+
+### 22.5 Resultado desconhecido
+A tela trata como **desconhecido** tanto o 504 `outcome: "unknown"` do BFF quanto uma falha de rede
+depois do clique (o navegador não sabe se o pedido chegou). Nos dois casos: nenhuma nova tentativa
+automática; a mensagem não diz que a redefinição falhou; a orientação é conferir entrando com a nova
+senha (se funcionar, a troca ocorreu; se não, entrar com a antiga ou pedir outro link). Uma nova
+tentativa só existe por clique explícito; se a troca já tinha ocorrido, ela recebe "link inválido"
+(token consumido) — nunca uma segunda troca.
+
+### 22.6 Testes
+**Unitários** (`tests/recovery-screens.test.mjs`, sem rede e sem navegador): regras compartilhadas
+(as funções do BFF são as mesmas); leitura e remoção do fragmento; captura idempotente sob efeitos
+repetidos e novo link na aba; cliente só com rotas públicas, token e senha só no corpo, CSRF, sem query,
+fora da época da sessão; classificação de cada resposta; textos neutros; transições (um envio por vez,
+nada repete sozinho, espera do Retry-After); guarda de envio único; regras de rota da página antiga.
+
+**E2E** (`e2e/recovery.spec.ts`): navegador real + Next integrado (BFF) + FastAPI + PostgreSQL +
+Mailpit; o capturador é lido só pelo harness.
+
+| Requisito | Cenário E2E | Tipo |
+|---|---|---|
+| 1. pedido pela interface (a partir do login) · 2. mensagem no capturador · 3. link com fragmento · 4. fragmento removido · 5. redefinição pela interface · 6. senha antiga recusada · 7. nova aceita · 8. sessões anteriores revogadas no uso normal | "ponta a ponta…" | real |
+| token fora de URLs de requisição, cabeçalhos, storage, cookies e DOM; só no corpo do POST de reset | "ponta a ponta…", "recarregar…" (`expectTokenNowhere`) | real |
+| sessão existente preservada pelas rotas públicas; nenhuma resposta com `Set-Cookie` | "ponta a ponta…", "rotas públicas preservam a sessão existente" | real |
+| neutralidade para conta inexistente (mesma resposta, nenhum e-mail) | "neutralidade…" (ordem FIFO do worker como condição observável) | real |
+| recuperação desabilitada; falha da consulta com nova consulta explícita | "disponibilidade…" | **simulado** (`page.route` no navegador: o backend do E2E está habilitado) |
+| fragmento ausente ou malformado; rota antiga estática, sem eco, sem BFF, `no-referrer` | "link ausente ou malformado; rota antiga…" | real |
+| recarregar perde o token; senhas divergentes não enviam nada | "recarregar…" | real |
+| senha recusada preserva o token para nova tentativa explícita | "recarregar…" | **simulado** (422 por `page.route`: as regras locais são as mesmas do backend, então a interface não produz essa recusa) + segunda tentativa real |
+| token substituído, usado e expirado com a mesma mensagem | "link substituído, usado e expirado…" | real; **expiração por fixture** no banco descartável (o harness antecipa `expires_at` do registro identificado pelo hash; sem esperar o TTL; só PostgreSQL) |
+| limite e Retry-After no pedido e na redefinição, sem repetição | "limites…" (3 pedidos + 1 limitado; 10 redefinições inválidas pelo harness no mesmo cliente de rede + 1 pela interface) | real (limites do backend inalterados) |
+| falha de rede e resultado desconhecido com exatamente um envio | "falha de rede e resultado desconhecido…" (pedido: rede falha antes do servidor; redefinição: o servidor processa e a resposta se perde — mesmo padrão dos E2E de prazos e intimações) | **simulado na rede** do navegador + servidor real |
+
+Coordenação só por condições observáveis (texto na tela, mensagem no capturador, contagem de
+requisições); nenhum sleep para ordenar cenários, nenhum `force`, nenhuma repetição, nenhum timeout
+aumentado. Nenhum endpoint de controle foi aberto na aplicação; o proxy de teste do E2E não foi alterado.
+
+**Alterações em testes existentes (justificadas):**
+- `e2e/auth.spec.ts`: removida a verificação de que `/esqueci-senha` mostra "Indisponível nesta
+  fase" — o comportamento mudou por requisito desta entrega e é coberto pelo novo spec.
+- `tests/integration-client.test.mjs`: as expectativas de rota de `/esqueci-senha` e
+  `/redefinir-senha/abc` mudaram pelo mesmo motivo (permitida; página estática).
+
+### 22.7 Diagnósticos protegidos
+- Playwright: sem trace, screenshot e vídeo (explícito na configuração); o "error context" das falhas
+  não inclui o snapshot ARIA da página (`PLAYWRIGHT_NO_COPY_PROMPT=1`), que poderia conter valores de
+  campos; reporter só `list`; o CI não publica artefatos do E2E.
+- Specs: verificações sensíveis com `check`/`checkAbsent` (falham só com o nome do requisito); a
+  navegação com token passa por `openLink` (uma falha não imprime a URL); nenhum `toHaveURL` em página
+  com token; senhas geradas por execução e nunca impressas.
+- Prova executada (não versionada): removendo temporariamente o `replaceState`, o cenário "ponta a
+  ponta" falhou com `requisito não atendido: fragmento removido da barra`, sem URL nem token na saída;
+  o `error-context.md` gerado continha só o nome do teste e a mensagem.
+
+### 22.8 Comandos locais reproduzíveis
+```bash
+# capturador local (backend/test-infra/mailpit/compose.yaml ou o binário oficial v1.31.6) e um banco
+# descartável migrado (alembic upgrade head) para o E2E
+cd frontend
+node --test tests/recovery-screens.test.mjs
+PRAZOAI_TEST_PYTHON=../backend/.venv/bin/python STORAGE=postgres \
+  DATABASE_URL=postgresql+psycopg://prazoai:<senha>@127.0.0.1:5432/prazoai_e2e \
+  PRAZOAI_TEST_MAILPIT_SMTP=127.0.0.1:1025 PRAZOAI_TEST_MAILPIT_API=http://127.0.0.1:8025 \
+  PRAZOAI_REQUIRE_MAILPIT_TESTS=1 npm run test:e2e            # só a recuperação: npx playwright test e2e/recovery.spec.ts
+```
+
+### 22.9 Limitações
+- **Logs fora da aplicação:** um link antigo (`/redefinir-senha/<token>`) recebido ainda pode ser
+  registrado pelo servidor HTTP, proxy, CDN ou hospedagem. A aplicação não controla esses logs; filtrar
+  ou mascarar esse caminho é configuração operacional (E6). Nenhum link real foi emitido nesse formato.
+- **Navegador:** o histórico global do navegador e a entrada de *Navigation Timing* da página
+  (`performance.getEntriesByType("navigation")`, visível só a scripts da própria origem durante a vida
+  da página) guardam a URL com o fragmento — verificado no Chromium do E2E. Não há API para apagá-los;
+  a mitigação é o próprio token: uso único, expiração e substituição por um pedido mais recente.
+- **Efeitos repetidos do React:** cobertos pelos unitários da captura (efeitos simulados) e pelo
+  desenho (token fora do estado). Uma demonstração no navegador **não** foi obtida: com `next dev` e
+  `reactStrictMode: true` ligado temporariamente, uma mutação que relia a barra a cada efeito não falhou
+  — o efeito duplo não foi observado neste ambiente — então a verificação no navegador não discrimina e
+  não é apresentada como prova.
+- **Disponibilidade desabilitada e senha recusada** são simuladas no navegador no E2E (ver tabela); os
+  casos reais correspondentes estão nas integrações da E3/E4.
+- **Expiração** no E2E exige `STORAGE=postgres` (o CI usa PostgreSQL); em memória o trecho é pulado
+  com motivo explícito.
+- Sem confirmação no CI até a próxima execução; local ≠ CI.
+
+### 22.10 Pendências separadas (inalteradas)
+Fuso das notificações (§16.4), deslocamento de layout no convite (§17.2) e atualização de
+dependências continuam separados e não foram alterados. A captura do convite (`IntegratedInvite`)
+continua com o próprio efeito (comportamento inalterado); adotar a captura idempotente também ali
+seria uma melhoria separada.
+
+### 22.11 Roteiro curto para o TCC (cerca de 2 minutos)
+1. "Na tela de login, 'Esqueci minha senha' leva a um formulário que primeiro pergunta ao BFF se a
+   recuperação está disponível. Depois do pedido, a resposta é sempre a mesma: não revelamos se a conta
+   existe."
+2. "O e-mail capturado traz um link com o token depois do `#`. Essa parte não vai ao servidor; a página
+   a lê, apaga da barra de endereço e guarda só na memória da aba. Se recarregar, o link precisa ser
+   aberto de novo."
+3. "Trocamos a senha pela tela: a senha antiga deixa de funcionar, a nova funciona e uma sessão que
+   estava aberta em outra aba cai no próximo uso. Se a rede falha depois do clique, a tela não diz que
+   falhou: pede para conferir entrando com a nova senha, e nada é reenviado sozinho."
+
+## 23. Correção da auditoria da E5: resposta de um link substituído durante o envio
+
+### 23.1 Defeito (achado da auditoria)
+Em `useRecoveryFlows.ts` (versão `f6dd13a`), o `hashchange` substituía o token do holder mesmo com
+uma redefinição pendente. O reducer ignorava `captured` durante o envio, mas a resposta da tentativa
+anterior continuava podendo chamar `holder.clear()` e mudar a tela: o resultado da tentativa com o
+link A passava a controlar o token e a interface do link B. No caminho de erro, B era apagado; no de
+sucesso, `clear()` também não verificava a qual captura pertencia. Os testes cobriam holder, reducer e
+envio único separadamente, não a composição; a asserção "novo link durante o envio: espera" não provava
+que B seria preservado.
+
+### 23.2 Reprodução no navegador (antes da correção)
+Cenário com BFF, FastAPI, PostgreSQL e Mailpit reais e contas fictícias distintas (A e B): A enviada e
+**retida num gate do harness** (`page.route`, sem sleep); B aberto na mesma aba (`hashchange`); a
+resposta real de A liberada depois. No código auditado, com o cenário sem as verificações do estado
+intermediário (que ainda não existia):
+- A inválida (400 real): `requisito não atendido: resultado de A não aparece como resultado de B`
+  (a tela foi para "link inválido");
+- A com sucesso (204 real): o mesmo requisito falhou (a tela foi para "senha redefinida").
+
+### 23.3 Protocolo adotado: revisão por captura
+- `createFragmentTokenHolder` numera cada leitura nova da barra (revisão 1, 2, …); `clear(revisão)` só
+  descarta o token se ele ainda for daquela captura.
+- A coordenação inteira saiu do hook para `src/lib/integration/reset-controller.mjs` (sem React): captura,
+  estado, envio único e tratamento da resposta. O hook só assina o estado (`useSyncExternalStore`) e liga
+  `hashchange`.
+- Cada tentativa guarda a revisão da captura que a originou. Ao chegar a resposta, se a revisão atual
+  for outra, a resposta é de um link **substituído**: não apaga o token novo e não vira sucesso, erro,
+  limite ou desconhecido na tela — só libera o formulário do novo link (`settled_stale`).
+- Novo link durante o envio → fase **`waiting_previous`**: o fragmento novo já foi removido da barra; a
+  tela diz explicitamente que aguarda a tentativa anterior terminar, **sem formulário e sem botão**
+  (nenhum clique ignorado em silêncio). Depois: formulário do novo link, **vazio** (senha e confirmação
+  digitadas para o link anterior são descartadas quando o novo link é aceito), com o aviso de que a
+  tentativa anterior pode ter sido concluída no servidor e de que o formulário vale só para o novo link;
+  o foco vai para "Nova senha". Novo link malformado → "link incompleto".
+- Nada é abortado nem repetido: a requisição de A segue até responder (abortá-la não desfaria uma
+  operação já enviada ao servidor); B só é enviado por clique explícito; um envio por vez.
+- Preservados: captura idempotente sob efeitos repetidos (uma leitura repetida sem fragmento novo não
+  muda nada), descarte do token e das senhas após sucesso, perda do token ao recarregar, token fora do
+  estado renderizável e do DOM.
+
+### 23.4 Regressões
+| Teste | Tipo | Antes (`f6dd13a`) | Depois |
+|---|---|---|---|
+| E2E "corrida: resposta INVÁLIDA de A liberada depois da captura de B…" | real + gate do harness | falha (resultado de A aplicado a B) | passa |
+| E2E "corrida: resposta de SUCESSO de A liberada depois da captura de B…" | real + gate do harness | falha (idem) | passa |
+| Unitários de **coordenação completa** com o controlador real e cliente com gates: respostas `invalid`, `success`, `rate_limited`, `unknown`, rede e `422` de A depois da captura de B; B malformado durante o envio; resultados sem corrida (sucesso e link inválido descartam, senha recusada preserva); recarregamento | simulação (dublê do cliente) | 7 falham com o protocolo antigo (mutação que remove a verificação de revisão) | passam |
+| Holder (revisões; `clear` de captura antiga não apaga a nova) e reducer (`waiting_previous`, `settled_stale`, sucesso/erro ignorados fora de "sending") | unitário | — | passam |
+
+Os E2E de corrida verificam, depois de liberar A: fragmento de B removido; estado intermediário visível
+e nenhum botão de envio; nenhum resultado de A na tela; formulário de B habilitado e **vazio**; nenhum
+envio automático (1 POST até o clique); B redefine a conta **correta** (login de B com a nova senha); A
+inválida não alterou a conta A, A com sucesso alterou a conta A no servidor; tokens fora de URLs,
+cabeçalhos, DOM, storage e cookies. Nenhum sleep, `force`, repetição ou timeout aumentado.
+
+### 23.5 Limitações
+- Enquanto A não responde, o novo link espera. O tempo é limitado pelo timeout do BFF (`504`
+  desconhecido); a tela não oferece cancelar, porque cancelar no navegador não desfaz o que o servidor
+  já recebeu.
+- O resultado de A não é mostrado; a tela só avisa que ele pode ter sido concluído no servidor. Para
+  conferir, a pessoa entra com a senha que digitou para A (o e-mail de A pode ser outra conta).

@@ -1,0 +1,11 @@
+export const EMAIL_MAX: number;
+export const PASSWORD_MIN: number;
+export const PASSWORD_MAX: number;
+export const TOKEN_MIN: number;
+export const TOKEN_MAX: number;
+export function cpLength(value: string): number;
+export function emailProblem(email: unknown): string | null;
+export function passwordProblem(password: unknown): string | null;
+export function tokenProblem(token: unknown): string | null;
+export function validateForgotBody(value: unknown): string | null;
+export function validateResetBody(value: unknown): string | null;

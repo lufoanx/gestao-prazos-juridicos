@@ -1,5 +1,5 @@
 import {
-  useId, type InputHTMLAttributes, type SelectHTMLAttributes,
+  useId, type InputHTMLAttributes, type Ref, type SelectHTMLAttributes,
   type TextareaHTMLAttributes, type ReactNode,
 } from "react";
 
@@ -28,7 +28,7 @@ type BaseFieldProps = { label: string; hint?: string; error?: string };
 
 export function Input({
   label, hint, error, id, required, ...rest
-}: BaseFieldProps & InputHTMLAttributes<HTMLInputElement>) {
+}: BaseFieldProps & InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
   const auto = useId();
   const fid = id ?? auto;
   return (

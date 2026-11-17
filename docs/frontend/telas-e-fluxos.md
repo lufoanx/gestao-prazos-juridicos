@@ -3,7 +3,7 @@ As rotas do índice são reservas técnicas. Implementar páginas dedicadas:
 - /: landing, explicação do produto, benefícios verificáveis, demonstração visual, como funciona, autônomo/escritório, FAQ, links de entrar/criar conta. Sem avaliações, números ou promessas inventadas.
 - /login: email, senha, mostrar senha, entrar, criar conta, esqueci senha, Google demonstrativo.
 - /cadastro: nome, email, senha, confirmação; Google demonstrativo. Não pedir OAB logo de início.
-- /esqueci-senha e /redefinir-senha/[token]: simular envio neutro, link demo explícito, estados expirado/inválido/sucesso.
+- /esqueci-senha e /redefinir-senha#TOKEN: no modo demonstração, envio neutro simulado e link demo explícito (`#demo`, `#expirado`, `#usado`); no modo integrado (E5, doc 21 §22), pedido real pelo BFF com resposta neutra, token só no fragmento (removido da barra, em memória) e estados de indisponibilidade, limite, resultado desconhecido, link inválido e sucesso sem login automático. O formato antigo /redefinir-senha/[token] mostra página estática, sem processar o token.
 - /onboarding: escolher autônomo, criar escritório ou ingressar.
 - /onboarding/autonomo: preferências e área opcionais; /onboarding/escritorio: nome e configuração básica.
 - /convite/[token]: identificar ambiente, confirmar ingresso, estados revogado/expirado/usado/segundo escritório.

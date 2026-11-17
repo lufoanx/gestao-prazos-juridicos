@@ -63,7 +63,7 @@ export function IntegratedLogin({ embedded = false, onSuccess }: { embedded?: bo
         {errors.form && <p className="field__error" role="alert">{errors.form}</p>}
         <div className="auth__row">
           <span />
-          <span className="text-muted" title="Recuperação por e-mail indisponível nesta fase">Esqueci minha senha (indisponível)</span>
+          <Link href="/esqueci-senha">Esqueci minha senha</Link>
         </div>
         <Button type="submit" variant="primary" block disabled={loading}>{loading ? "Entrando…" : "Entrar"}</Button>
       </form>

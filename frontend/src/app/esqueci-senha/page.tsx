@@ -43,7 +43,7 @@ export default function EsqueciSenhaPage() {
               abaixo para simular a redefinição.
             </span>
           </div>
-          <Link className="btn btn--primary btn--block" href="/redefinir-senha/demo" style={{ marginTop: 12 }}>
+          <Link className="btn btn--primary btn--block" href="/redefinir-senha#demo" style={{ marginTop: 12 }}>
             Abrir link de redefinição (demo)
           </Link>
           <p className="auth__alt"><Link href="/login">Voltar para entrar</Link></p>

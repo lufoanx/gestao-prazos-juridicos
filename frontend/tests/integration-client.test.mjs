@@ -146,8 +146,10 @@ test("rotas: modo integrado reescreve módulos não integrados e recursos indisp
   assert.deepEqual(routeDecision("/app/intimacoes/abc123/revisao", "integrated"), { action: "allow" });
   assert.deepEqual(routeDecision("/app/intimacoes/a.b", "integrated"), { action: "rewrite", to: "/app/nao-integrado" });
   assert.deepEqual(routeDecision("/app/notificacoes", "integrated"), { action: "allow" });
-  assert.deepEqual(routeDecision("/esqueci-senha", "integrated"), { action: "rewrite", to: "/indisponivel" });
-  assert.deepEqual(routeDecision("/redefinir-senha/abc", "integrated"), { action: "rewrite", to: "/indisponivel" });
+  // E5: recuperação integrada; o formato antigo do link vai para a página estática (doc 21, §22).
+  assert.deepEqual(routeDecision("/esqueci-senha", "integrated"), { action: "allow" });
+  assert.deepEqual(routeDecision("/redefinir-senha", "integrated"), { action: "allow", noReferrer: true });
+  assert.deepEqual(routeDecision("/redefinir-senha/abc", "integrated"), { action: "rewrite", to: "/redefinir-senha-antigo", noReferrer: true });
   // 6.2: convite pelo fragmento; o formato antigo vai para uma página que não chama a API.
   assert.deepEqual(routeDecision("/convite/abc", "integrated"), { action: "rewrite", to: "/convite-antigo" });
   assert.deepEqual(routeDecision("/convite", "integrated"), { action: "allow" });
