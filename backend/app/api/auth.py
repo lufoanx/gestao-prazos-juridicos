@@ -10,6 +10,7 @@ from app.schemas.auth import (
     LoginResponse,
     MeResponse,
     MessageResponse,
+    PasswordRecoveryStatus,
     PublicUser,
     RefreshRequest,
     RegisterRequest,
@@ -60,9 +61,20 @@ def me(current: CurrentUser) -> MeResponse:
     "/forgot-password", status_code=status.HTTP_202_ACCEPTED, response_model=MessageResponse,
     response_model_by_alias=True,
 )
-def forgot_password(body: ForgotPasswordRequest, service: AuthServiceDep) -> MessageResponse:
-    service.forgot_password(body.email)
+def forgot_password(body: ForgotPasswordRequest, request: Request, service: AuthServiceDep) -> MessageResponse:
+    """E2: só validação, limites (IP e e-mail) e enfileiramento; nenhum banco, token ou transporte aqui.
+
+    202 neutro para e-mail existente, inexistente ou fila cheia; 429 com Retry-After; 503
+    `password_recovery_unavailable` com transporte desabilitado, worker morto ou despachante parando.
+    """
+    service.request_password_recovery(body.email, client_ip(request))
     return MessageResponse(message=FORGOT_MESSAGE)
+
+
+@router.get("/password-recovery/status", response_model=PasswordRecoveryStatus, response_model_by_alias=True)
+def password_recovery_status(service: AuthServiceDep) -> PasswordRecoveryStatus:
+    """Só `{available}`: sem tipo de transporte, host, remetente, fila ou contadores."""
+    return PasswordRecoveryStatus(available=service.recovery_available)
 
 
 @router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)

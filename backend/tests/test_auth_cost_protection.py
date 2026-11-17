@@ -5,7 +5,7 @@ O hasher é o REAL (Argon2id), instrumentado só para contar chamadas.
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.auth_utils import API, PASSWORD, register
+from tests.auth_utils import API, PASSWORD, forgot, register
 from tests.conftest import InstrumentedHasher
 
 NEW = "Nova-senha-segura-456"
@@ -40,7 +40,7 @@ def test_reset_com_token_inexistente_nao_calcula_argon2(ctx):
 def test_reset_com_token_expirado_ou_usado_nao_calcula_argon2(ctx, delivery, clock):
     client, hasher = ctx()
     register(client)
-    client.post(f"{API}/auth/forgot-password", json={"email": "ana@exemplo.com"})
+    forgot(client, "ana@exemplo.com")
     token = delivery.messages[-1].token
     before = dict(hasher.counts)
     assert _reset(client, token).status_code == 204
@@ -48,7 +48,7 @@ def test_reset_com_token_expirado_ou_usado_nao_calcula_argon2(ctx, delivery, clo
     before = dict(hasher.counts)
     assert _reset(client, token).status_code == 400     # reutilizado
     assert _delta(hasher, before)["hash"] == 0
-    client.post(f"{API}/auth/forgot-password", json={"email": "ana@exemplo.com"})
+    forgot(client, "ana@exemplo.com")
     expiring = delivery.messages[-1].token
     clock.advance(1800)
     before = dict(hasher.counts)
@@ -67,7 +67,7 @@ def test_reset_com_payload_invalido_nao_calcula_argon2(ctx):
 def test_reset_bloqueado_por_limite_nao_calcula_argon2(ctx, delivery, clock):
     client, hasher = ctx(AUTH_RESET_MAX_REQUESTS=2, AUTH_RESET_WINDOW_SECONDS=60)
     register(client)
-    client.post(f"{API}/auth/forgot-password", json={"email": "ana@exemplo.com"})
+    forgot(client, "ana@exemplo.com")
     token = delivery.messages[-1].token
     assert _reset(client, "invalido-1-1234567890abc").status_code == 400
     assert _reset(client, "invalido-2-1234567890abc").status_code == 400
@@ -120,6 +120,6 @@ def test_recuperacao_nunca_calcula_argon2(ctx):
     client, hasher = ctx()
     register(client)
     before = dict(hasher.counts)
-    client.post(f"{API}/auth/forgot-password", json={"email": "ana@exemplo.com"})
-    client.post(f"{API}/auth/forgot-password", json={"email": "ninguem@exemplo.com"})
+    forgot(client, "ana@exemplo.com")
+    forgot(client, "ninguem@exemplo.com")
     assert _delta(hasher, before) == {"hash": 0, "verify": 0, "verify_dummy": 0}

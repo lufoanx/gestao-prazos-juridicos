@@ -12,8 +12,15 @@ class EmailTransport(Protocol):
 
     def send(self, message: OutgoingEmail) -> SendResult: ...
 
-    def cancel(self) -> None:
-        """Pede a parada coordenada (inclusive de um filho em criação); idempotente."""
+    def cancel(self, timeout: float | None = None) -> bool:
+        """Pede a parada coordenada (inclusive de um filho em criação); idempotente.
+
+        `timeout` limita a espera TOTAL desta chamada, desde a entrada (lock incluído). True só com
+        confirmação de que não há filho ativo."""
+        ...
+
+    def unconfirmed_child(self, timeout: float) -> bool | None:
+        """Filho em criação ou sem coleta confirmada; None se não for possível confirmar no prazo."""
         ...
 
 
@@ -21,12 +28,16 @@ class DisabledTransport:
     """Padrão: nada é enviado e nenhum subprocesso é criado; funciona em qualquer plataforma."""
 
     available = False
+    has_unconfirmed_child = False
 
     def send(self, message: OutgoingEmail) -> SendResult:
         return SendResult.UNAVAILABLE
 
-    def cancel(self) -> None:
-        return None
+    def cancel(self, timeout: float | None = None) -> bool:
+        return True
+
+    def unconfirmed_child(self, timeout: float) -> bool | None:
+        return False
 
 
 class UnsupportedPlatformError(RuntimeError):

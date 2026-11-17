@@ -24,3 +24,18 @@ def bearer(token: str) -> dict:
 
 def error_code(resp) -> str:
     return resp.json()["error"]["code"]
+
+
+def forgot(client, email="ana@exemplo.com"):
+    """E2: pedido público de recuperação + espera DETERMINÍSTICA do worker (Condition, sem sleep).
+
+    Para TestClient criado sem `with` (sem lifespan), o worker é iniciado aqui; o `make_app` o encerra
+    ao fim do teste.
+    """
+    recovery = getattr(client.app.state, "recovery", None)
+    if recovery is not None and recovery.dispatcher.state.value == "created":
+        recovery.start()
+    resp = client.post(f"{API}/auth/forgot-password", json={"email": email})
+    if resp.status_code == 202 and recovery is not None:
+        assert recovery.dispatcher.wait_idle(30), "worker não ficou ocioso no prazo de segurança"
+    return resp

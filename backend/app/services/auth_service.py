@@ -5,8 +5,10 @@ Regras centrais:
 - login emite access token (JWT curto) + refresh token opaco ligado a uma sessão;
 - refresh gira o token a cada uso; reutilização revoga a família (sessão);
 - access token só vale se a sessão no servidor estiver ativa (logout/reset revogam);
-- recuperação: resposta genérica, token aleatório de uso único, apenas hash guardado,
-  no máximo um token ativo por usuário;
+- recuperação (E2, doc 21): a requisição só valida, aplica os limites por IP e por e-mail e
+  ENFILEIRA no RecoveryDispatcher (sem banco, sem token, sem transporte) e responde 202 neutro;
+  o worker emite o token (aleatório, uso único, apenas hash guardado, no máximo um ativo por
+  usuário) e entrega depois do COMMIT. Indisponível → 503 `password_recovery_unavailable`;
 - redefinição revoga tokens de recuperação pendentes e TODAS as sessões do usuário.
 
 Consistência com credenciais (versão da credencial):
@@ -24,11 +26,12 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Protocol
 
 from app.core.clock import Clock
 from app.core.errors import AppError
 from app.core.logging import get_logger
-from app.domain.auth import AuthSession, PasswordResetToken, User
+from app.domain.auth import AuthSession, User
 from app.repositories.auth import (
     EmailAlreadyRegisteredError,
     PasswordResetRepository,
@@ -44,7 +47,6 @@ from app.security.tokens import (
     hash_opaque_token,
     new_opaque_token,
 )
-from app.services.password_reset_delivery import PasswordResetDelivery, PasswordResetMessage
 
 logger = get_logger("prazoai.auth")
 
@@ -61,6 +63,19 @@ def _rate_limited(retry: int, message: str = "Muitas tentativas. Tente novamente
 
 def _invalid_credentials() -> AppError:
     return _unauthorized("invalid_credentials", "E-mail ou senha inválidos.")
+
+
+def _recovery_unavailable() -> AppError:
+    return AppError(503, "password_recovery_unavailable", "Recuperação de senha indisponível no momento.")
+
+
+class RecoveryAdmission(Protocol):
+    """Admissão do RecoveryDispatcher (só memória; nunca banco, token ou transporte)."""
+
+    @property
+    def available(self) -> bool: ...
+
+    def submit(self, email: str) -> object: ...
 
 
 def _invalid_reset_token() -> AppError:
@@ -90,13 +105,12 @@ class AuthService:
         hasher: PasswordHasher,
         tokens: AccessTokenCodec,
         clock: Clock,
-        delivery: PasswordResetDelivery,
         login_limiter: RateLimiter,
         forgot_limiter: RateLimiter,
+        forgot_ip_limiter: RateLimiter,
         register_limiter: RateLimiter,
         reset_limiter: RateLimiter,
         refresh_ttl_seconds: int,
-        reset_ttl_seconds: int,
     ) -> None:
         self._users = users
         self._sessions = sessions
@@ -104,13 +118,13 @@ class AuthService:
         self._hasher = hasher
         self._tokens = tokens
         self._clock = clock
-        self._delivery = delivery
+        self._recovery: RecoveryAdmission | None = None   # ligado pela composição (E2); None = desabilitada
         self._login_limiter = login_limiter
         self._forgot_limiter = forgot_limiter
+        self._forgot_ip_limiter = forgot_ip_limiter
         self._register_limiter = register_limiter
         self._reset_limiter = reset_limiter
         self._refresh_ttl = timedelta(seconds=refresh_ttl_seconds)
-        self._reset_ttl = timedelta(seconds=reset_ttl_seconds)
 
     # --- Cadastro -------------------------------------------------------------
     def register(self, name: str, email: str, password: str, client_ip: str = "unknown") -> User:
@@ -226,27 +240,30 @@ class AuthService:
         return user
 
     # --- Recuperação de senha -------------------------------------------------------
-    def forgot_password(self, email: str) -> None:
-        """Sempre retorna sem informar se o e-mail existe (limite por e-mail aplicado a todos)."""
-        retry = self._forgot_limiter.check_and_hit(email)
+    def attach_recovery(self, recovery: RecoveryAdmission | None) -> None:
+        self._recovery = recovery
+
+    @property
+    def recovery_available(self) -> bool:
+        return self._recovery is not None and self._recovery.available
+
+    def request_password_recovery(self, email: str, client_ip: str) -> None:
+        """Caminho PÚBLICO (E2): só memória — disponibilidade, limites e `put_nowait`.
+
+        Não consulta usuário, não abre conexão SQL, não emite token e não chama o transporte. A
+        resposta é a mesma para e-mail existente, inexistente ou fila cheia (descarte contado).
+        """
+        recovery = self._recovery
+        if recovery is None or not recovery.available:          # desabilitada, worker morto ou parando
+            raise _recovery_unavailable()
+        retry = self._forgot_ip_limiter.check_and_hit(client_ip)   # limite por IP primeiro
         if retry is not None:
             raise _rate_limited(retry, "Muitas solicitações. Tente novamente mais tarde.")
-        user = self._users.get_by_email(email)
-        if user is None:
-            return
-        now = self._clock.now()
-        token = new_opaque_token()
-        record = PasswordResetToken(
-            token_hash=hash_opaque_token(token), user_id=user.id, created_at=now, expires_at=now + self._reset_ttl
-        )
-        # Atômico: invalida o token ativo anterior e registra o novo (no máximo um ativo).
-        # A entrega usa a expiração EFETIVAMENTE persistida (no PostgreSQL, relógio pós-lock) e só
-        # acontece depois do COMMIT; se a transação falhar, nada é entregue.
-        issued = self._resets.issue_replacing_active(record, now)
-        try:
-            self._delivery.send(PasswordResetMessage(user.id, user.email, token, issued.expires_at))
-        except Exception:  # falha de entrega não pode revelar existência do e-mail
-            logger.error("password_reset_delivery_failed")
+        retry = self._forgot_limiter.check_and_hit(email)          # limite por e-mail (destinatário)
+        if retry is not None:
+            raise _rate_limited(retry, "Muitas solicitações. Tente novamente mais tarde.")
+        if getattr(recovery.submit(email), "value", None) == "unavailable":   # parada concorrente
+            raise _recovery_unavailable()
 
     def reset_password(self, token: str, new_password: str, client_ip: str = "unknown") -> None:
         retry = self._reset_limiter.check_and_hit(client_ip)  # antes de qualquer Argon2

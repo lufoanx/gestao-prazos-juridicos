@@ -19,7 +19,9 @@ from app.core.errors import ConcurrentUpdateError
 from app.db.tables import auth_sessions, auth_used_refresh_hashes, password_reset_tokens, users
 from app.security.tokens import hash_opaque_token
 from tests.auth_sql_support import Gates, Runner, backend_pid, control_connection, wait_for_lock_waiter
+from tests.auth_utils import forgot
 from tests.conftest import CapturingDelivery, FakeClock
+from tests.recovery_support import drain
 
 pytestmark = pytest.mark.postgres
 API = "/api/v1"
@@ -50,20 +52,22 @@ def lock_row(conn, key_col, key) -> None:
 
 # ---------------------------------------------------------------- 1. expiração efetiva da recuperação
 def test_mensagem_usa_a_expiracao_persistida_apos_espera_pelo_bloqueio(pg_app, pg_schema):
+    """E2: a emissão acontece no WORKER (conexão exclusiva). Os limites de banco do worker são ampliados
+    SÓ neste teste para que a espera observada termine pela liberação do teste, não pelo lock_timeout."""
     clock, delivery = FakeClock(), CapturingDelivery()
-    app = pg_app(clock=clock, delivery=delivery, AUTH_PASSWORD_RESET_TTL_SECONDS="900")
+    app = pg_app(clock=clock, delivery=delivery, AUTH_PASSWORD_RESET_TTL_SECONDS="900",
+                 RECOVERY_DB_LOCK_TIMEOUT_MS="20000", RECOVERY_DB_STATEMENT_TIMEOUT_MS="30000")
     with TestClient(app) as client:
         register_and_login(client)
         uid = user_uuid(pg_schema)
         before = clock.now()
-        t = Runner(app.state.auth.service.forgot_password, EMAIL)
         with control_connection(pg_schema) as holder:                          # rollback/close em finally
             lock_row(holder, users.c.id, uid)                                  # o teste segura o usuário
-            t.start()
+            assert client.post(f"{API}/auth/forgot-password", json={"email": EMAIL}).status_code == 202
             wait_for_lock_waiter(pg_schema, blocked_by=backend_pid(holder))     # emissão PRESA nesse bloqueio
             clock.advance(120)                                                 # tempo passa durante a espera
             holder.rollback()                                                  # libera
-        t.join_result()
+        drain(app)
         assert len(delivery.messages) == 1
         message = delivery.messages[0]
         with pg_schema.connect() as c:
@@ -89,7 +93,7 @@ def test_redefinicao_um_instante_antes_da_expiracao_funciona(pg_app):
     app = pg_app(clock=clock, delivery=delivery, AUTH_PASSWORD_RESET_TTL_SECONDS="900")
     with TestClient(app) as client:
         register_and_login(client)
-        assert client.post(f"{API}/auth/forgot-password", json={"email": EMAIL}).status_code == 202
+        assert forgot(client, EMAIL).status_code == 202
         message = delivery.messages[-1]
         clock.advance((message.expires_at - clock.now()).total_seconds() - 0.000001)
         body = {"token": message.token, "newPassword": "Outra-senha-456"}
@@ -97,16 +101,20 @@ def test_redefinicao_um_instante_antes_da_expiracao_funciona(pg_app):
 
 
 def test_transacao_que_falha_nao_entrega_mensagem(pg_app, pg_schema, caplog):
+    """E2: a falha acontece no worker (rollback); nada é entregue e o worker segue vivo."""
     gates, delivery = Gates(), CapturingDelivery()
     app = pg_app(delivery=delivery, sql_checkpoint=gates)
     with TestClient(app) as client:
         register_and_login(client)
         gates.fail_at("forgot:before_commit")                               # falha DEPOIS do INSERT, antes do COMMIT
-        with pytest.raises(RuntimeError):
-            app.state.auth.service.forgot_password(EMAIL)
-    assert delivery.messages == []                                          # nada entregue
-    with pg_schema.connect() as c:
-        assert c.execute(select(func.count()).select_from(password_reset_tokens)).scalar_one() == 0
+        assert forgot(client, EMAIL).status_code == 202                     # resposta neutra (antes do worker)
+        assert delivery.messages == []                                      # nada entregue
+        with pg_schema.connect() as c:
+            assert c.execute(select(func.count()).select_from(password_reset_tokens)).scalar_one() == 0
+        assert app.state.recovery.dispatcher.counter("issue_failed") == 1
+        gates.failing.clear()
+        assert forgot(client, EMAIL).status_code == 202                     # worker vivo: o próximo é entregue
+        assert len(delivery.messages) == 1
 
 
 # ---------------------------------------------------------------- 2. D6: conflito de concorrência
@@ -278,7 +286,7 @@ def test_sql_token_de_recuperacao_armazenado_somente_como_hash(pg_app, pg_schema
     with TestClient(pg_app(delivery=delivery)) as client:
         register_and_login(client)
         for _ in range(2):
-            assert client.post(f"{API}/auth/forgot-password", json={"email": EMAIL}).status_code == 202
+            assert forgot(client, EMAIL).status_code == 202
     tokens = [m.token for m in delivery.messages]
     assert len(set(tokens)) == 2 and all(len(t) >= 40 for t in tokens)
     with pg_schema.connect() as c:
@@ -296,8 +304,8 @@ def test_sql_reset_revoga_todas_as_sessoes_e_invalida_os_tokens_aplicaveis(pg_ap
     with TestClient(pg_app(delivery=delivery)) as client:
         s1 = register_and_login(client)
         s2 = client.post(f"{API}/auth/login", json={"email": EMAIL, "password": PASSWORD}).json()
-        client.post(f"{API}/auth/forgot-password", json={"email": EMAIL})
-        client.post(f"{API}/auth/forgot-password", json={"email": EMAIL})
+        forgot(client, EMAIL)
+        forgot(client, EMAIL)
         older, latest = (m.token for m in delivery.messages)
         assert client.post(f"{API}/auth/reset-password", json={"token": latest, "newPassword": "Outra-senha-456"}
                            ).status_code == 204

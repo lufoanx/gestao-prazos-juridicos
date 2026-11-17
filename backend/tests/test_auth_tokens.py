@@ -8,7 +8,7 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.auth_utils import API, bearer, error_code, login, register_and_login
+from tests.auth_utils import API, bearer, error_code, forgot, login, register_and_login
 
 SECRET = secrets.token_urlsafe(48)  # gerado por execução; não é segredo real
 
@@ -64,7 +64,7 @@ def test_token_expirado_retorna_401_com_relogio_injetado(client, clock):
 def test_refresh_e_reset_token_nao_valem_como_access_token(client, delivery):
     tokens = register_and_login(client)
     assert client.get(f"{API}/auth/me", headers=bearer(tokens["refreshToken"])).status_code == 401
-    client.post(f"{API}/auth/forgot-password", json={"email": "ana@exemplo.com"})
+    forgot(client, "ana@exemplo.com")
     reset_token = delivery.messages[-1].token
     assert client.get(f"{API}/auth/me", headers=bearer(reset_token)).status_code == 401
 

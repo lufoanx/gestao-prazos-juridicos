@@ -2,6 +2,11 @@
 
 Testes determinísticos: pausas com threading.Event/Barrier dentro do hasher real
 (Argon2id), sem sleeps. Asserções sobre o resultado final valem para qualquer ordem.
+
+E2: o pedido de recuperação é ASSÍNCRONO. `ask(app, e-mail)` faz o pedido público pelo serviço e
+espera o worker (Condition, sem sleep). Os testes de concorrência da emissão passaram a exercitar o
+despachante (pedidos concorrentes → fila → um worker) E, separadamente, o processamento concorrente
+do mesmo item (`_processor`), que preserva a cobertura da atomicidade de `issue_replacing_active`.
 """
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -11,6 +16,7 @@ import pytest
 from app.domain.auth import AuthSession, PasswordResetToken
 from app.security.tokens import hash_opaque_token
 from tests.conftest import InstrumentedHasher
+from tests.recovery_support import ask, drain, start
 
 OLD = "Senha-antiga-123"
 NEW = "Senha-nova-456"
@@ -24,6 +30,7 @@ def setup(make_app, clock, delivery):
         app = make_app(clock=clock, delivery=delivery, password_hasher=hasher, **env)
         service = app.state.auth.service
         user = service.register("Ana", EMAIL, OLD, "10.0.0.1")
+        start(app)                                  # worker da recuperação (sem TestClient/lifespan)
         return app, service, hasher, user
 
     return _setup
@@ -53,7 +60,7 @@ def _user_sessions(app, user_id):
 # ---------- 1. Login × redefinição ----------
 def test_login_pausado_apos_verificacao_nao_cria_sessao_apos_reset(setup, delivery):
     app, service, hasher, user = setup()
-    service.forgot_password(EMAIL)
+    ask(app, EMAIL)
     token = delivery.messages[-1].token
     hasher.pause_after_verify("login")
     out = {}
@@ -79,7 +86,7 @@ def _try(fn):
 def test_sessao_criada_antes_do_reset_e_revogada(setup, delivery):
     app, service, hasher, user = setup()
     pair, _ = service.login(EMAIL, OLD, "10.0.0.2")
-    service.forgot_password(EMAIL)
+    ask(app, EMAIL)
     service.reset_password(delivery.messages[-1].token, NEW, "10.0.0.3")
     assert _status(_try(lambda: service.authenticate(pair.access_token))) == 401
     assert _status(_try(lambda: service.refresh(pair.refresh_token))) == 401
@@ -115,7 +122,7 @@ def test_rehash_funciona_sem_concorrencia(setup):
 
 def test_rehash_concorrente_nao_sobrescreve_senha_redefinida(setup, delivery):
     app, service, hasher, user = setup(force_rehash=True)
-    service.forgot_password(EMAIL)
+    ask(app, EMAIL)
     token = delivery.messages[-1].token
     hasher.pause_after_hash("login")               # pausa após calcular o rehash da senha ANTIGA
     out = {}
@@ -137,16 +144,19 @@ def test_rehash_concorrente_nao_sobrescreve_senha_redefinida(setup, delivery):
 
 # ---------- 3. Recuperação concorrente ----------
 def test_pedidos_concorrentes_de_recuperacao_deixam_um_unico_token_ativo(setup, delivery, clock):
-    app, service, hasher, user = setup(AUTH_FORGOT_MAX_REQUESTS=100, AUTH_RESET_MAX_REQUESTS=100)
+    """Pedidos públicos concorrentes (16 threads) → fila → um worker: um único token ativo."""
+    app, service, hasher, user = setup(AUTH_FORGOT_MAX_REQUESTS=100, AUTH_RESET_MAX_REQUESTS=100,
+                                       AUTH_FORGOT_IP_MAX_REQUESTS=100)
     n = 16
     barrier = threading.Barrier(n)
 
-    def ask(_):
+    def request(_):
         barrier.wait()
-        service.forgot_password(EMAIL)
+        service.request_password_recovery(EMAIL, "10.0.3.1")
 
     with ThreadPoolExecutor(max_workers=n) as pool:
-        list(pool.map(ask, range(n)))
+        list(pool.map(request, range(n)))
+    drain(app)
     store = app.state.auth.store
     active = [t for t in store.reset_tokens.values() if t.used_at is None and t.invalidated_at is None]
     assert len(active) == 1
@@ -154,27 +164,49 @@ def test_pedidos_concorrentes_de_recuperacao_deixam_um_unico_token_ativo(setup, 
     results = [_try(lambda m=m: service.reset_password(m.token, NEW, "10.0.0.9")) for m in delivery.messages]
     assert sum(1 for r in results if r is None) == 1
     assert all(_status(r) == 400 for r in results if r is not None)
+    assert results[-1] is None                       # FIFO, um worker: o último emitido é o válido
+
+
+def test_processamento_concorrente_da_emissao_deixa_um_unico_token_ativo(setup, delivery):
+    """Cobertura preservada da emissão ATÔMICA: 16 processamentos simultâneos do mesmo pedido (como
+    fariam vários processos), diretamente no processador do worker."""
+    app, service, hasher, user = setup(AUTH_RESET_MAX_REQUESTS=100)
+    processor = app.state.recovery.dispatcher._processor
+    n = 16
+    barrier = threading.Barrier(n)
+
+    def process(_):
+        barrier.wait()
+        return processor.process(EMAIL, lambda _stage: True)
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        results = list(pool.map(process, range(n)))
+    assert results == ["delivery_handed_off"] * n
+    store = app.state.auth.store
+    active = [t for t in store.reset_tokens.values() if t.used_at is None and t.invalidated_at is None]
+    assert len(active) == 1
+    outcomes = [_try(lambda m=m: service.reset_password(m.token, NEW, "10.0.0.9")) for m in delivery.messages]
+    assert sum(1 for r in outcomes if r is None) == 1
 
 
 def test_pedido_pausado_na_entrega_nao_deixa_dois_tokens(setup, delivery):
-    """Pedido A emite e pausa na entrega; pedido B completa; ao fim, só o token de B vale."""
+    """Pedido A emite e pausa na entrega (no worker); B é enfileirado e processado depois: só B vale."""
     app, service, hasher, user = setup()
     reached, release = threading.Event(), threading.Event()
     original = delivery.send
 
     def slow_send(message):
         original(message)
-        if threading.current_thread().name == "A":
+        if len(delivery.messages) == 1:
             reached.set()
             assert release.wait(30)
 
     delivery.send = slow_send
-    out = {}
-    t = _run("A", lambda: service.forgot_password(EMAIL), out)
+    service.request_password_recovery(EMAIL, "10.0.0.2")
     assert reached.wait(30)
-    service.forgot_password(EMAIL)
+    service.request_password_recovery(EMAIL, "10.0.0.2")   # admitido enquanto A está na entrega
     release.set()
-    t.join(30)
+    drain(app)
     token_a, token_b = delivery.messages[0].token, delivery.messages[1].token
     assert _status(_try(lambda: service.reset_password(token_a, NEW, "10.0.0.2"))) == 400
     assert _try(lambda: service.reset_password(token_b, NEW, "10.0.0.3")) is None
@@ -233,9 +265,10 @@ def test_redefinicoes_concorrentes_com_tokens_distintos_e_login(setup, clock):
 
 
 def test_reset_e_novo_pedido_concorrentes_mantem_no_maximo_um_token(setup, delivery):
-    app, service, hasher, user = setup(AUTH_FORGOT_MAX_REQUESTS=100, AUTH_RESET_MAX_REQUESTS=100)
+    app, service, hasher, user = setup(AUTH_FORGOT_MAX_REQUESTS=100, AUTH_RESET_MAX_REQUESTS=100,
+                                       AUTH_FORGOT_IP_MAX_REQUESTS=100)
     for _ in range(5):
-        service.forgot_password(EMAIL)
+        ask(app, EMAIL)
         token = delivery.messages[-1].token
         barrier = threading.Barrier(2)
 
@@ -243,13 +276,14 @@ def test_reset_e_novo_pedido_concorrentes_mantem_no_maximo_um_token(setup, deliv
             barrier.wait()
             return _try(lambda: service.reset_password(token, NEW, "10.0.2.1"))
 
-        def ask():
+        def request():
             barrier.wait()
-            service.forgot_password(EMAIL)
+            service.request_password_recovery(EMAIL, "10.0.2.2")   # o worker emite em paralelo ao reset
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            pool.submit(ask)
+            pool.submit(request)
             pool.submit(reset).result()
+        drain(app)
         active = [t for t in app.state.auth.store.reset_tokens.values()
                   if t.used_at is None and t.invalidated_at is None]
         assert len(active) <= 1

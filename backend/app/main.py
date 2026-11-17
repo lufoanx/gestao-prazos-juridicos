@@ -13,11 +13,11 @@ bloqueado em production. Ver docs/backend/06-etapa-2-autenticacao.md.
 """
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime
 from re import fullmatch
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -102,11 +102,14 @@ def create_app(
     processing_port: ProcessingPort | None = None,
     sql_checkpoint: Callable[[str], None] | None = None,
     maintenance_checkpoint: Callable[[str], None] | None = None,
+    recovery_overrides: Mapping[str, Any] | None = None,
 ) -> FastAPI:
     """Cria uma instância isolada da aplicação.
 
     Parâmetros opcionais permitem injetar relógio, entrega de recuperação e hasher
     (testes). O estado de autenticação em memória pertence a esta instância.
+    `recovery_overrides` (testes): relógio monotônico, capacidade de cancelamento e gancho do
+    registro de cancelamento do RecoveryDispatcher.
     """
     settings = get_settings()
     # Bloqueio INCONDICIONAL de produção, antes de configurar log, compor módulos ou criar recursos.
@@ -121,9 +124,16 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
+        recovery = getattr(app_.state, "recovery", None)
+        if recovery is not None:
+            recovery.start()                    # E2: a thread do worker nasce aqui (uma vez), não na importação
         try:
             yield
-        finally:  # encerramento: fecha o engine do modo postgres (nada a fazer em memória)
+        finally:
+            # E2 (§4.7): primeiro o protocolo de encerramento do despachante (orçamento próprio); só depois o
+            # dispose do pool da API. Retornar daqui NÃO prova o término do processo (worker daemon=False).
+            if recovery is not None:
+                recovery.stop()
             auth = getattr(app_.state, "auth", None)
             if auth is not None:
                 auth.close()
@@ -172,7 +182,7 @@ def create_app(
         app.state.auth = None
         if settings.auth_enabled:
             container = build_auth_container(
-                settings, clock=clock, delivery=password_reset_delivery, password_hasher=password_hasher,
+                settings, clock=clock, password_hasher=password_hasher,
                 sql_checkpoint=sql_checkpoint,
             )
             app.state.auth = container
@@ -185,6 +195,21 @@ def create_app(
                 )
             if container.ephemeral_secret:
                 logger.warning("auth_ephemeral_jwt_secret: AUTH_JWT_SECRET ausente; segredo aleatório por instância.")
+
+        # Recuperação de senha (E2): despachante com fila limitada e um worker; None = desabilitada (503).
+        app.state.recovery = None
+        if app.state.auth is not None:
+            from app.recovery.composition import build_recovery
+
+            app.state.recovery = build_recovery(
+                settings, app.state.auth, delivery=password_reset_delivery, sql_checkpoint=sql_checkpoint,
+                **dict(recovery_overrides or {}),
+            )
+            app.state.auth.service.attach_recovery(
+                app.state.recovery.dispatcher if app.state.recovery is not None else None
+            )
+            logger.info("password_recovery available_on_start=%s",
+                        "true" if app.state.recovery is not None else "false")
 
         # Escritórios/equipe (Etapa 3): mesmo estado por instância e mesmo bloqueio em production.
         # A verificação ocorre mesmo com a autenticação desligada.
@@ -248,6 +273,9 @@ def create_app(
         _attach_opportunistic_maintenance(app, settings, maintenance_checkpoint)
     except BaseException:
         # Falha depois de criar recursos (ex.: engine do modo postgres): encerra antes de propagar.
+        recovery = getattr(app.state, "recovery", None)
+        if recovery is not None and recovery.worker_engine is not None:
+            recovery.worker_engine.dispose()     # a thread ainda não existe (só nasce no lifespan)
         if getattr(app.state, "auth", None) is not None:
             app.state.auth.close()
         raise

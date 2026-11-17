@@ -9,9 +9,13 @@
 > verde (33/33 passos, incluindo integração nos dois modos e E2E em PostgreSQL). Esse CI valida a
 > **base**, não este projeto. Branch: `docs/projeto-email-recuperacao`.
 >
-> **Status:** **E1 implementada** (configuração, composição e transporte isolado; §14), aguardando
-> auditoria. **E2–E6 pendentes**: o despachante, as rotas públicas e a ligação com a recuperação de
-> senha **não** existem. E2 aguarda a auditoria dos contratos de §4.7 e §4.8, revisados junto da E1.
+> **Status:** **E1 e E2 implementadas** (E1: configuração, composição e transporte isolado, §14;
+> E2: `RecoveryDispatcher`, ligação com `forgot-password`, limite por IP e `status`, §15; correção da
+> auditoria do orçamento de encerramento, §16; espera residual no cancelamento SMTP e diagnóstico do
+> E2E de convite, §17). **E3–E6
+> pendentes**: capturador SMTP no CI, rotas BFF, telas integradas e E2E da recuperação, documentação
+> operacional. A E2 aguarda auditoria. Produção continua bloqueada; nenhum provedor foi contratado e
+> nenhum e-mail externo foi enviado.
 >
 > **Revisão 3** (commit incremental sobre `ccff5c2`):
 > - D-E8: prazo total do SMTP por **subprocesso supervisionado** (§4.6);
@@ -48,6 +52,10 @@ Convenção usada em todo o documento:
 ---
 
 ## 1. Mapa do que existe hoje
+
+> **Nota (E2):** esta seção é o retrato da **base do projeto** (`08e60a4`), antes das entregas E1 e
+> E2, e foi mantida como histórico. O comportamento atual do pedido de recuperação (assíncrono,
+> limite por IP, 503 com transporte desabilitado, `status`) está em **§15**; o transporte, em §14.
 
 ### 1.1 Backend (FastAPI)
 | Componente | Arquivo | Comportamento atual |
@@ -641,11 +649,12 @@ Cada entrega preserva:
 
 ## 9. Matriz requisito → teste (**planejado**, salvo indicação)
 
-"Existe" = já implementado e executado na base. "Planejado" = só desenho, ainda não escrito nem
-executado. Nesta entrega nenhum teste novo foi escrito ou executado.
+"Existe" = implementado e executado. "Planejado" = só desenho, ainda não escrito nem executado. A
+versão original deste projeto não escrevia testes; as linhas marcadas **existe (E1)**/**(E2)** foram
+atualizadas nas entregas correspondentes (resultados reais em §14 e §15).
 | Requisito | Teste | Situação |
 |---|---|---|
-| Neutralidade (existente × inexistente) | resposta e caminho idênticos; worker descarta inexistente | resposta: **existe** (`test_auth_password_reset`); caminho: planejado (E2) |
+| Neutralidade (existente × inexistente) | resposta e caminho idênticos; worker descarta inexistente | **existe (E2)**: `test_auth_password_reset`, `test_recovery_dispatcher::test_resposta_neutra…`, `test_recovery_postgres::test_caminho_publico_sem_banco…` |
 | Token só como hash | inspeção do banco | **existe** (P3) |
 | Segundo pedido invalida o primeiro | serviço + PostgreSQL | **existe** |
 | Fora de ordem | dois e-mails no capturador; o mais antigo recusado, o mais novo aceito | planejado (E3/E5) |
@@ -656,32 +665,32 @@ executado. Nesta entrega nenhum teste novo foi escrito ou executado.
 | TLS e certificado | `SmtpTransport` recusa `none` fora da exceção local; contexto verifica o certificado | planejado (E1) |
 | Injeção de cabeçalhos | destinatário ou remetente com CR/LF recusado | planejado (E1) |
 | Origem do link | `PUBLIC_APP_ORIGIN` inválida recusada; `Host` forjado não altera o link | planejado (E1/E2) |
-| Limites por IP e por e-mail, estado limitado | serviço com relógio injetável | e-mail: **existe**; IP: planejado (E2) |
-| Fila cheia e reinício | descarte com contador; resposta neutra | planejado (E2) |
-| Pedido vencido na fila não emite token | relógio monotônico controlado; worker retira o item vencido; nenhuma consulta a `users` e nenhuma linha em `password_reset_tokens` | planejado (E2) |
+| Limites por IP e por e-mail, estado limitado | serviço com relógio injetável | **existe (E2)**: `test_recovery_dispatcher::test_limite_por_ip…`, `…test_limite_por_email…`, `…test_indisponivel_nao_consome_limites` |
+| Fila cheia e reinício | descarte com contador; resposta neutra | **existe (E2)**: `test_recovery_dispatcher::test_fila_cheia…`, `test_recovery_postgres::test_pendencias_sao_perdidas…` |
+| Pedido vencido na fila não emite token | relógio monotônico controlado; worker retira o item vencido; nenhuma consulta a `users` e nenhuma linha em `password_reset_tokens` | **existe (E2)**: `test_recovery_dispatcher::test_item_vencido_na_fronteira_exata…` (9,999 s × 10 s) |
 | Fila cheia + transporte indisponível | fila no teto com o transporte recusando conexão; 202 neutro; contadores `queue_full` e `transport_refused`; memória não cresce | planejado (E2/E3) |
 | Encerramento durante envio | servidor SMTP lento em curso; encerramento espera no máximo o prazo de graça; pendências descartadas e contadas; engine encerrado depois; nenhum destinatário em logs | planejado (E2/E3) |
-| Falha e morte do worker | exceção por item: worker segue; morte da thread: `available=false`, 503, nenhuma thread substituta, número de threads constante | planejado (E2) |
-| Dois pedidos do mesmo destinatário em ordem controlada | gates no worker: emissão na ordem de retirada; só o segundo token vale; ambos chegam ao capturador e o primeiro link é recusado | planejado (E3) |
-| Pedido pendente atravessando uma redefinição | item retido por gate; reset concluído com outro link; ao liberar, novo token emitido e enviado (sem cancelamento prometido); senha redefinida continua válida | planejado (E3) |
+| Falha e morte do worker | exceção por item: worker segue; morte da thread: `available=false`, 503, nenhuma thread substituta, número de threads constante | **existe (E2)**: `test_recovery_dispatcher::test_falha_de_um_item…`, `…test_morte_do_worker…`; `test_auth_sql_hardening::test_transacao_que_falha…` |
+| Dois pedidos do mesmo destinatário em ordem controlada | gates no worker: emissão na ordem de retirada; só o segundo token vale; ambos chegam ao capturador e o primeiro link é recusado | **existe (E2, sem capturador)**: `test_recovery_dispatcher::test_dois_pedidos…`; com capturador: planejado (E3) |
+| Pedido pendente atravessando uma redefinição | item retido por gate; reset concluído com outro link; ao liberar, novo token emitido e enviado (sem cancelamento prometido); senha redefinida continua válida | **existe (E2, sem capturador)**: `test_recovery_dispatcher::test_pedido_pendente…`, `test_recovery_postgres::test_pedido_pendente…`; com capturador: planejado (E3) |
 | SMTP lento: por operação × total | servidor que responde dentro do timeout por operação, mas prolonga o envio: o supervisor encerra o filho no prazo total; resultado `deadline_killed` (incerto), sem repetição | planejado (E1/E3) |
 | Prazo vencendo antes de existir socket | resolução DNS lenta simulada no processo filho de teste; o supervisor encerra no prazo total; processo coletado | planejado (E1) |
 | Vencimento durante conexão e negociação TLS | servidor de teste que aceita TCP e não responde ao banner, ou que trava o handshake TLS depois de STARTTLS; encerramento no prazo total | planejado (E1) |
 | Segredos fora de argumentos, arquivos e ambiente | inspeção da linha de comando e do ambiente do filho; nenhum arquivo temporário criado; senha e token ausentes de logs e `stderr` | planejado (E1) |
-| Encerramento enquanto o worker aguarda bloqueio SQL | conexão de controle **do teste** segura a linha do usuário; worker bloqueado na emissão; encerramento → `cancel_safe` sob o protocolo de §4.8 → rollback; nenhum token emitido; conexão exclusiva fechada | planejado (E2, PostgreSQL real) |
-| Nada novo após a parada reconhecida | gates entre etapas: evento sinalizado antes da emissão ou do SMTP; nenhuma linha em `password_reset_tokens` e nenhum processo filho iniciado | planejado (E2) |
-| Caminho limpo | encerramento com o worker ocioso, na etapa de banco ou na de SMTP: `is_alive()` falso, conexão exclusiva fechada, filho coletado, estado `stopped_clean` antes do `dispose` | planejado (E2) |
-| Caminho não limpo explícito | worker preso num ponto não cancelável simulado: `stopped_unclean` registrado no orçamento, `dispose` não usado como cancelamento nem como prova, nenhuma thread substituta | planejado (E2) |
-| Admissão coordenada | `submit` concorrente com o encerramento: nenhum item entra depois da drenagem; todos os descartes contados | planejado (E2) |
+| Encerramento enquanto o worker aguarda bloqueio SQL | conexão de controle **do teste** segura a linha do usuário; worker bloqueado na emissão; encerramento → `cancel_safe` sob o protocolo de §4.8 → rollback; nenhum token emitido; conexão exclusiva fechada | **existe (E2, PostgreSQL real)**: `test_recovery_postgres::test_encerramento_durante_sql…` |
+| Nada novo após a parada reconhecida | gates entre etapas: evento sinalizado antes da emissão ou do SMTP; nenhuma linha em `password_reset_tokens` e nenhum processo filho iniciado | **existe (E2)**: `test_recovery_dispatcher::test_encerramento_descarta_pendencias…`, `test_recovery_postgres::test_sem_capacidade…` (`stopped_after_issue`) |
+| Caminho limpo | encerramento com o worker ocioso, na etapa de banco ou na de SMTP: `is_alive()` falso, conexão exclusiva fechada, filho coletado, estado `stopped_clean` antes do `dispose` | **existe (E2)**: `…test_encerramento_ocioso…`, `test_recovery_postgres::test_encerramento_durante_sql…`, `test_recovery_smtp::test_encerramento_durante_smtp…` |
+| Caminho não limpo explícito | worker preso num ponto não cancelável simulado: `stopped_unclean` registrado no orçamento, `dispose` não usado como cancelamento nem como prova, nenhuma thread substituta | **existe (E2)**: `…test_encerramento_nao_limpo…`, `test_recovery_smtp::test_encerramento_durante_criacao…` |
+| Admissão coordenada | `submit` concorrente com o encerramento: nenhum item entra depois da drenagem; todos os descartes contados | **existe (E2)**: `…test_admissao_concorrente_com_encerramento…` |
 | Criação do filho atrasada | criação simulada lenta (função de criação substituída no teste): duração medida e descontada; a fase 2 recebe só o restante (ou 0) e segue para `SIGTERM`/`SIGKILL`/coleta; nenhum `wait()` sem timeout | planejado (E1) |
-| Falha de coleta após timeout | coleta simulada que não confirma o encerramento: `smtp_reap_failed`, transporte `available=false`, 503 nos novos pedidos, nenhum novo filho e nenhuma repetição do envio | planejado (E1/E2) |
-| Encerramento × criação/publicação do filho | gates na fronteira "checar evento → criar → publicar" nas duas ordens: o filho publicado é encerrado e coletado, ou não é criado | planejado (E2) |
-| Conexão do worker prestes a ser liberada | gate entre "registro marcado LIBERANDO" e "conexão fechada": nenhum cancelamento depois da retirada; com o registro ATIVO, um único cancelamento sob o lock | planejado (E2, PostgreSQL real) |
-| Nenhuma consulta alheia cancelada | consultas concorrentes de outras sessões (pool da API) durante cancelamentos repetidos do worker: todas concluem; só a conexão exclusiva do worker recebe cancelamento | planejado (E2, PostgreSQL real) |
-| Retorno do `lifespan` com worker vivo | worker preso numa etapa além do orçamento (simulada): `lifespan` retorna no orçamento, estado `stopped_unclean`, sem log de encerramento limpo, recurso em uso indicado como ativo | planejado (E2) |
-| Recuperação indisponível após falha de encerramento | depois de `stopped_unclean` ou `smtp_reap_failed`: `status` → `available=false`, `forgot` → 503, nenhum item aceito | planejado (E2) |
+| Falha de coleta após timeout | coleta simulada que não confirma o encerramento: `smtp_reap_failed`, transporte `available=false`, 503 nos novos pedidos, nenhum novo filho e nenhuma repetição do envio | **existe**: E1 (`test_email_transport`) e E2 (`test_recovery_smtp::test_falha_de_coleta…`) |
+| Encerramento × criação/publicação do filho | gates na fronteira "checar evento → criar → publicar" nas duas ordens: o filho publicado é encerrado e coletado, ou não é criado | **existe (E2)**: `test_recovery_smtp::test_encerramento_durante_criacao…` e `…durante_smtp…`; E1: `test_email_transport::test_simulacao_criacao_lenta…` |
+| Conexão do worker prestes a ser liberada | gate entre "registro marcado LIBERANDO" e "conexão fechada": nenhum cancelamento depois da retirada; com o registro ATIVO, um único cancelamento sob o lock | **existe (E2, PostgreSQL real)**: `test_recovery_postgres::test_registro_em_liberacao…`; ATIVO: `…test_encerramento_durante_sql…` |
+| Nenhuma consulta alheia cancelada | consultas concorrentes de outras sessões (pool da API) durante cancelamentos repetidos do worker: todas concluem; só a conexão exclusiva do worker recebe cancelamento | **existe (E2, PostgreSQL real)**: `test_recovery_postgres::test_encerramento_durante_sql…` (consulta alheia esperando o mesmo bloqueio pelo pool da API) |
+| Retorno do `lifespan` com worker vivo | worker preso numa etapa além do orçamento (simulada): `lifespan` retorna no orçamento, estado `stopped_unclean`, sem log de encerramento limpo, recurso em uso indicado como ativo | **existe (E2)**: `…test_encerramento_nao_limpo…`, `test_recovery_postgres::test_sem_capacidade…` |
+| Recuperação indisponível após falha de encerramento | depois de `stopped_unclean` ou `smtp_reap_failed`: `status` → `available=false`, `forgot` → 503, nenhum item aceito | **existe (E2)**: `…test_encerramento_nao_limpo…`, `test_recovery_smtp::test_falha_de_coleta…` |
 | Plataforma | `EMAIL_TRANSPORT=smtp` recusado no startup sem `os.killpg` ou `resource` (simulado); `disabled` inicia normalmente | planejado (E1) |
-| Resposta pública sem banco e sem transporte | engine e transporte instrumentados para falhar se tocados durante a requisição; 202 para e-mail existente e inexistente | planejado (E2) |
+| Resposta pública sem banco e sem transporte | engine e transporte instrumentados para falhar se tocados durante a requisição; 202 para e-mail existente e inexistente | **existe (E2)**: memória (`test_recovery_dispatcher::test_caminho_publico…`) e PostgreSQL (`test_recovery_postgres::test_caminho_publico…`, eventos dos dois engines) |
 | Token fora de URLs, storage e logs | E2E inspecionando requisições, `localStorage`, `sessionStorage`, cookies e logs | planejado (E5) |
 | Proteções do BFF | CSRF, Origin, corpo, `no-store`, cookies intocados, resultado desconhecido | padrão **existe** (convites); rotas novas: planejado (E4) |
 | Isolamento entre usuários | token de A não redefine B; pedidos de A não afetam B | parcialmente **existe** (serviço); E2E planejado |
@@ -733,7 +742,7 @@ executado. Nesta entrega nenhum teste novo foi escrito ou executado.
 | D-E8 | Prazo do envio SMTP | **subprocesso supervisionado** em fases (criação medida; comunicação até `SMTP_SEND_DEADLINE_SECONDS`; `SIGTERM` com tolerância; `SIGKILL`; coleta com espera limitada; falha de coleta → transporte indisponível, sem novo filho); segredos e token só pela entrada padrão; sem prazo absoluto do sistema operacional; alternativa: `smtplib` na thread **sem** limite total, declarado |
 | D-E9 | Pedido pendente × redefinição | não cancelar nesta fase (comportamento documentado); cancelamento como opção futura |
 | D-E10 | Workers | exatamente um nesta fase; particionar por destinatário só se houver necessidade comprovada |
-| D-E11 | Prazo de fila e encerramento | `RECOVERY_QUEUE_MAX_WAIT_SECONDS=60`; protocolo de §4.7 (admissão e drenagem sob lock, evento de parada, criação e publicação do filho sob o lock, `stopped_clean` só com término comprovado, `stopped_unclean` com recuperação indisponível, worker `daemon=False`, término forçado como responsabilidade operacional) |
+| D-E11 | Prazo de fila e encerramento | `RECOVERY_QUEUE_MAX_WAIT_SECONDS=60`; protocolo de §4.7 (admissão e drenagem sob lock, evento de parada, criação do filho **fora** do lock com reserva "criando" e publicação sob o lock, `stopped_clean` só com término comprovado, `stopped_unclean` com recuperação indisponível, worker `daemon=False`, término forçado como responsabilidade operacional) |
 | D-E12 | Cancelamento no banco | conexão **exclusiva** do worker (engine próprio com `NullPool`) + `cancel_safe` do driver sob o protocolo de propriedade de §4.8; sem `pg_cancel_backend`, sem conexão de controle e sem privilégios novos |
 | D-E13 | Plataforma do transporte SMTP | só Linux/contêiner nesta fase; recusa no startup em outras plataformas; `disabled` em qualquer plataforma |
 
@@ -788,12 +797,278 @@ executado. Nesta entrega nenhum teste novo foi escrito ou executado.
   - `disabled` sem importar `resource` nem o supervisor;
   - plataforma não suportada.
 
-**Não implementado (E2–E6):** despachante e fila, rotas públicas, ligação com `forgot-password`,
-cancelamento no banco (§4.8), capturador no CI, telas e E2E. O `forgot-password` continua com a
-entrega `Noop` e as respostas HTTP não mudaram.
+**Não implementado na E1 (feito depois, na E2 — §15):** despachante e fila, `status`, ligação com
+`forgot-password`, cancelamento no banco (§4.8). **Ainda pendente (E3–E6):** capturador no CI, rotas
+BFF, telas e E2E da recuperação.
 
 **Explicação curta para a apresentação:** "O envio de e-mail roda num processo separado, que só
 sabe falar SMTP. Ele recebe tudo por um cano de entrada, nunca pela linha de comando, e responde
 uma palavra (aceito, recusado…). O processo principal mede o tempo com um relógio que não volta
 atrás. Se o prazo vence, pede para encerrar, força se for preciso e confirma o fim do processo.
 Se não conseguir confirmar, desliga o envio em vez de tentar de novo."
+
+## 15. O que a E2 implementou (e o que continua de fora)
+
+**Escopo:** `RecoveryDispatcher` com fila limitada e **um** worker; `POST /auth/forgot-password`
+assíncrono (sem banco nem transporte na requisição); limite por IP; `GET
+/auth/password-recovery/status` → `{available}`; composição e ciclo de vida na aplicação. Nada de
+BFF, telas, capturador em contêiner ou provedor. Produção continua bloqueada.
+
+### 15.1 Mapa dos arquivos
+| Arquivo | Responsabilidade |
+|---|---|
+| `app/recovery/dispatcher.py` | fila FIFO em memória (teto e prazo), admissão sob lock (`submit` = `put_nowait`), worker único `daemon=False`, verificação da parada antes de cada etapa, contadores, morte → `failed` sem substituta, protocolo de encerramento §4.7 com orçamento total, `wait_idle`/`wait_state` (Condition) |
+| `app/recovery/processor.py` | um pedido no worker: `lookup` → `issue` (emissão atômica existente, instantes persistidos, COMMIT) → `deliver` (uma tentativa, depois do COMMIT, sem conexão SQL aberta); só categorias nos logs |
+| `app/recovery/cancel.py` | registro de cancelamento (lock + geração, ATIVA/LIBERANDO) e verificação da capacidade (`libpq ≥ 17` e `cancel_safe`); sem SQLAlchemy (o modo memória não o importa) |
+| `app/recovery/worker_db.py` | engine exclusivo do worker (`NullPool`, `application_name=prazoai-recovery`), `ExclusiveSqlContext` (`SET LOCAL` próprios, publicação/retirada no registro, fechamento da conexão física); reutiliza os repositórios SQL existentes sem alterá-los |
+| `app/recovery/delivery.py` | adaptador `TransportPasswordResetDelivery`: composer + transporte da E1 (disponibilidade, `cancel(timeout)`, filho sem coleta) |
+| `app/recovery/composition.py` | monta o despachante por instância (`None` com `disabled`); `RecoveryRuntime.stop()` descarta o engine exclusivo só no caminho limpo |
+| `app/services/auth_service.py` | `request_password_recovery`: disponibilidade → limite por IP → limite por e-mail → `submit` → 202; `recovery_available` |
+| `app/api/auth.py`, `app/schemas/auth.py` | rota `forgot-password` com o IP confiável; rota `password-recovery/status` (`PasswordRecoveryStatus`, só `available`) |
+| `app/main.py` | `lifespan`: `start()` na entrada (a thread nunca nasce na importação); na saída, `stop()` **antes** do `dispose` do pool da API |
+| `app/core/config.py` | `AUTH_FORGOT_IP_*`, `RECOVERY_QUEUE_MAX`, `RECOVERY_QUEUE_MAX_WAIT_SECONDS`, `RECOVERY_SHUTDOWN_GRACE_SECONDS`, `RECOVERY_DB_LOCK_TIMEOUT_MS`, `RECOVERY_DB_STATEMENT_TIMEOUT_MS` (faixas; lock ≤ statement) |
+| `app/services/password_reset_delivery.py` | `PasswordResetMessage` ganhou `issued_at` (instante persistido); `NoopPasswordResetDelivery` passou a `available=False` |
+| `app/email/smtp_subprocess.py`, `app/email/transport.py` | **ajuste mínimo na E1** (abaixo) |
+
+### 15.2 Ciclo de um pedido
+1. **Requisição** (`POST /api/v1/auth/forgot-password`): o corpo é validado e o e-mail normalizado
+   (Pydantic). O serviço verifica a disponibilidade (despachante `running`, worker vivo, entrega
+   disponível); indisponível → **503 `password_recovery_unavailable`** sem consumir limites. Depois,
+   limite **por IP** (`AUTH_FORGOT_IP_MAX_REQUESTS=10`/900 s, IP pelo mecanismo confiável existente) e
+   limite **por e-mail** (3/900 s), ambos com 429 e `Retry-After`. Por fim `submit`: aceito, fila
+   cheia (descarte contado em `queue_full`) → **202 com a mesma mensagem**; parada concorrente → 503.
+   Nada disso consulta usuário, abre conexão SQL, gera token ou chama o transporte.
+2. **Worker** (thread `prazoai-recovery-worker`): retira em ordem FIFO; item com tempo de fila
+   `≥ RECOVERY_QUEUE_MAX_WAIT_SECONDS` (relógio monotônico; fronteira exata incluída) é descartado
+   (`queue_expired`) **antes** de consultar o usuário.
+3. `lookup` (conexão exclusiva) → inexistente: `unknown_user`. `issue`: token novo,
+   `issue_replacing_active` (bloqueio, relógio pós-lock, invalidação do anterior, hash apenas,
+   COMMIT). `deliver`: só depois do COMMIT e com a conexão já fechada, compõe com "gerado em"/"válido
+   até" persistidos e faz **uma** tentativa. Falha de um item → categoria no log, o worker segue.
+4. **Redefinição:** inalterada (consumo único, troca atômica, `credential_version + 1`, revogação de
+   todas as sessões). Pedido ainda na fila **não** é cancelado por ela (D-E9): é processado depois e
+   emite um token novo e válido para o titular.
+
+### 15.3 Encerramento (implementação de §4.7–§4.8)
+- `stop()` fixa **na entrada** um único prazo monotônico (`Deadline`, `RECOVERY_SHUTDOWN_GRACE_SECONDS`)
+  que cobre **todas** as aquisições de lock (admissão, registro de cancelamento, transporte), o
+  cancelamento, a supervisão do filho, a verificação final e o `join` (corrigido na auditoria, §16).
+- Sob o lock: `stopping`, drenagem contada (`shutdown_discarded`) e evento de parada; nenhuma
+  admissão depois disso. O lock nunca é mantido durante banco, criação do filho ou SMTP.
+- Cancelamento: `delivery.cancel(timeout=restante)` (o transporte marca a parada, encerra o filho
+  publicado ou o encerra ao voltar da criação); no banco, `cancel_safe(timeout=min(1 s, restante))`
+  **só** com a capacidade e com o registro ATIVO, sob o lock do registro, no máximo a cada 200 ms.
+  Sem capacidade: **nenhum** cancelamento ativo (nem bloqueante).
+- `stopped_clean` só com a thread terminada, nenhuma conexão exclusiva aberta e nenhum filho sem
+  coleta; senão `stopped_unclean` (log `dispatcher_stop_unclean` com etapa e recursos ativos) e a
+  recuperação continua indisponível. O `lifespan` retorna no orçamento; **isso não prova o término
+  do processo** (worker `daemon=False`).
+
+### 15.4 Ajuste mínimo na E1 (incompatibilidade concreta)
+- **Problema:** `SubprocessSmtpTransport.cancel()` esperava `SMTP_TERM_GRACE_SECONDS +
+  SMTP_REAP_TIMEOUT_SECONDS` configurados (até 20 s), independentemente do orçamento de desligamento
+  (padrão 5 s); o encerramento podia ultrapassar o próprio orçamento. Além disso, o despachante não
+  tinha como saber se havia filho sem coleta confirmada.
+- **Ajuste:** `cancel(timeout=None)` — com `timeout`, SIGTERM usa no máximo metade do restante e a
+  coleta após SIGKILL o que sobrar; sem `timeout`, o comportamento da E1 é idêntico. Propriedade
+  somente leitura `has_unconfirmed_child` (criação em curso ou filho publicado sem coleta).
+- **Regressão:** `test_recovery_smtp::test_cancelamento_do_transporte_respeita_o_orcamento_informado`
+  (filho que ignora SIGTERM, `term_grace=10`, `reap=10`, `cancel(timeout=1)` retorna em < 1,5 s e
+  coleta com SIGKILL). As 23 provas da E1 continuam passando sem alteração.
+
+### 15.5 Decisões de implementação (dentro do contrato aprovado)
+- **Disponibilidade antes dos limites:** com a recuperação indisponível, a requisição responde 503
+  sem consumir os limitadores (`test_indisponivel_nao_consome_limites`).
+- **IP antes do e-mail:** um IP bloqueado não consome o limite do destinatário.
+- **Thread no `lifespan`:** sem `lifespan` (ex.: `TestClient` sem `with`), não há consumidor e a
+  recuperação responde 503 — nunca se enfileira sem worker.
+- **Entrega injetada nos testes:** `create_app(password_reset_delivery=...)` substitui o transporte,
+  mas percorre o mesmo caminho assíncrono (sem atalho síncrono de produção).
+
+### 15.6 Alterações em testes anteriores (justificadas)
+| Testes | Alteração | Motivo |
+|---|---|---|
+| `test_auth_password_reset` (todos) | `_forgot` espera o worker (`drain`) depois do 202 | `forgot-password` passou a assíncrono (mudança intencional); asserções mantidas |
+| `test_auth_password_reset::test_falha_na_entrega…` | renomeado para `…_nem_derruba_o_worker`; verifica também o 2º pedido | a falha agora ocorre no worker |
+| `test_auth_password_reset::test_entrega_padrao…` | substituído por `test_transporte_desabilitado_responde_503_sem_emitir_token` | D-E5: o padrão `disabled` deixou de responder 202 |
+| `test_auth_consistency` (6) | `service.forgot_password` → `ask` (pedido + espera); concorrência de pedidos via despachante **e** novo teste de processamento concorrente direto no processador (preserva a cobertura da emissão atômica) | método síncrono removido |
+| `test_auth_sql_hardening` (3) | espera do worker; limites do worker ampliados **só** no teste de espera por bloqueio; falha antes do COMMIT verificada no worker, que segue vivo | emissão no worker |
+| `test_auth_cost_protection`, `_retention`, `_security`, `_tokens`, `_storage_modes` | `forgot(client, …)` (pedido + espera) | idem |
+| `conftest.py` | `CapturingDelivery.available=True`; `client` com `lifespan`; `make_app` encerra o despachante antes do engine; `recovery_overrides` | ciclo de vida do worker |
+
+Nenhum teste foi removido nem teve limite afrouxado; os limites ampliados por variável são só os de
+testes que fazem mais pedidos do que o padrão permite (como já ocorria antes).
+
+### 15.7 Testes novos
+- `tests/test_recovery_dispatcher.py` (memória, 20): status, ausência de worker sem `lifespan`, um
+  worker, neutralidade, caminho público instrumentado por contexto, limites por IP/e-mail e cabeçalho
+  forjado, fila cheia, fronteira exata do prazo (9,999 × 10 s), FIFO, falha por item, morte do
+  worker, encerramentos limpo/não limpo, admissão concorrente, pedido pendente × redefinição, logs.
+- `tests/test_recovery_postgres.py` (PostgreSQL real, 8): conexão exclusiva e entrega depois do
+  COMMIT, caminho público com eventos dos dois engines, encerramento durante SQL com cancelamento
+  só da conexão do worker (consulta alheia intacta), capacidade ausente (sem cancelamento, não
+  limpo), registro em liberação, capacidade registrada, perda ao reiniciar, pedido pendente × reset.
+- `tests/test_recovery_smtp.py` (subprocesso real + SMTP local, 5): fluxo com link em fragmento e
+  reset pelo token recebido, encerramento durante SMTP e durante a criação do filho, regressão do
+  `cancel(timeout)`, falha de coleta → indisponível.
+- Apoio: `tests/recovery_support.py` (espera determinística, gates, relógio monotônico controlado).
+
+### 15.8 Limitações (inalteradas ou novas)
+- Fila, limites e contadores em memória, **por processo**; pedidos na fila se perdem no reinício
+  (descarte contado só no encerramento coordenado).
+- Uma emissão confirmada pouco antes da parada pode deixar um token não enviado
+  (`stopped_after_issue`); ele expira e a P5 o remove.
+- Neutralidade de tempo só no **caminho** da requisição; disputa de CPU/GIL e banco com o worker
+  continua como risco residual. Não há promessa de ausência absoluta de enumeração.
+- `stopped_unclean` não encerra o processo; término forçado é responsabilidade operacional.
+- No caminho não limpo o engine exclusivo não é descartado (com `NullPool`, `dispose` não fecharia a
+  conexão em uso de qualquer forma).
+- A conexão do worker é aberta antes do registro: o `connect_timeout` limita essa fase, que não é
+  cancelável.
+- Sem capturador no CI, telas ou BFF: E3–E6.
+
+### 15.9 Roteiro curto para o TCC (cerca de 2 minutos)
+1. "Quando alguém pede para recuperar a senha, a API só confere o formato, aplica dois limites — por
+   IP e por e-mail — e coloca o pedido numa fila em memória. Responde na hora, igual para quem tem
+   conta e para quem não tem."
+2. "Um único trabalhador em segundo plano pega os pedidos na ordem. Se o pedido esperou demais, é
+   descartado antes de olhar o banco. Senão, procura a conta, gera o token, grava só o hash e
+   confirma a transação. Só depois monta o e-mail e tenta enviar uma vez."
+3. "Ao desligar, fechamos a porta da fila, contamos o que ficou para trás, pedimos para parar o que
+   está em andamento — cancelando só a conexão do próprio trabalhador — e esperamos um tempo
+   máximo. Só dizemos que desligou limpo quando temos prova; se não, avisamos e mantemos a
+   recuperação indisponível."
+
+## 16. Correção da auditoria da E2: o orçamento de encerramento cobre todas as esperas por locks
+
+### 16.1 Defeito
+A auditoria de `69300a9` reproduziu, com gates controlados e `RECOVERY_SHUTDOWN_GRACE_SECONDS=1`:
+1. worker em processamento e lock do `CancelRegistry` retido → `stop()` ainda bloqueado após 1,4 s;
+2. lock do `SubprocessSmtpTransport` retido → `cancel(timeout=1)` ainda bloqueado após 1,4 s.
+
+Causas (todas corrigidas):
+- `stop()` consultava `registry.active` e outros estados por propriedades que adquiriam locks **sem
+  prazo**; `_conclude()` também lia `open_connections` e `has_unconfirmed_child` sem prazo;
+- `cancel_active(timeout)` podia gastar o timeout inteiro adquirindo o lock e depois entregava **o
+  mesmo** timeout ao driver;
+- `transport.cancel(timeout)` adquiria o lock sem prazo e só começava a contar o orçamento depois;
+- a admissão consultava `transport.available`, que tomava o lock do transporte dentro da seção crítica
+  de admissão (espera bloqueante aninhada).
+
+**Reprodução executada nesta correção** (`repro` com gates, mesmos dois cenários, prazo de observação de
+1,4 s): em `69300a9`, `stop()` e `cancel(timeout=1)` continuavam bloqueados após 1,40 s; com a correção,
+ambos retornaram em 1,00 s.
+
+### 16.2 Correção
+| Arquivo | Mudança |
+|---|---|
+| `app/core/deadline.py` (novo) | `Deadline`: instante-limite monotônico fixado na entrada; `remaining(cap)`; `acquire(lock, cap)` espera só o restante (esgotado → tentativa não bloqueante). Nada reinicia o prazo |
+| `app/recovery/dispatcher.py` | `stop()` cria **um** `Deadline` e o repassa a tudo: lock de admissão, `delivery.cancel(timeout=restante)`, `registry.cancel_active(deadline, lock_cap=200 ms)`, `join(restante)`, verificação final e publicação do estado final. Conclusão com **provas obtidas no prazo**: `snapshot(deadline)` do registro e `unconfirmed_child(restante)` da entrega; estado não confirmado → `connection=unknown`/`child=unknown` → `stopped_unclean`. Sem o lock de admissão no prazo: não limpo, sem esperar de novo; o worker (espera ociosa limitada a 0,5 s) reconhece a parada e descarta/conta as pendências não drenadas |
+| `app/recovery/cancel.py` | `cancel_active(deadline, lock_cap, driver_cap=1 s)` → `CancelOutcome`; o driver recebe `min(1 s, restante DEPOIS do lock)`; restante zero → `budget_exhausted`, sem chamar o driver; sem capacidade → `no_capability` sem tocar no lock. `snapshot(deadline)` → `None` quando não confirmado |
+| `app/email/smtp_subprocess.py` | `cancel(timeout)` conta o prazo **desde a entrada**, inclusive o lock; sem o lock no prazo, marca parada e indisponibilidade sem lock (flags de sentido único, relidas por `send` sob o lock antes de criar ou transmitir) e devolve `False` (não confirmado). `_terminate` usa o mesmo `Deadline`. `unconfirmed_child(timeout)` → `None` quando não confirmado. `available` passou a ser leitura sem lock (não bloqueia dentro da admissão) |
+| `app/email/transport.py`, `app/recovery/delivery.py` | contrato `cancel(timeout) -> bool` e `unconfirmed_child(timeout)`; o adaptador repassa ao transporte |
+
+Preservado: propriedade da conexão (o `cancel_safe` continua chamado **segurando** o lock do registro e
+só com o registro ATIVO), nenhuma consulta alheia cancelada, parada reconhecida antes de cada etapa,
+nenhum worker ou subprocesso substituto, nenhuma ordem inversa de locks e nenhum callback bloqueante
+dentro de seção crítica. O prazo configurado não foi alterado.
+
+### 16.3 Testes de regressão (`tests/test_recovery_shutdown_budget.py`, 12)
+| Teste | Tipo | Cobre |
+|---|---|---|
+| `test_lock_de_admissao_retido…` | dublê (processador com gate) + despachante real | `stop()` no orçamento; 2ª chamada também; nenhuma emissão/entrega após liberar; pendência contada pelo worker; nunca promovido a limpo |
+| `test_lock_do_registro_retido_stop…` [capacidade sim/não] | dublê (conexão de driver falsa) + registro real | `stop()` no orçamento; nenhum `cancel_safe` sem propriedade; `connection=unknown` |
+| `test_sem_provas_nao_ha_encerramento_limpo…` | dublê | worker terminado, mas registro não confirmável → não limpo |
+| `test_orcamento_esgotado_antes_da_conclusao…` | dublê | conclusão sem nova espera depois de esgotado |
+| `test_varias_tentativas…` | dublê | ≥ 2 cancelamentos, cada um com o restante do MESMO prazo (decrescente) |
+| `test_tempo_gasto_no_lock_e_descontado…` | dublê (lock que avança relógio monotônico falso) | 1,0 s − 0,6 s no lock = 0,4 s ao driver; prazo esgotado → driver não chamado; teto de 1 s preservado |
+| `test_cancelamento_sem_capacidade…` | dublê | sem capacidade não espera o lock nem chama o driver |
+| `test_lock_do_registro_retido_cancel_active…` | dublê | `LOCK_TIMEOUT` no prazo; `snapshot` → desconhecido |
+| `test_lock_do_transporte_retido_cancel…` | **SMTP real** (transporte da E1, servidor local) | `cancel(timeout=1)` no prazo, `False`, indisponível; nenhum filho depois |
+| `test_worker_bloqueado_no_lock_do_transporte…` | **SMTP real** + app em memória | `stop()` no orçamento; liberado o lock, `cancelled` sem criar filho nem transmitir |
+| `test_postgres_real_lock_do_registro_retido…` | **PostgreSQL real** | worker preso num bloqueio de linha + lock do registro retido: `stop()` no orçamento, nenhum cancelamento, consulta do worker intacta; ao liberar, emissão em curso conclui (corrida documentada) e nada é enviado |
+
+Ajuste em teste existente: `test_recovery_postgres::test_registro_em_liberacao…` passou a usar o novo
+contrato (`cancel_active(Deadline(1.0))` → `CancelOutcome.NO_ACTIVE`); a asserção é a mesma (sem
+propriedade, nenhum cancelamento).
+
+**Executado durante a correção:** suítes da E2 e regressões da E1 (`test_recovery_*`, `test_email_*`,
+com PostgreSQL real) quatro vezes seguidas — 120 passaram em cada execução. A validação completa da
+árvore final (backend, PostgreSQL, estáticas, frontend, integração, E2E) está no relatório da entrega.
+
+### 16.4 Pendência separada (não alterada)
+`test_notifications::test_marcar_lida_individual_e_de_terceiros` falha quando o servidor PostgreSQL
+usa `TimeZone=America/Sao_Paulo` (datas como `…-03:00` em vez de `…Z`). Reproduzido na **base**
+`c86e4d4`, sem as mudanças da E2; o CI usa UTC. Não foi corrigido nem alterado nesta entrega; as
+validações locais usam o cluster descartável em UTC, como o CI.
+
+## 17. Segunda auditoria da correção: espera residual no cancelamento SMTP e diagnóstico do E2E de convite
+
+### 17.1 Espera residual em `SubprocessSmtpTransport.cancel()`
+**Defeito (reproduzido pela auditoria em `845a622`):** depois de `_terminate(child, deadline)` devolver
+`False` (coleta não confirmada), o código publicava a indisponibilidade com `with self._lock`, **sem
+prazo**. Com outra thread retendo o lock, `cancel(timeout=1)` continuava bloqueado após 1,4 s, embora a
+aquisição inicial já tivesse sido corrigida (§16).
+
+**Correção:** a publicação usa `deadline.acquire(self._lock)` com o **restante do mesmo prazo**; sem o
+lock no prazo, escreve `_available = False` sem lock (flag de sentido único True→False, relida por
+`send` sob o lock antes de criar ou transmitir). O prazo não é reiniciado nem ampliado; o resultado
+continua `False` (nenhuma coleta é declarada) e o filho segue registrado como não confirmado.
+
+**Revisão dos demais caminhos do cancelamento:** `cancel()` → aquisição inicial (com prazo, §16) →
+`_terminate` → `os.killpg` (sem lock) e `Popen.poll()`/`Popen.wait(timeout)` (o `wait` com timeout usa
+o lock interno do `Popen` de forma não bloqueante, em laço limitado pelo timeout) → publicação (corrigida
+aqui). `_finish` e `send` são caminhos do worker, não do cancelamento. No despachante, `stop()` só usa
+`Deadline` (§16). Resta apenas a escrita de log (`logging`), que usa o lock do handler — risco comum a
+toda a aplicação, não tratado aqui.
+
+**Regressão:** `test_recovery_shutdown_budget::test_cancel_nao_espera_sem_prazo_ao_publicar_indisponibilidade_apos_coleta_nao_confirmada`
+(DUBLÊS: filho falso sem processo real, `_terminate` com gate devolvendo `False`; o lock do transporte
+é retido por outra thread ANTES desse retorno). Verifica: retorno no orçamento, `False`, transporte
+indisponível, filho continua não confirmado, `send` posterior → `cancelled` sem criar filho nem
+transmitir. Gates e lock liberados em `finally`. **Com o código de `845a622` o teste falha**
+("cancel(timeout) bloqueado além do orçamento"); com a correção, passa.
+
+### 17.2 Falha do E2E `deadlines.spec.ts:103` (`joinByInvite`) — diagnóstico
+**Falha observada** (validação de `845a622`, 1ª execução completa): timeout de 60 s em
+`getByLabel("Link do convite (exibido só agora)").inputValue()` logo após o clique em "Gerar link de
+convite". Instantâneo da página na falha: rota `/app/escritorio`, sessão e escritório carregados, botão
+**com foco** (`[active]`), **sem** "Gerando…", **sem** mensagem de erro, **sem** link e lista
+"Nenhum convite emitido."; código de ingresso já exibido.
+
+**Investigação (contas fictícias; registros sanitizados — só método, caminho com IDs mascarados e
+status; nenhum corpo, token, cookie ou senha):**
+1. *O clique produziu requisição? Qual a resposta?* Instrumentei temporariamente (fora do repositório)
+   o caminho de `joinByInvite`: em 30 repetições isoladas e em 4 execuções completas do E2E (56
+   passagens por `joinByInvite`), **todo** clique gerou exatamente um `POST
+   /bff/api/offices/:id/invitations` → 201, sem `requestfailed`, sem erro de console ou `pageerror`,
+   sem navegação extra e sem renovação de sessão no intervalo. A falha **não se repetiu** nessas
+   execuções.
+2. *A interface estava pronta?* Em 23 das 56 passagens o clique ocorreu enquanto ainda chegavam as
+   respostas das leituras iniciais da página (código de ingresso, convites, solicitações). O cartão
+   "Código de ingresso", **acima** do botão, troca "Carregando…" (uma linha) pelo código, o texto e o
+   botão "Gerar novo código" — o botão de convite **desce 65 px** quando essa resposta chega.
+3. *Reprodução determinística* (spec temporária, sem sleep, ordem imposta por rota retida): retendo a
+   resposta do código de ingresso, `mouse.down()` sobre o botão, liberação da resposta, espera do código
+   visível, `mouse.up()` no mesmo ponto → **nenhum `submit`, nenhuma requisição**, botão com foco, lista
+   vazia — exatamente o instantâneo da falha (3/3). Controle sem deslocamento: 1 `submit`, `POST` e link
+   exibido (3/3). O clique do Playwright é `mousedown` + `mouseup` em eventos separados; a verificação de
+   estabilidade não impede um deslocamento entre os dois.
+4. *Erro JavaScript, perda de estado, limite de taxa?* Não observados: nenhum erro, a sessão e o
+   estado do escritório permaneceram; uma resposta 429 apareceria como mensagem de erro no cartão.
+
+**Conclusão:** mecanismo **reproduzido** — clique perdido por deslocamento de layout (layout shift)
+entre `mousedown` e `mouseup`, quando o cartão do código de ingresso termina de carregar no instante do
+clique. **Não confirmado** que foi exatamente isso na execução que falhou (não havia rastreamento de
+rede naquela execução), mas é a única hipótese compatível com todos os sinais do instantâneo (foco no
+botão, nenhum estado de envio, nenhum erro, nenhum convite). Não é defeito da E2 nem do backend.
+
+**Fora do escopo da E2 — decisão pendente (nada alterado):**
+- *Teste:* em `joinByInvite`, esperar uma condição determinística da página pronta antes do clique (por
+  exemplo, o código de ingresso e a lista de convites visíveis), sem sleep, retry, `force` ou aumento de
+  timeout;
+- *Produto (opcional):* reservar o espaço dos cartões em carregamento na tela do escritório, evitando o
+  deslocamento também para pessoas (um clique humano no mesmo instante teria o mesmo efeito).
+- *A confirmar no CI oficial:* repetir o E2E com a imagem `mcr.microsoft.com/playwright:v1.64.1-noble`
+  (Chromium 156; aqui foi usado o Chromium 153 pré-instalado), de preferência com rastreamento de rede
+  sanitizado em caso de falha.

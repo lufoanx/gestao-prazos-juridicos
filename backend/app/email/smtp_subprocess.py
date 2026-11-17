@@ -28,6 +28,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from app.core.deadline import Deadline
 from app.email.config import EmailConfig
 from app.email.message import CHILD_CATEGORIES, OutgoingEmail, SendResult
 from app.email.transport import UnsupportedPlatformError
@@ -68,18 +69,65 @@ class SubprocessSmtpTransport:
     # ------------------------------------------------------------ estado
     @property
     def available(self) -> bool:
-        with self._lock:
-            return self._available and not self._stop
+        """Leitura SEM lock (E2, correção da auditoria): é consultada pela admissão do despachante e não
+        pode bloquear dentro de outra seção crítica. As duas flags só mudam num sentido (`_available`
+        True→False, `_stop` False→True) e cada leitura de atributo é atômica; um valor um instante
+        atrasado é seguro porque `send` revalida tudo sob o lock antes de qualquer etapa."""
+        return self._available and not self._stop
 
-    def cancel(self) -> None:
-        """Parada coordenada. Não espera nenhuma criação; encerra um filho já publicado."""
+    @property
+    def has_unconfirmed_child(self) -> bool:
+        """Leitura sem prazo (testes/observação). No encerramento use `unconfirmed_child(timeout)`."""
         with self._lock:
+            return self._creating or self._child is not None
+
+    def unconfirmed_child(self, timeout: float) -> bool | None:
+        """Criação em curso ou filho sem coleta confirmada; None se o lock não vier no prazo (desconhecido)."""
+        if not self._lock.acquire(timeout=max(0.0, timeout)):
+            return None
+        try:
+            return self._creating or self._child is not None
+        finally:
+            self._lock.release()
+
+    def cancel(self, timeout: float | None = None) -> bool:
+        """Parada coordenada. Não espera nenhuma criação; encerra um filho já publicado.
+
+        `timeout` (E2): orçamento TOTAL desta chamada, contado desde a ENTRADA — inclui a aquisição do
+        lock, SIGTERM, SIGKILL e coleta (correção da auditoria: antes o lock era adquirido sem prazo).
+        Sem `timeout`, valem os limites configurados (comportamento da E1).
+        Devolve True só com confirmação (nenhum filho publicado ou filho coletado). Sem o lock no prazo,
+        a parada e a indisponibilidade são marcadas sem lock (flags de sentido único; `send` as relê sob o
+        lock antes de criar ou transmitir) e o resultado é False: o estado do filho não foi confirmado.
+        """
+        deadline = Deadline(timeout, self._monotonic)
+        if not deadline.acquire(self._lock):
+            self._stop = True
+            self._available = False
+            logger.error("email_smtp_cancel_unconfirmed reason=lock_timeout")
+            return False
+        try:
             self._stop = True
             child = self._child
-        if child is not None and not self._terminate(child):
-            with self._lock:
-                self._available = False                # filho sem encerramento confirmado
-            logger.error("email_smtp_reap_failed")
+            creating = self._creating
+        finally:
+            self._lock.release()
+        if child is None:
+            return not creating                        # criação em curso: será encerrada por `send`
+        if self._terminate(child, deadline=deadline):
+            return True
+        # Filho sem encerramento confirmado → indisponível. A publicação NÃO pode esperar além do prazo
+        # (correção da 2ª auditoria: aqui havia um `with self._lock` sem prazo). Com tempo restante, sob o
+        # lock; senão, escrita sem lock da flag de sentido único (True→False), que `send` relê sob o lock.
+        if deadline.acquire(self._lock):
+            try:
+                self._available = False
+            finally:
+                self._lock.release()
+        else:
+            self._available = False
+        logger.error("email_smtp_reap_failed")
+        return False
 
     # ------------------------------------------------------------ envio
     def send(self, message: OutgoingEmail) -> SendResult:
@@ -129,24 +177,34 @@ class SubprocessSmtpTransport:
         return self._done(result, started)
 
     # ------------------------------------------------------------ fases 3 a 5
-    def _terminate(self, child: subprocess.Popen) -> bool:
-        """SIGTERM → espera limitada → SIGKILL → coleta limitada. True se coletado."""
+    def _terminate(self, child: subprocess.Popen, deadline: Deadline | None = None) -> bool:
+        """SIGTERM → espera limitada → SIGKILL → coleta limitada. True se coletado.
+
+        Com `deadline` (fixado pelo chamador na entrada da operação), as duas esperas usam só o tempo
+        restante: a tolerância ao SIGTERM usa no máximo metade dele, para sobrar tempo à coleta."""
         import signal
 
         if child.poll() is not None:
             return True
+        deadline = deadline or Deadline(None, self._monotonic)
+
+        def limit(configured: float, share: float = 1.0) -> float:
+            if not deadline.bounded:
+                return configured
+            return max(0.0, min(configured, deadline.remaining() * share))
+
         self._signal_group(child, signal.SIGTERM)
         try:
-            child.wait(timeout=self._cfg.term_grace_seconds)
+            child.wait(timeout=limit(self._cfg.term_grace_seconds, 0.5))
             return True
         except subprocess.TimeoutExpired:
             pass
         self._signal_group(child, signal.SIGKILL)
         try:
-            child.wait(timeout=self._cfg.reap_timeout_seconds)
+            child.wait(timeout=limit(self._cfg.reap_timeout_seconds))
             return True
         except subprocess.TimeoutExpired:
-            return False
+            return child.poll() is not None
 
     @staticmethod
     def _signal_group(child: subprocess.Popen, sig: int) -> None:

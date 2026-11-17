@@ -23,7 +23,6 @@ from app.security.passwords import PasswordHasher
 from app.security.rate_limit import RateLimiter
 from app.security.tokens import AccessTokenCodec
 from app.services.auth_service import AuthService
-from app.services.password_reset_delivery import NoopPasswordResetDelivery, PasswordResetDelivery
 
 
 class InMemoryAuthBlockedError(RuntimeError):
@@ -41,6 +40,7 @@ class AuthContainer:
     clock: Clock
     ephemeral_secret: bool
     users: UserRepository                  # o MESMO repositório é usado pelo domínio (sem segunda cópia)
+    resets: PasswordResetRepository | None = None   # memória: reutilizado pelo worker da recuperação (E2)
     storage: str = "memory"
     engine: Any = None                     # Engine SQLAlchemy no modo postgres (compartilhado com o domínio)
     _closed: bool = field(default=False, repr=False)
@@ -104,7 +104,6 @@ def build_auth_container(
     settings: Settings,
     *,
     clock: Clock | None = None,
-    delivery: PasswordResetDelivery | None = None,
     password_hasher: PasswordHasher | None = None,
     sql_checkpoint: Callable[[str], None] | None = None,
 ) -> AuthContainer:
@@ -140,13 +139,12 @@ def build_auth_container(
             secret, settings.auth_jwt_issuer, settings.auth_jwt_audience, settings.auth_access_token_ttl_seconds, clock
         ),
         clock=clock,
-        delivery=delivery or NoopPasswordResetDelivery(),
         login_limiter=limiter(settings.auth_login_max_failures, settings.auth_login_window_seconds),
         forgot_limiter=limiter(settings.auth_forgot_max_requests, settings.auth_forgot_window_seconds),
+        forgot_ip_limiter=limiter(settings.auth_forgot_ip_max_requests, settings.auth_forgot_ip_window_seconds),
         register_limiter=limiter(settings.auth_register_max_requests, settings.auth_register_window_seconds),
         reset_limiter=limiter(settings.auth_reset_max_requests, settings.auth_reset_window_seconds),
         refresh_ttl_seconds=settings.auth_refresh_token_ttl_seconds,
-        reset_ttl_seconds=settings.auth_password_reset_ttl_seconds,
     )
     return AuthContainer(service=service, store=store, clock=clock, ephemeral_secret=ephemeral, users=users,
-                         storage=settings.storage, engine=engine)
+                         resets=resets, storage=settings.storage, engine=engine)
