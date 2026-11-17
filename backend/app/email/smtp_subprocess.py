@@ -23,6 +23,7 @@ import logging
 import os
 import subprocess
 import sys
+import sysconfig
 import threading
 import time
 from collections.abc import Callable
@@ -37,6 +38,48 @@ logger = logging.getLogger("prazoai.email")
 CHILD_SCRIPT = Path(__file__).resolve().with_name("smtp_child.py")
 MAX_CHILD_OUTPUT = 64
 MINIMAL_ENV = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+PROC_MAPS = "/proc/self/maps"                            # mapeamentos DESTE processo (Linux)
+_config_var = sysconfig.get_config_var                   # ponto de injeção para testes
+
+
+def _loaded_libpython_dir() -> str | None:
+    """Diretório de onde ESTE processo carregou a `libpython` compartilhada; None se o interpretador é
+    estático ou se a biblioteca não aparece nos mapeamentos.
+
+    Correção da E4 (doc 21, §21): o Python do `actions/setup-python` é compilado com `--enable-shared` e
+    RUNPATH ABSOLUTO para `/opt/hostedtoolcache/...`; dentro de um contêiner de job o toolcache fica em
+    outro caminho (`/__t/...`) e o processo pai só encontra a biblioteca porque o setup-python exporta
+    LD_LIBRARY_PATH. O filho, com o ambiente mínimo, não a encontrava e terminava antes de executar o
+    script (código 127). O caminho vem do que o carregador REALMENTE mapeou para o processo atual — não
+    da configuração de compilação (que aponta para o caminho original) nem do ambiente herdado.
+    """
+    if not _config_var("Py_ENABLE_SHARED"):
+        return None
+    soname = _config_var("INSTSONAME")
+    if not isinstance(soname, str) or not soname:
+        return None
+    try:
+        with open(PROC_MAPS, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                parts = line.rstrip("\n").split(None, 5)
+                if len(parts) == 6 and os.path.isabs(parts[5]) and os.path.basename(parts[5]) == soname:
+                    return os.path.dirname(parts[5])
+    except OSError:
+        return None
+    return None
+
+
+def child_env(python: str) -> dict[str, str]:
+    """Ambiente do filho: MINIMAL_ENV e, SOMENTE quando o filho é o próprio interpretador em uso e ele
+    depende de `libpython` compartilhada, LD_LIBRARY_PATH com UM diretório — o da biblioteca já
+    carregada por este processo. Nada mais do ambiente do pai é repassado (nem o LD_LIBRARY_PATH dele)."""
+    env = dict(MINIMAL_ENV)
+    if os.path.realpath(python) != os.path.realpath(sys.executable):
+        return env                                       # outro interpretador: não sabemos o que ele carrega
+    libdir = _loaded_libpython_dir()
+    if libdir:
+        env["LD_LIBRARY_PATH"] = libdir
+    return env
 
 
 def ensure_supported_platform() -> None:
@@ -57,6 +100,7 @@ class SubprocessSmtpTransport:
         self._cfg = config
         self._script = Path(script).resolve()
         self._python = python or sys.executable          # caminho do interpretador em uso (confiável)
+        self._child_env = child_env(self._python)        # calculado uma vez; sem E/S por envio
         self._popen = popen
         self._monotonic = monotonic
         self._lock = threading.Lock()
@@ -142,7 +186,7 @@ class SubprocessSmtpTransport:
         try:
             child = self._popen(
                 [self._python, "-I", str(self._script)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, env=dict(MINIMAL_ENV), cwd="/", close_fds=True,
+                stderr=subprocess.DEVNULL, env=dict(self._child_env), cwd="/", close_fds=True,
                 start_new_session=True, shell=False,
             )
         except OSError:

@@ -9,10 +9,11 @@
 > verde (33/33 passos, incluindo integração nos dois modos e E2E em PostgreSQL). Esse CI valida a
 > **base**, não este projeto. Branch: `docs/projeto-email-recuperacao`.
 >
-> **Status:** **E1, E2 e E3 implementadas** (E1: configuração, composição e transporte isolado, §14;
+> **Status:** **E1–E4 implementadas** (E1: configuração, composição e transporte isolado, §14;
 > E2: `RecoveryDispatcher`, ligação com `forgot-password`, limite por IP e `status`, §15, com as
 > correções de auditoria em §16–§17; E3: capturador SMTP local no CI e integração real com PostgreSQL,
-> §18, com a correção da auditoria em §19, aguardando auditoria). **E4–E6 pendentes**: rotas BFF, telas integradas e E2E da recuperação,
+> §18–§19; E4: rotas públicas de recuperação no BFF, §20, aguardando auditoria). **E5–E6 pendentes**:
+> telas integradas, captura do fragmento no navegador, remoção da rota antiga e E2E da recuperação;
 > documentação operacional. Produção continua bloqueada; nenhum provedor foi contratado e nenhum
 > e-mail externo foi enviado.
 >
@@ -637,7 +638,7 @@ continua cobrindo os erros de validação. Produção segue bloqueada.
 | E1 (**implementada, aguardando auditoria**) | Configuração + `EmailTransport` + `SmtpTransport` **em subprocesso supervisionado** + composer (backend, ainda sem usar no fluxo) | validação completa no startup (TLS, origem, remetente); supervisão em fases (§4.6) com orçamento monotônico e coleta com espera limitada; falha de coleta → transporte indisponível; nenhum segredo ou token em argumentos, arquivos, ambiente ou logs; recusa fora de Linux (§4.9); custos medidos; nenhuma mudança de comportamento com `disabled` |
 | E2 | `RecoveryDispatcher` (§4.5) + caminho de requisição sem banco + limite por IP + `status` | resposta pública sem banco e sem transporte (teste estrutural); prazo de fila, fila cheia, falha e morte do worker; protocolo de encerramento de §4.7 e propriedade da conexão de §4.8 (admissão coordenada, cancelamento pelo driver só com propriedade confirmada, nenhuma etapa nova após a parada, distinção limpo/não limpo, `lifespan` sem prova de término); um worker; garantias da P3 intactas (suítes atuais verdes) |
 | E3 (**implementada, aguardando auditoria — §18**) | Capturador SMTP local no CI + testes de integração do transporte e do fluxo com PostgreSQL | e-mail recebido no capturador com o link correto; falha e timeout do transporte; nenhum token em logs |
-| E4 | Rotas BFF públicas (`status`, `forgot`, `reset`) | allowlist; CSRF e Origin; corpo exato; `no-store`; cookies intocados; resultado desconhecido sem repetição; testes de integração BFF × FastAPI |
+| E4 (**implementada, aguardando auditoria — §20**) | Rotas BFF públicas (`status`, `forgot`, `reset`) | allowlist; CSRF e Origin; corpo exato; `no-store`; cookies intocados; resultado desconhecido sem repetição; testes de integração BFF × FastAPI |
 | E5 | Telas integradas + remoção de `/redefinir-senha/[token]` + E2E | E2E: pedido → capturador → link → nova senha → senha antiga recusada → nova aceita → sessões anteriores revogadas; nenhum token em URL de requisição, storage ou logs |
 | E6 | Documentação operacional e revisão de observabilidade | doc atualizado; roteiro de operação do transporte |
 
@@ -1211,3 +1212,225 @@ Os resultados executados estão no relatório desta entrega. Frontend, integraç
 o ciclo de migrations/manutenção **não foram reexecutados** nesta correção (nenhum arquivo dessas áreas
 mudou); permanecem validados pela entrega anterior (`508edde`). O serviço Mailpit em contêiner do CI
 continua **não executado** aqui (imagem inacessível pela rede deste ambiente; §18.7).
+
+## 20. O que a E4 implementou: rotas públicas de recuperação no BFF
+
+**Base:** `main` `e12f31672d0220d5023d38e69b2ec92bb7bcd1be` (merge do PR #25), árvore
+`134f451ee5f1262bf418b2d052c6478b629262d7` (idêntica à E3 auditada); CI pós-merge `44121578570` verde
+nos quatro jobs (conferido pela API do GitHub). Branch `feature/email-e4-bff-recovery`. Nenhum código
+do backend mudou; telas, captura do fragmento e a rota antiga `/redefinir-senha/[token]` continuam
+como estavam (E5).
+
+### 20.1 Rotas e contratos
+| Rota do BFF | Destino FIXO no FastAPI | Corpo aceito | Respostas repassadas |
+|---|---|---|---|
+| `GET /bff/public/password/status` | `GET /api/v1/auth/password-recovery/status` | nenhum | 200 **somente** `{ available }`; forma inesperada ou falha → 503 `backend_unavailable` |
+| `POST /bff/public/password/forgot` | `POST /api/v1/auth/forgot-password` | **exatamente** `{ email }` | 202 `{ message }` (a mensagem neutra do backend, sem outros campos); 503 `password_recovery_unavailable`; 429 + `Retry-After`; 422 |
+| `POST /bff/public/password/reset` | `POST /api/v1/auth/reset-password` | **exatamente** `{ token, newPassword }` | 204 sem corpo (sem login automático); 400 `invalid_reset_token`; 409 `concurrent_update`; 422; 429 + `Retry-After` |
+
+- Validação **antes** de encaminhar, sempre um subconjunto das recusas do backend: e-mail com até 254
+  pontos de código depois de remover espaços externos, com `@` e sem caracteres de controle; token
+  16–256; senha 8–128 pontos de código e não só espaços (o comprimento é contado como `len()` no
+  Python). O formato completo do e-mail continua sendo validado pelo backend.
+- Erros do backend reduzidos a `{ error: { code, message } }` com códigos conhecidos por rota (sem
+  `details` nem campos internos); códigos desconhecidos → `upstream_error` genérico; 5xx →
+  503 `backend_unavailable`, exceto o 503 `password_recovery_unavailable`, que é repassado.
+- Resultado incerto (timeout, rede, redirecionamento, corpo ilegível **depois** do envio): `status` →
+  503; `forgot` e `reset` → **504 `upstream_timeout` com `outcome: "unknown"`**, a mesma forma do proxy
+  autenticado. Nenhuma nova tentativa. Backend comprovadamente não alcançado → 503.
+
+### 20.2 Segurança
+- Mesmo `guard` das demais rotas: `x-prazoai-csrf: 1` sempre e Origin = `PRAZOAI_APP_ORIGIN` nos POST.
+- Método errado → 405; **qualquer query string → 422** (nada do cliente altera destino, método ou
+  caminho); corpo acima de `PRAZOAI_BFF_MAX_BODY_BYTES` → 413; JSON inválido ou não objeto → 422.
+  Tudo isso é recusado antes de qualquer chamada ao backend.
+- `callBackend` monta os cabeçalhos do zero: nada de cookie, Authorization ou `X-Forwarded-*`. O IP
+  vai só pelo mecanismo aprovado (cabeçalho de infraestrutura configurado + segredo do BFF); um IP
+  inválido cai no fallback conservador.
+- **Sessão:** as rotas não chamam `resolveCookies` nem tocam no armazenamento de sessões (teste com
+  todos os métodos do armazenamento instrumentados); nenhuma resposta tem `Set-Cookie`. O reset revoga
+  as sessões no backend; a sessão BFF descobre isso no fluxo normal (401 → `session_expired` no próximo
+  uso autenticado).
+- `no-store` em todas as respostas, inclusive erros. Logs: só a categoria do resultado incerto
+  (`bff_public_password_uncertain`, com rota e motivo), nunca token, senha, e-mail ou corpo.
+
+### 20.3 Caminho de uma requisição (reset)
+Navegador → `POST /bff/public/password/reset` (Next, `runtime=nodejs`) → `runBff` →
+`passwordReset`: método, query, CSRF/Origin → `readJson` (limite) → `validateResetBody` →
+`callBackend` (destino fixo, timeout, sem redirecionamento, corpo `{ token, newPassword }`) → resposta
+reduzida e `no-store` → navegador. O backend executa a redefinição atômica (consumo único,
+`credential_version + 1`, revogação das sessões).
+
+### 20.4 Mapa dos arquivos
+| Arquivo | Papel |
+|---|---|
+| `frontend/src/server/bff/public-recovery.mjs` (novo) | tabela de destinos fixos, validação dos corpos, respostas reduzidas, resultado incerto |
+| `frontend/src/server/bff/manager.mjs` | injeta as proteções existentes (`guard`, `readJson`, `callBackend`, IP confiável, log) e expõe `passwordStatus/Forgot/Reset` |
+| `frontend/src/server/bff/instance.d.mts` | tipos das novas funções |
+| `frontend/src/app/bff/public/password/{status,forgot,reset}/route.ts` (novos) | rotas Next explícitas (só o método permitido é exportado) |
+| `frontend/tests/bff-public-recovery.test.mjs` (novo) | unitários com backend dublê |
+| `frontend/tests/integration/recovery-backend.test.mjs` (novo) | integração real BFF × FastAPI × capturador |
+| `frontend/tests/helpers/sensitive.mjs`, `frontend/tests/helpers/mailpit.mjs` (novos) | `check`/`checkAbsent` (falha sem valores); cliente de teste do capturador (só loopback, mensagens opacas) |
+| `.github/workflows/ci.yml` (job `integration`) | Mailpit v1.31.6 em 127.0.0.1 dentro do job (binário oficial com SHA-256 conferido) e variáveis dos testes |
+
+**Por que binário no job `integration`:** o job roda no contêiner do Playwright, e um serviço do
+GitHub Actions só seria alcançado por nome de host. O backend só aceita SMTP sem TLS em **loopback**
+(regra da E1, não afrouxada). Por isso o mesmo software e versão do serviço do job `backend` roda no
+próprio job, em 127.0.0.1. A release não publica arquivo de checksums: o SHA-256
+(`10fa12cc…3f91`) foi calculado do arquivo oficial e fica fixado no workflow.
+
+### 20.5 Matriz requisito → teste
+| Requisito | Unitário (dublê) `bff-public-recovery.test.mjs` | Integração real `recovery-backend.test.mjs` |
+|---|---|---|
+| Destino/método fixos; fora do proxy; query recusada | `rotas: destino…`, `query string…` | todos os cenários observam o caminho encaminhado |
+| Métodos indevidos | `métodos indevidos…` (405) | — (as rotas Next só exportam o método permitido) |
+| CSRF, Origin, corpo exato, inválidos, tamanho, nada vai ao backend | `CSRF e Origin…`, `corpo exato…`, `limite de tamanho…` | — |
+| `no-store` em sucesso e erro | todos (`noStoreNoCookie`) | todos |
+| Status só `{ available }` | `status: somente…` | `real (habilitada)…`, `real (desabilitada)…` |
+| Recuperação desabilitada | `forgot: … 503 preservada` | `real (desabilitada)…` |
+| Resposta neutra; limites; Retry-After | `forgot: resposta neutra…` | `real (habilitada)…`, `real: limites…` |
+| Reset válido, inválido, usado, substituído | `reset: 204…` (códigos) | `real: token recebido…`, `real: dois pedidos…`, `real (desabilitada)…` (token inexistente) |
+| Cookies e sessão intocados; sem consulta, renovação ou revogação | `sessão intocada…` (armazenamento instrumentado) | `real: token recebido…` (caminhos encaminhados, sessão ainda no armazenamento, revogação descoberta no fluxo normal) |
+| IP confiável; cabeçalhos forjados | `cabeçalhos ao backend…` | `real: limites…` (X-Forwarded-For/X-PrazoAI-Client-IP forjados não mudam o limite por IP) |
+| Timeout com operação possivelmente concluída; UM encaminhamento | `timeout após o envio…` | `real: timeout após o envio…` (forgot e reset concluídos no backend; BFF responde 504 `unknown`) |
+| Logs e relatórios sanitizados | `corpo encaminhado exato; logs…` | `check`/`tokenFrom` (nenhum valor nas falhas) |
+
+**Simulado:** backend dublê nos unitários; resposta "perdida" depois do processamento real (o teste
+segura a entrega até o sinal de abort do próprio BFF). **Real:** FastAPI (memória e PostgreSQL),
+worker, transporte SMTP e Mailpit. **Planejado (E5):** telas, captura do fragmento, E2E no navegador.
+
+### 20.6 Comandos reproduzíveis
+```bash
+# capturador local (ver backend/test-infra/mailpit/compose.yaml) e, para PostgreSQL, um banco descartável migrado
+cd frontend
+node --test tests/bff-public-recovery.test.mjs
+PRAZOAI_TEST_PYTHON=../backend/.venv/bin/python PRAZOAI_TEST_MAILPIT_SMTP=127.0.0.1:1025 \
+  PRAZOAI_TEST_MAILPIT_API=http://127.0.0.1:8025 PRAZOAI_REQUIRE_MAILPIT_TESTS=1 \
+  node --test tests/integration/recovery-backend.test.mjs          # + STORAGE=postgres DATABASE_URL=...
+```
+Sem as variáveis do capturador, os cenários habilitados são pulados (o cenário desabilitado roda).
+
+### 20.7 Limitações
+- Sessões e limites do BFF continuam em memória por processo (sem mudança).
+- As telas ainda mostram o estado demonstrativo/indisponível: as rotas existem, mas nenhuma tela as
+  usa até a E5. A rota antiga com token no caminho continua desviada para `/indisponivel` no modo
+  integrado.
+- O binário do Mailpit no job `integration` vem da release do GitHub (sem arquivo oficial de
+  checksums); o hash fixado foi calculado nesta entrega.
+
+### 20.7.1 Falha observada na validação e diagnóstico
+Na primeira validação completa da árvore desta entrega, a integração em `STORAGE=postgres` falhou em
+`tests/integration/bff-backend.test.mjs` (12 testes, todos com `backend não subiu` no `before`), um
+arquivo **existente** e não alterado. Diagnóstico (com instrumentação temporária, não versionada):
+- a porta desse arquivo é sorteada entre 18000 e 19499; no ambiente local desta validação, a API do
+  capturador estava em 127.0.0.1:**18025**, dentro dessa faixa;
+- forçando a porta 18025, o sintoma se repete exatamente (12 falhas, `backend não subiu`), e o uvicorn
+  registra `[Errno 98] … address already in use`;
+- duas novas execuções em banco recém-migrado, com portas sorteadas fora de 18025, passaram (45/45).
+Não há prova de que a porta sorteada naquela execução foi 18025 (ela não era registrada), mas o
+mecanismo foi reproduzido. É específico deste ambiente: no CI o capturador usa 8025/1025, fora das
+faixas. Providências: a validação final usou o capturador local em portas fora das faixas
+(21025/28025); e o arquivo novo `recovery-backend.test.mjs` passou a usar uma faixa própria
+(19500–19589), que não se sobrepõe às dos demais arquivos de integração (antes ele compartilhava a
+faixa de `org-backend`). O arquivo existente não foi alterado.
+
+### 20.8 Roteiro curto para o TCC (cerca de 2 minutos)
+1. "O navegador nunca fala direto com a API: passa pelo BFF. Para recuperar a senha, criamos três
+   portas públicas e fixas: saber se a recuperação está disponível, pedir o e-mail e trocar a senha."
+2. "Cada porta confere a origem e o cabeçalho anti-CSRF, aceita só os campos exatos e recusa o resto
+   antes de chamar a API. Elas não tocam na sessão do usuário: nem leem, nem criam, nem apagam cookies."
+3. "Se a API demora depois de receber o pedido, não dizemos que falhou: dizemos que o resultado é
+   desconhecido e não reenviamos. Os testes provam isso com a API real, o e-mail capturado e a troca
+   de senha de ponta a ponta."
+
+## 21. Correção da E4 após o CI oficial: o filho SMTP não iniciava no job `integration`
+
+### 21.1 Falha observada (PR #26, execução 44138663520, job `integration` 134237971254)
+Head publicado `d5f1631` (árvore idêntica à de `bc066cb`). Frontend, backend e estrutura passaram; no
+passo "Integração real (BFF + FastAPI, STORAGE=memory)" 41 de 45 testes passaram e 4 falharam — os
+quatro cenários de `recovery-backend.test.mjs` que esperam uma mensagem — todos com
+`requisito não atendido: capturador: mensagem esperada chegou`. O capturador havia subido ("capturador
+pronto"); os cenários que não dependem de mensagem (recuperação desabilitada, limites/IP) passaram.
+
+### 21.2 Causa comprovada
+- O job `integration` roda no contêiner oficial `mcr.microsoft.com/playwright:v1.64.1-noble` e usa o
+  Python do `actions/setup-python` (3.12.16), montado em `/__t/Python/3.12.16/x64`.
+- Esse Python é compilado com `--enable-shared`: o executável depende de `libpython3.12.so.1.0` e a
+  encontra por um **RUNPATH absoluto** `/opt/hostedtoolcache/Python/3.12.16/x64/lib` (verificado com
+  `readelf -d` no pacote oficial `python-3.12.16-linux-24.04-x64.tar.gz` do `actions/python-versions`,
+  SHA-256 `dec61ed2…f2191a`). Dentro do contêiner esse caminho não existe; o pai (uvicorn) só inicia
+  porque o setup-python exporta `LD_LIBRARY_PATH=/__t/Python/3.12.16/x64/lib`.
+- A imagem do Playwright não instala Python (Dockerfile `utils/docker/Dockerfile.noble` da v1.64.1:
+  Node.js, git, dependências dos navegadores), portanto não há `libpython` do sistema como alternativa.
+- O transporte da E1 cria o filho com o ambiente mínimo (`PATH`, `LANG`, `LC_ALL`) — correto quanto ao
+  isolamento, mas sem o diretório da biblioteca. O carregador dinâmico encerra o filho com **código 127**
+  antes de executar qualquer linha de `smtp_child.py`; o pai classifica a saída vazia como
+  `invalid_output` e nenhuma conexão SMTP é aberta.
+- No job `backend` (fora de contêiner) o toolcache está em `/opt/hostedtoolcache`, o RUNPATH resolve e
+  os testes reais da E1/E3 passavam — por isso a falha só apareceu no job `integration`, o primeiro a
+  exercitar o transporte real dentro do contêiner.
+
+### 21.3 Reprodução e observação por etapa (sanitizadas)
+O contêiner oficial **não pôde ser executado** aqui (sem daemon Docker; `mcr.microsoft.com` bloqueado
+pela rede). A reprodução usou o **mesmo binário** do setup-python, relocado para
+`/__t/Python/3.12.16/x64` (sem `/opt/hostedtoolcache`), com `PATH`/`LD_LIBRARY_PATH`/`pythonLocation`
+como o setup-python exporta e, num namespace de montagem privado, a `libpython` do sistema deste
+ambiente oculta (a imagem do Playwright não a tem). Diferença conhecida: aqui o carregador relata
+"file too short" (arquivo ocultado), no contêiner seria "cannot open shared object file"; ambos saem
+com 127 antes do código Python.
+
+Diagnóstico de UM pedido de conta fictícia (somente contadores, códigos e tamanhos):
+
+| Etapa | Antes da correção | Depois |
+|---|---|---|
+| 1. admissão / retirada da fila | `202`; `enqueued=1`; fila ociosa; 1 item finalizado | igual |
+| 2. consulta da conta e emissão do token | concluídas (o processador só chega à entrega depois de `lookup` e `issue`) | igual |
+| 3. tentativa de entrega | 1 tentativa, categoria `delivery_invalid_output` | `delivery_accepted` |
+| 4. criação / execução do subprocesso | criado (1), **código 127**, 0 bytes de saída; sonda isolada: `carregador_sem_libpython`; chaves do ambiente `LANG, LC_ALL, PATH` | código 0, 9 bytes; chaves `LANG, LC_ALL, LD_LIBRARY_PATH, PATH` |
+| 5. conexão SMTP / aceitação no capturador | nenhuma; 0 mensagens | 1 mensagem |
+
+Controle: o mesmo diagnóstico com o interpretador estático deste ambiente entregava a mensagem antes da
+correção. Com o mecanismo reproduzido, `recovery-backend.test.mjs` falha **exatamente** como no CI
+(testes 2, 3, 4 e 6 com o mesmo rótulo; 1 e 5 passam) e passa 6/6 depois da correção. Hipóteses
+descartadas pela observação: porta, lentidão, Mailpit e protocolo SMTP (o filho não chega a executar).
+
+### 21.4 Correção (menor, sustentada pela reprodução)
+`app/email/smtp_subprocess.py`: `child_env(python)` monta o ambiente do filho a partir de `MINIMAL_ENV`
+e acrescenta `LD_LIBRARY_PATH` com **um único diretório** somente quando (a) o filho é o próprio
+interpretador em uso e (b) ele foi compilado com `libpython` compartilhada. O diretório é o da
+`libpython` que o carregador **efetivamente mapeou** para o processo atual (`/proc/self/maps`, nome
+`INSTSONAME`, caminho absoluto) — não a configuração de compilação (que aponta para o caminho original)
+nem o `LD_LIBRARY_PATH` herdado. É calculado uma vez na construção do transporte.
+
+Preservado: nenhum outro valor do ambiente do pai chega ao filho (segredos, `DATABASE_URL`, o
+`LD_LIBRARY_PATH` do pai); `-I`, `cwd="/"`, `close_fds`, grupo de processos, TLS, limites, prazos, um
+worker e ausência de repetição continuam iguais. Biblioteca não mapeada, caminho relativo, arquivo
+"(deleted)", mapeamentos ilegíveis ou interpretador estático → ambiente mínimo inalterado.
+
+O teste da E1 `test_desabilitado_nao_cria_subprocesso_nem_importa_recursos_linux` inicia uma sonda
+Python com ambiente só com `PATH`; pela mesma causa ela também não iniciaria nesse interpretador. A
+sonda passou a receber o mesmo diretório único (via `child_env`), sem outra mudança.
+
+### 21.5 Regressões (`tests/test_smtp_child_env.py`)
+| Teste | Tipo | Antes | Depois |
+|---|---|---|---|
+| interpretador compartilhado recebe só o diretório da `libpython` carregada (pai com `LD_LIBRARY_PATH` próprio e segredo) | simulação (mapeamentos e variáveis de compilação injetados) | **falha** em qualquer ambiente | passa |
+| estático; biblioteca não localizada (3 formas); mapeamentos ilegíveis; outro interpretador configurado → ambiente mínimo | simulação | passam (protegem o isolamento) | passam |
+| o interpretador em uso inicia (código 0) com o ambiente entregue ao filho | **real** | **falha** no ambiente reproduzido (127) | passa |
+
+Na reprodução, `test_smtp_child_env.py` + `test_email_transport.py`: antes 17 falhas/14 aprovados
+(todos os testes reais da E1 também falhavam); depois 31/31. O teste real só discrimina onde o
+interpretador é compartilhado e relocado: no job `backend` e em interpretadores estáticos ele passa
+antes e depois. No CI, a prova no ambiente exato continua sendo o passo de integração do job
+`integration` (que falhou antes).
+
+### 21.6 Limitações e pendências
+- **Não executado no contêiner oficial nem confirmado no CI**: a reprodução usa o mesmo binário e as
+  mesmas variáveis, mas outro sistema de arquivos base (Ubuntu 24.04 deste ambiente, Node 22 em vez do
+  Node 24 da imagem). A confirmação depende de nova execução do CI.
+- A falha era silenciosa: 127 do carregador vira `delivery_invalid_output`, igual a outras saídas
+  inválidas do filho. Distinguir "filho não iniciou" (ou verificar o início do filho na subida) seria uma
+  melhoria de observabilidade fora do escopo desta correção — pendência separada.
+- Outros testes do backend que iniciam sondas Python com ambiente só com `PATH`
+  (`test_auth_storage_modes`, `test_maintenance_operation`) teriam o mesmo problema nesse interpretador;
+  não rodam no job `integration` e não foram alterados.

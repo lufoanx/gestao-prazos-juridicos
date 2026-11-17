@@ -18,6 +18,7 @@ import {
   readSessionCookies, sessionCookie,
 } from "./security.mjs";
 import { SessionCapacityError } from "./session-store.mjs";
+import { createPublicRecovery } from "./public-recovery.mjs";
 
 const PASS_HEADERS = ["retry-after", "x-current-version"];
 
@@ -401,5 +402,15 @@ export function createBff({
     return passthrough(r);
   }
 
-  return { register, login, logout, session, proxy, publicInvitationLookup, ensureFresh, CSRF_HEADER };
+  // Recuperação de senha (E4): rotas públicas com as MESMAS proteções (guard, corpo limitado, cliente
+  // do backend com destino fixo) e sem nenhum acesso a cookies ou ao armazenamento de sessões.
+  const recovery = createPublicRecovery({
+    call: (opts) => callBackend(ctx, opts), guard, readJson, json, err, clientIp, log,
+  });
+
+  return {
+    register, login, logout, session, proxy, publicInvitationLookup, ensureFresh, CSRF_HEADER,
+    passwordStatus: recovery.passwordStatus, passwordForgot: recovery.passwordForgot,
+    passwordReset: recovery.passwordReset,
+  };
 }
