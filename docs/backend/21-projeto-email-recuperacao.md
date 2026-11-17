@@ -11,7 +11,8 @@
 >
 > **Status:** **E1 e E2 implementadas** (E1: configuração, composição e transporte isolado, §14;
 > E2: `RecoveryDispatcher`, ligação com `forgot-password`, limite por IP e `status`, §15; correção da
-> auditoria do orçamento de encerramento, §16). **E3–E6
+> auditoria do orçamento de encerramento, §16; espera residual no cancelamento SMTP e diagnóstico do
+> E2E de convite, §17). **E3–E6
 > pendentes**: capturador SMTP no CI, rotas BFF, telas integradas e E2E da recuperação, documentação
 > operacional. A E2 aguarda auditoria. Produção continua bloqueada; nenhum provedor foi contratado e
 > nenhum e-mail externo foi enviado.
@@ -1000,3 +1001,74 @@ com PostgreSQL real) quatro vezes seguidas — 120 passaram em cada execução. 
 usa `TimeZone=America/Sao_Paulo` (datas como `…-03:00` em vez de `…Z`). Reproduzido na **base**
 `c86e4d4`, sem as mudanças da E2; o CI usa UTC. Não foi corrigido nem alterado nesta entrega; as
 validações locais usam o cluster descartável em UTC, como o CI.
+
+## 17. Segunda auditoria da correção: espera residual no cancelamento SMTP e diagnóstico do E2E de convite
+
+### 17.1 Espera residual em `SubprocessSmtpTransport.cancel()`
+**Defeito (reproduzido pela auditoria em `845a622`):** depois de `_terminate(child, deadline)` devolver
+`False` (coleta não confirmada), o código publicava a indisponibilidade com `with self._lock`, **sem
+prazo**. Com outra thread retendo o lock, `cancel(timeout=1)` continuava bloqueado após 1,4 s, embora a
+aquisição inicial já tivesse sido corrigida (§16).
+
+**Correção:** a publicação usa `deadline.acquire(self._lock)` com o **restante do mesmo prazo**; sem o
+lock no prazo, escreve `_available = False` sem lock (flag de sentido único True→False, relida por
+`send` sob o lock antes de criar ou transmitir). O prazo não é reiniciado nem ampliado; o resultado
+continua `False` (nenhuma coleta é declarada) e o filho segue registrado como não confirmado.
+
+**Revisão dos demais caminhos do cancelamento:** `cancel()` → aquisição inicial (com prazo, §16) →
+`_terminate` → `os.killpg` (sem lock) e `Popen.poll()`/`Popen.wait(timeout)` (o `wait` com timeout usa
+o lock interno do `Popen` de forma não bloqueante, em laço limitado pelo timeout) → publicação (corrigida
+aqui). `_finish` e `send` são caminhos do worker, não do cancelamento. No despachante, `stop()` só usa
+`Deadline` (§16). Resta apenas a escrita de log (`logging`), que usa o lock do handler — risco comum a
+toda a aplicação, não tratado aqui.
+
+**Regressão:** `test_recovery_shutdown_budget::test_cancel_nao_espera_sem_prazo_ao_publicar_indisponibilidade_apos_coleta_nao_confirmada`
+(DUBLÊS: filho falso sem processo real, `_terminate` com gate devolvendo `False`; o lock do transporte
+é retido por outra thread ANTES desse retorno). Verifica: retorno no orçamento, `False`, transporte
+indisponível, filho continua não confirmado, `send` posterior → `cancelled` sem criar filho nem
+transmitir. Gates e lock liberados em `finally`. **Com o código de `845a622` o teste falha**
+("cancel(timeout) bloqueado além do orçamento"); com a correção, passa.
+
+### 17.2 Falha do E2E `deadlines.spec.ts:103` (`joinByInvite`) — diagnóstico
+**Falha observada** (validação de `845a622`, 1ª execução completa): timeout de 60 s em
+`getByLabel("Link do convite (exibido só agora)").inputValue()` logo após o clique em "Gerar link de
+convite". Instantâneo da página na falha: rota `/app/escritorio`, sessão e escritório carregados, botão
+**com foco** (`[active]`), **sem** "Gerando…", **sem** mensagem de erro, **sem** link e lista
+"Nenhum convite emitido."; código de ingresso já exibido.
+
+**Investigação (contas fictícias; registros sanitizados — só método, caminho com IDs mascarados e
+status; nenhum corpo, token, cookie ou senha):**
+1. *O clique produziu requisição? Qual a resposta?* Instrumentei temporariamente (fora do repositório)
+   o caminho de `joinByInvite`: em 30 repetições isoladas e em 4 execuções completas do E2E (56
+   passagens por `joinByInvite`), **todo** clique gerou exatamente um `POST
+   /bff/api/offices/:id/invitations` → 201, sem `requestfailed`, sem erro de console ou `pageerror`,
+   sem navegação extra e sem renovação de sessão no intervalo. A falha **não se repetiu** nessas
+   execuções.
+2. *A interface estava pronta?* Em 23 das 56 passagens o clique ocorreu enquanto ainda chegavam as
+   respostas das leituras iniciais da página (código de ingresso, convites, solicitações). O cartão
+   "Código de ingresso", **acima** do botão, troca "Carregando…" (uma linha) pelo código, o texto e o
+   botão "Gerar novo código" — o botão de convite **desce 65 px** quando essa resposta chega.
+3. *Reprodução determinística* (spec temporária, sem sleep, ordem imposta por rota retida): retendo a
+   resposta do código de ingresso, `mouse.down()` sobre o botão, liberação da resposta, espera do código
+   visível, `mouse.up()` no mesmo ponto → **nenhum `submit`, nenhuma requisição**, botão com foco, lista
+   vazia — exatamente o instantâneo da falha (3/3). Controle sem deslocamento: 1 `submit`, `POST` e link
+   exibido (3/3). O clique do Playwright é `mousedown` + `mouseup` em eventos separados; a verificação de
+   estabilidade não impede um deslocamento entre os dois.
+4. *Erro JavaScript, perda de estado, limite de taxa?* Não observados: nenhum erro, a sessão e o
+   estado do escritório permaneceram; uma resposta 429 apareceria como mensagem de erro no cartão.
+
+**Conclusão:** mecanismo **reproduzido** — clique perdido por deslocamento de layout (layout shift)
+entre `mousedown` e `mouseup`, quando o cartão do código de ingresso termina de carregar no instante do
+clique. **Não confirmado** que foi exatamente isso na execução que falhou (não havia rastreamento de
+rede naquela execução), mas é a única hipótese compatível com todos os sinais do instantâneo (foco no
+botão, nenhum estado de envio, nenhum erro, nenhum convite). Não é defeito da E2 nem do backend.
+
+**Fora do escopo da E2 — decisão pendente (nada alterado):**
+- *Teste:* em `joinByInvite`, esperar uma condição determinística da página pronta antes do clique (por
+  exemplo, o código de ingresso e a lista de convites visíveis), sem sleep, retry, `force` ou aumento de
+  timeout;
+- *Produto (opcional):* reservar o espaço dos cartões em carregamento na tela do escritório, evitando o
+  deslocamento também para pessoas (um clique humano no mesmo instante teria o mesmo efeito).
+- *A confirmar no CI oficial:* repetir o E2E com a imagem `mcr.microsoft.com/playwright:v1.64.1-noble`
+  (Chromium 156; aqui foi usado o Chromium 153 pré-instalado), de preferência com rastreamento de rede
+  sanitizado em caso de falha.

@@ -116,8 +116,16 @@ class SubprocessSmtpTransport:
             return not creating                        # criação em curso: será encerrada por `send`
         if self._terminate(child, deadline=deadline):
             return True
-        with self._lock:
-            self._available = False                    # filho sem encerramento confirmado
+        # Filho sem encerramento confirmado → indisponível. A publicação NÃO pode esperar além do prazo
+        # (correção da 2ª auditoria: aqui havia um `with self._lock` sem prazo). Com tempo restante, sob o
+        # lock; senão, escrita sem lock da flag de sentido único (True→False), que `send` relê sob o lock.
+        if deadline.acquire(self._lock):
+            try:
+                self._available = False
+            finally:
+                self._lock.release()
+        else:
+            self._available = False
         logger.error("email_smtp_reap_failed")
         return False
 

@@ -395,3 +395,56 @@ def test_postgres_real_lock_do_registro_retido_com_capacidade(pg_app, pg_schema)
     assert app.state.recovery.dispatcher.counter("stopped_after_issue") == 1
     assert token_rows(pg_schema) == 1 and registry.open_connections == 0
     _ = password_reset_tokens
+
+
+# ------------------------------------------------------------------ 2ª auditoria: espera residual no cancel
+class _FakeChild:
+    """Filho DUBLÊ (nenhum processo real): nunca confirma término; pid inexistente não é sinalizado."""
+
+    pid = -1
+    stdin = stdout = None
+    returncode = None
+
+    def poll(self):
+        return None
+
+
+def test_cancel_nao_espera_sem_prazo_ao_publicar_indisponibilidade_apos_coleta_nao_confirmada(smtp_transport):
+    """DUBLÊS (filho falso e `_terminate` com gate). `_terminate` devolve False (coleta não confirmada)
+    enquanto outra thread retém o lock do transporte: `cancel(timeout=1)` volta no prazo, devolve False,
+    o transporte fica indisponível e nenhum filho substituto é criado nem há reenvio."""
+    t, srv, cap = smtp_transport
+    child = _FakeChild()
+    with t._lock:
+        t._child = child                                         # filho "publicado" (dublê)
+    reached, release = threading.Event(), threading.Event()
+
+    def gated_terminate(c, deadline=None):
+        assert c is child
+        reached.set()
+        assert release.wait(WAIT), "teste travou esperando release"
+        return False                                             # coleta NÃO confirmada
+
+    t._terminate = gated_terminate
+    out: dict = {}
+    started = time.monotonic()
+    runner = threading.Thread(target=lambda: out.setdefault("r", t.cancel(timeout=GRACE)), name="canceller")
+    runner.start()
+    try:
+        assert reached.wait(WAIT)                                # cancel dentro de `_terminate`
+        with held(t._lock):                                      # lock retido ANTES do retorno de `_terminate`
+            release.set()
+            runner.join(GRACE + SLACK + 1.0)                     # limite de observação (> orçamento + folga)
+            elapsed = time.monotonic() - started
+            assert not runner.is_alive(), "cancel(timeout) bloqueado além do orçamento"
+            assert elapsed < GRACE + SLACK
+            assert out["r"] is False                             # nada confirmado
+            assert t.available is False                          # publicado sem esperar o lock
+    finally:
+        release.set()
+        runner.join(WAIT)
+    from tests.test_email_transport import MSG
+
+    assert t.send(MSG).value == "cancelled"                      # parada: nenhum filho substituto
+    assert t.spawned == 0 and cap.children == [] and srv.opts.messages == []
+    assert t.unconfirmed_child(0.1) is True                      # coleta continua NÃO confirmada
