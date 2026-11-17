@@ -120,8 +120,9 @@ Recuperação de senha (E4 + E5, doc 21 §20 e §22):
   o mantém só em memória (recarregar a página perde o token). O formato antigo `/redefinir-senha/<token>`
   mostra uma página estática, sem eco e com `Referrer-Policy: no-referrer`, nos dois modos.
 - Peças: `src/lib/integration/recovery-rules.mjs` (regras compartilhadas com o BFF),
-  `fragment-token.mjs` (captura), `recovery-client.mjs` (cliente público), `recovery-flow.mjs`
-  (estados); `src/integrated/useRecoveryFlows.ts` e `RecoveryScreens.tsx` (React).
+  `fragment-token.mjs` (captura com revisões), `recovery-client.mjs` (cliente público), `recovery-flow.mjs`
+  (estados), `reset-controller.mjs` (coordenação da redefinição, inclusive um novo link aberto durante
+  um envio — doc 21 §23); `src/integrated/useRecoveryFlows.ts` e `RecoveryScreens.tsx` (React).
 - Modo demonstração: as telas seguem simuladas (nenhum e-mail sai); o link demonstrativo é
   `/redefinir-senha#demo` (`#expirado`, `#usado`).
 - E2E da recuperação (`e2e/recovery.spec.ts`): exige o capturador local, como a integração

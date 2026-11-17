@@ -13,8 +13,8 @@
 > E2: `RecoveryDispatcher`, ligação com `forgot-password`, limite por IP e `status`, §15, com as
 > correções de auditoria em §16–§17; E3: capturador SMTP local no CI e integração real com PostgreSQL,
 > §18–§19; E4: rotas públicas de recuperação no BFF, §20, com a correção do CI em §21; E5: telas
-> integradas, captura do fragmento, remoção da rota antiga e E2E da recuperação, §22, aguardando
-> auditoria). **E6 pendente:** documentação operacional. Produção continua bloqueada; nenhum provedor
+> integradas, captura do fragmento, remoção da rota antiga e E2E da recuperação, §22, com a correção
+> da auditoria em §23, aguardando nova auditoria). **E6 pendente:** documentação operacional. Produção continua bloqueada; nenhum provedor
 > foi contratado e nenhum e-mail externo foi enviado.
 >
 > **Revisão 3** (commit incremental sobre `ccff5c2`):
@@ -1522,7 +1522,7 @@ rotuladas como demonstrativas; o link demonstrativo passou a usar o mesmo format
 - Trafega só no corpo do `POST /bff/public/password/reset` (mesmo cliente com `x-prazoai-csrf`).
 - Efeitos repetidos: a captura é idempotente por instância da tela (a segunda execução do efeito
   devolve o mesmo token sem reler a barra); outro link aberto na mesma aba (`hashchange`) substitui o
-  anterior; um novo link durante o envio não interrompe o envio em curso.
+  anterior; um novo link durante o envio segue o protocolo de revisões de §23 (corrigido na auditoria).
 - Rota antiga: `/redefinir-senha/<qualquer coisa>` é reescrita no middleware, nos dois modos, para uma
   página estática que não lê o caminho, não ecoa nada, não chama o BFF e não leva o token a outro
   endereço; resposta com `Referrer-Policy: no-referrer`.
@@ -1627,3 +1627,65 @@ seria uma melhoria separada.
 3. "Trocamos a senha pela tela: a senha antiga deixa de funcionar, a nova funciona e uma sessão que
    estava aberta em outra aba cai no próximo uso. Se a rede falha depois do clique, a tela não diz que
    falhou: pede para conferir entrando com a nova senha, e nada é reenviado sozinho."
+
+## 23. Correção da auditoria da E5: resposta de um link substituído durante o envio
+
+### 23.1 Defeito (achado da auditoria)
+Em `useRecoveryFlows.ts` (versão `f6dd13a`), o `hashchange` substituía o token do holder mesmo com
+uma redefinição pendente. O reducer ignorava `captured` durante o envio, mas a resposta da tentativa
+anterior continuava podendo chamar `holder.clear()` e mudar a tela: o resultado da tentativa com o
+link A passava a controlar o token e a interface do link B. No caminho de erro, B era apagado; no de
+sucesso, `clear()` também não verificava a qual captura pertencia. Os testes cobriam holder, reducer e
+envio único separadamente, não a composição; a asserção "novo link durante o envio: espera" não provava
+que B seria preservado.
+
+### 23.2 Reprodução no navegador (antes da correção)
+Cenário com BFF, FastAPI, PostgreSQL e Mailpit reais e contas fictícias distintas (A e B): A enviada e
+**retida num gate do harness** (`page.route`, sem sleep); B aberto na mesma aba (`hashchange`); a
+resposta real de A liberada depois. No código auditado, com o cenário sem as verificações do estado
+intermediário (que ainda não existia):
+- A inválida (400 real): `requisito não atendido: resultado de A não aparece como resultado de B`
+  (a tela foi para "link inválido");
+- A com sucesso (204 real): o mesmo requisito falhou (a tela foi para "senha redefinida").
+
+### 23.3 Protocolo adotado: revisão por captura
+- `createFragmentTokenHolder` numera cada leitura nova da barra (revisão 1, 2, …); `clear(revisão)` só
+  descarta o token se ele ainda for daquela captura.
+- A coordenação inteira saiu do hook para `src/lib/integration/reset-controller.mjs` (sem React): captura,
+  estado, envio único e tratamento da resposta. O hook só assina o estado (`useSyncExternalStore`) e liga
+  `hashchange`.
+- Cada tentativa guarda a revisão da captura que a originou. Ao chegar a resposta, se a revisão atual
+  for outra, a resposta é de um link **substituído**: não apaga o token novo e não vira sucesso, erro,
+  limite ou desconhecido na tela — só libera o formulário do novo link (`settled_stale`).
+- Novo link durante o envio → fase **`waiting_previous`**: o fragmento novo já foi removido da barra; a
+  tela diz explicitamente que aguarda a tentativa anterior terminar, **sem formulário e sem botão**
+  (nenhum clique ignorado em silêncio). Depois: formulário do novo link, **vazio** (senha e confirmação
+  digitadas para o link anterior são descartadas quando o novo link é aceito), com o aviso de que a
+  tentativa anterior pode ter sido concluída no servidor e de que o formulário vale só para o novo link;
+  o foco vai para "Nova senha". Novo link malformado → "link incompleto".
+- Nada é abortado nem repetido: a requisição de A segue até responder (abortá-la não desfaria uma
+  operação já enviada ao servidor); B só é enviado por clique explícito; um envio por vez.
+- Preservados: captura idempotente sob efeitos repetidos (uma leitura repetida sem fragmento novo não
+  muda nada), descarte do token e das senhas após sucesso, perda do token ao recarregar, token fora do
+  estado renderizável e do DOM.
+
+### 23.4 Regressões
+| Teste | Tipo | Antes (`f6dd13a`) | Depois |
+|---|---|---|---|
+| E2E "corrida: resposta INVÁLIDA de A liberada depois da captura de B…" | real + gate do harness | falha (resultado de A aplicado a B) | passa |
+| E2E "corrida: resposta de SUCESSO de A liberada depois da captura de B…" | real + gate do harness | falha (idem) | passa |
+| Unitários de **coordenação completa** com o controlador real e cliente com gates: respostas `invalid`, `success`, `rate_limited`, `unknown`, rede e `422` de A depois da captura de B; B malformado durante o envio; resultados sem corrida (sucesso e link inválido descartam, senha recusada preserva); recarregamento | simulação (dublê do cliente) | 7 falham com o protocolo antigo (mutação que remove a verificação de revisão) | passam |
+| Holder (revisões; `clear` de captura antiga não apaga a nova) e reducer (`waiting_previous`, `settled_stale`, sucesso/erro ignorados fora de "sending") | unitário | — | passam |
+
+Os E2E de corrida verificam, depois de liberar A: fragmento de B removido; estado intermediário visível
+e nenhum botão de envio; nenhum resultado de A na tela; formulário de B habilitado e **vazio**; nenhum
+envio automático (1 POST até o clique); B redefine a conta **correta** (login de B com a nova senha); A
+inválida não alterou a conta A, A com sucesso alterou a conta A no servidor; tokens fora de URLs,
+cabeçalhos, DOM, storage e cookies. Nenhum sleep, `force`, repetição ou timeout aumentado.
+
+### 23.5 Limitações
+- Enquanto A não responde, o novo link espera. O tempo é limitado pelo timeout do BFF (`504`
+  desconhecido); a tela não oferece cancelar, porque cancelar no navegador não desfaz o que o servidor
+  já recebeu.
+- O resultado de A não é mostrado; a tela só avisa que ele pode ter sido concluído no servidor. Para
+  conferir, a pessoa entra com a senha que digitou para A (o e-mail de A pode ser outra conta).

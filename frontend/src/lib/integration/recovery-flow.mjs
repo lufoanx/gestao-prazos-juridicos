@@ -26,6 +26,8 @@ export const RECOVERY_TEXT = Object.freeze({
   resetUnknown: "O servidor não confirmou a redefinição: ela pode ter sido concluída. Antes de tentar de novo, confira entrando com a NOVA senha. Se não funcionar, entre com a senha antiga ou peça um novo link.",
   success: "Senha redefinida. Entre com a nova senha. Por segurança, as sessões abertas com a senha anterior foram encerradas.",
   memoryOnly: "Este link fica guardado só nesta aba. Se recarregar ou fechar a página antes de concluir, abra o link do e-mail novamente.",
+  waitingPrevious: "Novo link recebido. A tentativa feita com o link anterior ainda aguarda a resposta do servidor; o formulário deste link será liberado assim que ela terminar.",
+  replaced: "O link anterior foi substituído por este. A tentativa feita com o link anterior pode ter sido concluída no servidor; este formulário vale somente para o novo link.",
 });
 
 /** Retry-After em segundos (somente inteiro positivo razoável); null se ausente ou inválido. */
@@ -117,18 +119,29 @@ export function forgotReducer(state, action) {
 }
 
 // ---------------------------------------------------------------------------------- /redefinir-senha
-// Fases: reading · missing · form · sending · success · invalid_link · rate_limited · unknown
+// Fases: reading · missing · form · sending · waiting_previous · success · invalid_link · rate_limited · unknown
+//
+// waiting_previous (doc 21, §23): um NOVO link foi aberto na aba enquanto a tentativa com o link
+// anterior aguardava resposta. O novo link já foi capturado (e removido da barra); a tela mostra que
+// espera a tentativa anterior terminar, sem formulário nem botão. A resposta da tentativa anterior
+// NÃO é aplicada a este link: quando ela chega, o controlador despacha `settled_stale` e o
+// formulário do novo link é liberado (vazio), com um aviso. `success`/`failed` só valem em "sending".
 export const RESET_INITIAL = Object.freeze({ phase: "reading" });
 
 export function resetReducer(state, action) {
   switch (action.type) {
     case "captured":                                  // leitura do fragmento (ou novo link na aba)
-      if (state.phase === "sending") return state;
+      if (state.phase === "sending" || state.phase === "waiting_previous") {
+        return { phase: "waiting_previous", hasToken: Boolean(action.hasToken) };
+      }
       return action.hasToken ? { phase: "form" } : { phase: "missing" };
+    case "settled_stale":                             // a tentativa com o link anterior terminou
+      if (state.phase !== "waiting_previous") return state;
+      return state.hasToken ? { phase: "form", notice: "replaced" } : { phase: "missing" };
     case "submit":
       return state.phase === "form" ? { phase: "sending" } : state;
     case "invalid":
-      return state.phase === "form" ? { phase: "form", error: action.error, field: action.field } : state;
+      return state.phase === "form" ? { phase: "form", error: action.error, field: action.field, notice: state.notice } : state;
     case "success":
       return state.phase === "sending" ? { phase: "success" } : state;
     case "failed":

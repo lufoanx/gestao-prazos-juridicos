@@ -1,6 +1,7 @@
 export const RECOVERY_TEXT: Readonly<Record<
   | "accepted" | "acceptedNote" | "disabled" | "statusError" | "forgotUnknown" | "unavailable" | "generic"
-  | "missingLink" | "invalidLink" | "passwordRejected" | "mismatch" | "concurrent" | "resetUnknown" | "success" | "memoryOnly",
+  | "missingLink" | "invalidLink" | "passwordRejected" | "mismatch" | "concurrent" | "resetUnknown" | "success" | "memoryOnly"
+  | "waitingPrevious" | "replaced",
   string>>;
 export function parseRetryAfter(value: unknown): number | null;
 export function rateLimitText(retryAfter: number | null | undefined): string;
@@ -16,12 +17,16 @@ export function forgotReducer(state: ForgotState, action: ForgotAction): ForgotS
 export function classifyForgotError(e: unknown): Omit<ForgotState, "waiting">;
 export function checkForgotForm(email: string): { email?: string };
 
-export type ResetPhase = "reading" | "missing" | "form" | "sending" | "success" | "invalid_link" | "rate_limited" | "unknown";
-export interface ResetState { phase: ResetPhase; error?: string; field?: "password" | "confirm"; retryAfter?: number | null; waiting?: boolean }
+export type ResetPhase = "reading" | "missing" | "form" | "sending" | "waiting_previous" | "success" | "invalid_link" | "rate_limited" | "unknown";
+export interface ResetState {
+  phase: ResetPhase; error?: string; field?: "password" | "confirm"; retryAfter?: number | null; waiting?: boolean;
+  hasToken?: boolean; notice?: "replaced";
+}
 export interface ResetOutcome { phase: ResetPhase; error?: string; field?: "password"; retryAfter?: number | null; dropToken?: boolean }
 export type ResetAction =
   | { type: "captured"; hasToken: boolean } | { type: "submit" } | { type: "invalid"; error: string; field?: "password" | "confirm" }
-  | { type: "success" } | { type: "failed"; outcome: ResetOutcome } | { type: "edit" } | { type: "cooldown"; waiting: boolean };
+  | { type: "success" } | { type: "failed"; outcome: ResetOutcome } | { type: "edit" } | { type: "cooldown"; waiting: boolean }
+  | { type: "settled_stale" };
 export const RESET_INITIAL: ResetState;
 export function resetReducer(state: ResetState, action: ResetAction): ResetState;
 export function classifyResetError(e: unknown): ResetOutcome;

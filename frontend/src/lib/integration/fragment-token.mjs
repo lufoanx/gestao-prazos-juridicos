@@ -28,23 +28,33 @@ export function captureFragmentToken(win) {
  * remontagem do efeito) não perdem o token nem o leem duas vezes. A primeira chamada de `capture`
  * lê e limpa a barra; as seguintes devolvem o mesmo resultado, exceto quando um NOVO fragmento
  * aparece na barra (outro link aberto na mesma aba: `hashchange`), que substitui o anterior.
+ *
+ * Cada leitura nova recebe uma REVISÃO (1, 2, …). Quem usa o token guarda a revisão da captura que
+ * o originou; `clear(revisão)` só descarta o token se ele ainda for daquela captura — a resposta de
+ * uma tentativa feita com o link anterior nunca apaga o link novo (doc 21, §23).
  */
 export function createFragmentTokenHolder() {
-  let captured = false;
+  let revision = 0;
   let token = null;
   return {
-    /** @returns {{ token: string | null, fresh: boolean }} fresh = leitura nova da barra */
+    /** @returns {{ token: string | null, fresh: boolean, revision: number }} fresh = leitura nova da barra */
     capture(win) {
-      if (!captured || win.location.hash) {
+      if (revision === 0 || win.location.hash) {
         token = captureFragmentToken(win);
-        captured = true;
-        return { token, fresh: true };
+        revision += 1;
+        return { token, fresh: true, revision };
       }
-      return { token, fresh: false };
+      return { token, fresh: false, revision };
     },
     /** Token atual em memória (somente para o corpo da requisição). */
     get token() { return token; },
-    /** Descarta o token (sucesso, link recusado). */
-    clear() { token = null; },
+    /** Revisão da captura atual (0 = nada lido ainda). */
+    get revision() { return revision; },
+    /** Descarta o token SE ainda for o da captura `rev` (sucesso, link recusado). @returns {boolean} */
+    clear(rev) {
+      if (rev !== revision) return false;
+      token = null;
+      return true;
+    },
   };
 }

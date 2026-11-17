@@ -6,6 +6,7 @@ import { ApiError, createApiClient } from "../src/lib/integration/api-client.mjs
 import { createFragmentTokenHolder, captureFragmentToken, parseFragmentToken } from "../src/lib/integration/fragment-token.mjs";
 import { captureInviteToken, parseInviteFragment } from "../src/lib/integration/invite-token.mjs";
 import { RECOVERY_PATHS, createRecoveryClient } from "../src/lib/integration/recovery-client.mjs";
+import { createResetController } from "../src/lib/integration/reset-controller.mjs";
 import {
   FORGOT_INITIAL, RECOVERY_TEXT, RESET_INITIAL, checkForgotForm, checkResetForm, classifyForgotError, classifyResetError,
   createSingleFlight, forgotReducer, parseRetryAfter, rateLimitText, resetReducer,
@@ -75,7 +76,9 @@ test("fragmento: captura idempotente sob efeitos repetidos (StrictMode) e novo l
   win.location.hash = `#${NEW}`;                                       // outro link aberto na aba (hashchange)
   check(holder.capture(win).token === NEW, "novo link substitui o anterior");
   assert.equal(calls.length, 2);
-  holder.clear();
+  check(holder.revision === 2, "uma revisão por leitura nova");
+  check(holder.clear(1) === false && holder.token === NEW, "descarte de captura antiga não apaga o link novo");
+  check(holder.clear(2) === true, "descarte da captura atual");
   assert.equal(holder.token, null);
   assert.equal(holder.capture(win).token, null);                       // descartado não volta
 });
@@ -190,7 +193,14 @@ test("redefinição: leitura, envio único, sucesso só depois do envio, link in
   assert.equal(s.phase, "form");
   s = resetReducer(s, { type: "submit" });
   assert.equal(resetReducer(s, { type: "submit" }), s);
-  assert.equal(resetReducer(s, { type: "captured", hasToken: true }), s);       // novo link durante o envio: espera
+  const waiting = resetReducer(s, { type: "captured", hasToken: true });       // novo link durante o envio
+  assert.deepEqual(waiting, { phase: "waiting_previous", hasToken: true });
+  assert.equal(resetReducer(waiting, { type: "success" }), waiting);           // resposta antiga não vale para o novo link
+  assert.equal(resetReducer(waiting, { type: "failed", outcome: { phase: "invalid_link" } }), waiting);
+  assert.equal(resetReducer(waiting, { type: "submit" }), waiting);
+  assert.equal(resetReducer(waiting, { type: "edit" }), waiting);
+  assert.deepEqual(resetReducer(waiting, { type: "settled_stale" }), { phase: "form", notice: "replaced" });
+  assert.deepEqual(resetReducer({ phase: "waiting_previous", hasToken: false }, { type: "settled_stale" }), { phase: "missing" });
   assert.equal(resetReducer(s, { type: "success" }).phase, "success");
   assert.equal(resetReducer({ phase: "form" }, { type: "success" }).phase, "form");
   const weak = resetReducer(s, { type: "failed", outcome: { phase: "form", error: "x", field: "password" } });
@@ -229,4 +239,124 @@ test("rotas: formato antigo /redefinir-senha/<token> nunca chega a uma página q
     assert.deepEqual(routeDecision("/redefinir-senha-antigo", mode), { action: "allow", noReferrer: true });
     assert.equal(routeDecision("/esqueci-senha", mode).action, "allow");
   }
+});
+
+// ------------------------------------------------------------------- coordenação completa (§23)
+// Controlador real (captura + estado + envio único + resposta), com cliente dublê e gates.
+const TOKEN_A = "A".repeat(43);
+const TOKEN_B = "B".repeat(20) + "-_" + "b".repeat(21);
+const winAt = (hash) => {
+  const win = { location: { hash, pathname: "/redefinir-senha" }, history: { calls: 0, replaceState() { win.history.calls++; win.location.hash = ""; } } };
+  return win;
+};
+function gatedClient() {
+  const calls = [];
+  return {
+    calls,
+    reset(token, newPassword) {
+      let settle;
+      const p = new Promise((resolve, reject) => { settle = { resolve, reject }; });
+      calls.push({ token, newPassword, settle });
+      return p;
+    },
+  };
+}
+const flush = () => new Promise((r) => setImmediate(r));
+const outcomes = {
+  invalid: (s) => s.reject(apiError(400, "invalid_reset_token")),
+  success: (s) => s.resolve(null),
+  rate_limited: (s) => s.reject(apiError(429, "rate_limited", { retryAfter: "60" })),
+  unknown: (s) => s.reject(apiError(504, "upstream_timeout", { outcome: "unknown" })),
+  network: (s) => s.reject(apiError(0, "network_error")),
+  weak: (s) => s.reject(apiError(422, "validation_error")),
+};
+
+for (const [name, finish] of Object.entries(outcomes)) {
+  test(`coordenação: resposta "${name}" de A liberada depois da captura de B não apaga nem substitui B`, async () => {
+    const win = winAt(`#${TOKEN_A}`);
+    const client = gatedClient();
+    const ctl = createResetController({ client, getWindow: () => win });
+    ctl.read();
+    ctl.read();                                                          // efeito repetido (StrictMode)
+    check(win.history.calls === 1 && ctl.snapshot.state.phase === "form", "captura idempotente de A");
+    ctl.setPassword(PASSWORD); ctl.setConfirm(PASSWORD);
+    const pending = ctl.submit();                                        // A sai e fica retida
+    await flush();
+    check(client.calls.length === 1 && client.calls[0].token === TOKEN_A, "A enviada com o token de A");
+
+    win.location.hash = `#${TOKEN_B}`;                                   // hashchange: novo link
+    ctl.read();
+    check(win.location.hash === "", "fragmento novo removido imediatamente");
+    assert.deepEqual(ctl.snapshot.state, { phase: "waiting_previous", hasToken: true });
+    check(ctl.snapshot.password === "" && ctl.snapshot.confirm === "", "senhas de A descartadas ao aceitar B");
+    await ctl.submit();                                                  // clique ignorado? não há botão; e nada sai
+    check(client.calls.length === 1, "nada enviado enquanto A termina");
+
+    finish(client.calls[0].settle);                                      // libera a resposta antiga
+    await pending;
+    assert.deepEqual(ctl.snapshot.state, { phase: "form", notice: "replaced" });   // nem sucesso, nem erro de A
+    check(client.calls.length === 1, "nenhum envio automático com B");
+    check(!JSON.stringify(ctl.snapshot).includes(TOKEN_B), "token fora do estado renderizável");
+
+    ctl.setPassword("Senha-de-B-123"); ctl.setConfirm("Senha-de-B-123");
+    const sendB = ctl.submit();                                          // ação EXPLÍCITA
+    await flush();
+    check(client.calls.length === 2 && client.calls[1].token === TOKEN_B, "B utilizável sem reabrir o link");
+    client.calls[1].settle.resolve(null);
+    await sendB;
+    assert.equal(ctl.snapshot.state.phase, "success");
+    check(ctl.snapshot.password === "" && ctl.snapshot.confirm === "", "senhas descartadas após sucesso");
+    await ctl.submit();
+    check(client.calls.length === 2, "nenhuma repetição depois do sucesso");
+  });
+}
+
+test("coordenação: novo link MALFORMADO durante o envio → após A, link incompleto (sem herdar A)", async () => {
+  const win = winAt(`#${TOKEN_A}`);
+  const client = gatedClient();
+  const ctl = createResetController({ client, getWindow: () => win });
+  ctl.read(); ctl.setPassword(PASSWORD); ctl.setConfirm(PASSWORD);
+  const pending = ctl.submit();
+  await flush();
+  win.location.hash = "#quebrado!";
+  ctl.read();
+  check(win.location.hash === "", "malformado também removido");
+  client.calls[0].settle.resolve(null);                                  // A teve sucesso no servidor…
+  await pending;
+  assert.deepEqual(ctl.snapshot.state, { phase: "missing" });            // …mas a tela é a do link novo (incompleto)
+  await ctl.submit();
+  check(client.calls.length === 1, "nada enviado sem token");
+});
+
+test("coordenação: sem corrida, o resultado é da própria captura (sucesso descarta; link inválido descarta; senha recusada preserva)", async () => {
+  for (const [finish, phase, kept] of [["success", "success", false], ["invalid", "invalid_link", false], ["weak", "form", true]]) {
+    const win = winAt(`#${TOKEN_A}`);
+    const client = gatedClient();
+    const ctl = createResetController({ client, getWindow: () => win });
+    ctl.read(); ctl.setPassword(PASSWORD); ctl.setConfirm(PASSWORD);
+    const p = ctl.submit();
+    await flush();
+    outcomes[finish](client.calls[0].settle);
+    await p;
+    assert.equal(ctl.snapshot.state.phase, phase);
+    ctl.setPassword(PASSWORD); ctl.setConfirm(PASSWORD);
+    const again = ctl.submit();
+    await flush();
+    if (kept) {
+      check(client.calls.length === 2 && client.calls[1].token === TOKEN_A, "token preservado para nova tentativa explícita");
+      client.calls[1].settle.resolve(null);
+      await again;
+    } else {
+      await again;
+      check(client.calls.length === 1, "token descartado: nenhuma nova tentativa possível");
+    }
+  }
+});
+
+test("coordenação: recarregar (nova instância, sem fragmento) perde o token", () => {
+  const win = winAt(`#${TOKEN_A}`);
+  createResetController({ client: gatedClient(), getWindow: () => win }).read();
+  const after = createResetController({ client: gatedClient(), getWindow: () => win });   // a barra já está limpa
+  after.read();
+  assert.deepEqual(after.snapshot.state, { phase: "missing" });
 });

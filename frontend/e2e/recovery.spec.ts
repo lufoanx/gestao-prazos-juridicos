@@ -307,3 +307,92 @@ test("rotas públicas preservam a sessão existente", async ({ page, context }) 
   await page.goto("/app/perfil");
   await expect(page.getByLabel("E-mail")).toHaveValue(email);              // sessão continua válida
 });
+
+// ---------------------------------------------------------------------------------------------------
+// Corrida da auditoria da E5 (doc 21, §23): um NOVO link (B) é aberto na mesma aba enquanto a
+// redefinição com o link anterior (A) aguarda resposta. A resposta de A — retida num gate do harness
+// e liberada só DEPOIS da captura de B — não pode apagar B nem aparecer como resultado de B.
+// Contas fictícias distintas: B continua válido qualquer que seja o resultado de A.
+async function linkRace(browser: import("@playwright/test").Browser, kind: "invalid" | "success") {
+  needsMail();
+  const emailA = newEmail();
+  const emailB = newEmail();
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await ctxA.newPage();
+  const pageB = await ctxB.newPage();
+  await signup(pageA, "Ana Antiga", emailA);
+  await signup(pageB, "Beto Novo", emailB);
+  await requestLinkVia(pageB, emailB);
+  const [tokenB] = await tokensFor(emailB, 1);
+  let tokenA = fakeToken();                                                // A inválido: o backend responde 400
+  if (kind === "success") {
+    await requestLinkVia(pageA, emailA);
+    [tokenA] = await tokensFor(emailA, 1);                                 // A válido: o backend redefine
+  }
+  await ctxA.close();
+  await ctxB.close();
+
+  const context = await browser.newContext();
+  const reqs = recordRequests(context);
+  const page = await context.newPage();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  let arrived!: () => void;
+  const held = new Promise<void>((r) => { arrived = r; });
+  let posts = 0;
+  await page.route(`**${PUBLIC}reset`, async (route) => {
+    posts++;
+    if (posts === 1) { arrived(); await gate; }                            // retém SÓ a primeira (A)
+    await route.continue();
+  });
+
+  await openLink(page, tokenA);
+  const passwordA = freshPassword();
+  await fillNewPassword(page, passwordA);
+  await page.getByRole("button", { name: "Redefinir senha" }).click();
+  await held;                                                              // A saiu do navegador e está retida
+
+  await openLink(page, tokenB);                                            // novo link na MESMA aba (hashchange)
+  // o hashchange é tratado logo após a navegação no mesmo documento: espera a condição (booleana, sem a URL)
+  await expect.poll(() => new URL(page.url()).hash === "", { message: "fragmento novo removido" }).toBe(true);
+  await expect(page.getByText(T().waitingPrevious)).toBeVisible();        // estado explícito enquanto A termina
+  check((await page.getByRole("button", { name: /Redefinir/ }).count()) === 0, "nenhum botão de envio enquanto A termina");
+
+  const answerA = page.waitForResponse((r) => new URL(r.url()).pathname === `${PUBLIC}reset`);
+  release();
+  check((await answerA).status() === (kind === "invalid" ? 400 : 204), "resposta real de A");
+
+  const formB = page.getByRole("button", { name: "Redefinir senha" });
+  const oldResult = page.getByText(T().invalidLink).or(page.getByText(T().success));
+  await expect(formB.or(oldResult)).toBeVisible();
+  check((await oldResult.count()) === 0, "resultado de A não aparece como resultado de B");
+  await expect(formB).toBeEnabled();
+  await expect(page.getByText(T().replaced)).toBeVisible();
+  check((await page.getByRole("textbox", { name: "Nova senha", exact: true }).inputValue()) === "", "senha anterior descartada");
+  check((await page.getByRole("textbox", { name: "Confirmar nova senha", exact: true }).inputValue()) === "", "confirmação anterior descartada");
+  check(posts === 1, "nenhum envio automático com B");
+
+  const passwordB = freshPassword();
+  await fillNewPassword(page, passwordB);
+  await formB.click();                                                     // ação EXPLÍCITA
+  await expect(page.getByText(T().success)).toBeVisible();
+  check(posts === 2, "exatamente um envio por tentativa");
+  await expectTokenNowhere(page, context, tokenB, reqs.all);
+  await expectTokenNowhere(page, context, tokenA, reqs.all);
+
+  const verify = await (await browser.newContext()).newPage();
+  check((await loginOutcome(verify, emailB, passwordB)) === "ok", "B redefiniu a conta correta");
+  if (kind === "success") check((await loginOutcome(verify, emailA, passwordA)) === "ok", "A tinha sido concluída no servidor");
+  else check((await loginOutcome(verify, emailA, PASSWORD)) === "ok", "conta de A intacta");
+  await verify.context().close();
+  await context.close();
+}
+
+test("corrida: resposta INVÁLIDA de A liberada depois da captura de B não apaga nem substitui B", async ({ browser }) => {
+  await linkRace(browser, "invalid");
+});
+
+test("corrida: resposta de SUCESSO de A liberada depois da captura de B não apaga nem substitui B", async ({ browser }) => {
+  await linkRace(browser, "success");
+});

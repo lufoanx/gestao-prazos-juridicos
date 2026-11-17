@@ -2,12 +2,11 @@
 // Estado das telas de recuperação (E5) ligado ao React. As regras ficam em
 // src/lib/integration/recovery-flow.mjs (puras, testadas sem navegador); aqui só há efeitos:
 // consulta de disponibilidade, captura do fragmento, envio único e fim da espera do Retry-After.
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { createRecoveryClient } from "@/lib/integration/recovery-client.mjs";
-import { createFragmentTokenHolder, type FragmentTokenHolder } from "@/lib/integration/fragment-token.mjs";
+import { createResetController, type ResetController } from "@/lib/integration/reset-controller.mjs";
 import {
-  FORGOT_INITIAL, RESET_INITIAL, checkForgotForm, checkResetForm, classifyForgotError, classifyResetError,
-  createSingleFlight, forgotReducer, resetReducer,
+  FORGOT_INITIAL, checkForgotForm, classifyForgotError, createSingleFlight, forgotReducer,
 } from "@/lib/integration/recovery-flow.mjs";
 
 /** Libera nova tentativa só depois do Retry-After (um único temporizador, cancelado ao sair). */
@@ -63,58 +62,32 @@ export function useForgotFlow() {
 }
 
 // ------------------------------------------------------------------------------- /redefinir-senha
+// A coordenação (captura com revisões, estado, envio único, respostas de links substituídos) está em
+// src/lib/integration/reset-controller.mjs; aqui só há a assinatura e os efeitos do navegador.
 export function useResetFlow() {
-  const client = useMemo(() => createRecoveryClient(), []);
-  const [state, dispatch] = useReducer(resetReducer, RESET_INITIAL);
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const holder = useRef<FragmentTokenHolder | null>(null);
-  if (holder.current === null) holder.current = createFragmentTokenHolder();
-  const flight = useRef(createSingleFlight());
+  const ctl = useRef<ResetController | null>(null);
+  if (ctl.current === null) {
+    ctl.current = createResetController({ client: createRecoveryClient(), getWindow: () => window });
+  }
+  const c = ctl.current;
+  const snap = useSyncExternalStore(c.subscribe, () => c.snapshot, () => c.snapshot);
 
   // Captura no cliente, uma vez por instância (efeitos repetidos devolvem o mesmo token); um novo
-  // link aberto na mesma aba (hashchange) substitui o anterior. O token NUNCA entra no estado do
-  // React nem no DOM: fica no objeto `holder`, fora da renderização.
+  // link aberto na mesma aba (hashchange) é lido e removido da barra imediatamente, mesmo durante
+  // um envio. O token NUNCA entra no estado do React nem no DOM.
   useEffect(() => {
-    const read = () => {
-      const { token } = holder.current!.capture(window);
-      dispatch({ type: "captured", hasToken: token !== null });
-    };
-    read();
-    const onHash = () => { if (window.location.hash) read(); };
+    c.read();
+    const onHash = () => { if (window.location.hash) c.read(); };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
-  }, []);
+  }, [c]);
 
-  const endCooldown = useCallback(() => dispatch({ type: "cooldown", waiting: false }), []);
-  useCooldown(state.phase === "rate_limited" ? state.waiting : false, state.retryAfter, endCooldown);
+  const endCooldown = useCallback(() => c.endCooldown(), [c]);
+  useCooldown(snap.state.phase === "rate_limited" ? snap.state.waiting : false, snap.state.retryAfter, endCooldown);
 
-  const submit = useCallback(async () => {
-    const errors = checkResetForm({ password, confirm });
-    if (errors.password || errors.confirm) {
-      if (errors.password) dispatch({ type: "invalid", error: errors.password, field: "password" });
-      else dispatch({ type: "invalid", error: errors.confirm!, field: "confirm" });
-      return errors;
-    }
-    const token = holder.current!.token;
-    if (!token) { dispatch({ type: "captured", hasToken: false }); return {}; }
-    await flight.current.run(async () => {
-      dispatch({ type: "submit" });
-      try {
-        await client.reset(token, password);
-        holder.current!.clear();                                // token e senhas saem da memória
-        setPassword("");
-        setConfirm("");
-        dispatch({ type: "success" });
-      } catch (e) {
-        const outcome = classifyResetError(e);
-        if (outcome.dropToken) holder.current!.clear();
-        dispatch({ type: "failed", outcome });                  // nunca repete sozinho
-      }
-    });
-    return {};
-  }, [client, password, confirm]);
-
-  const edit = useCallback(() => dispatch({ type: "edit" }), []);
-  return { state, password, setPassword, confirm, setConfirm, submit, edit };
+  return {
+    state: snap.state, password: snap.password, confirm: snap.confirm,
+    setPassword: c.setPassword, setConfirm: c.setConfirm,
+    submit: c.submit, edit: c.edit,
+  };
 }

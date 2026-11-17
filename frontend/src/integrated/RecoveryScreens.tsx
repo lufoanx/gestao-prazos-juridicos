@@ -133,6 +133,7 @@ export function IntegratedForgotPassword() {
 const RESET_TITLE: Record<string, string> = {
   reading: "Redefinir senha", missing: "Link incompleto", form: "Redefinir senha", sending: "Redefinir senha",
   success: "Senha redefinida", invalid_link: "Link inválido", rate_limited: "Muitas tentativas", unknown: "Resultado não confirmado",
+  waiting_previous: "Novo link recebido",
 };
 
 export function IntegratedResetPassword() {
@@ -145,6 +146,7 @@ export function IntegratedResetPassword() {
     if (state.phase !== "form") return;
     if (state.field === "password") pwRef.current?.focus();
     if (state.field === "confirm") confirmRef.current?.focus();
+    if (!state.field && state.notice === "replaced") pwRef.current?.focus();   // formulário do novo link liberado
   }, [state]);
   const sending = state.phase === "sending";
 
@@ -158,6 +160,17 @@ export function IntegratedResetPassword() {
         <>
           <StateBox kind="warn">{RECOVERY_TEXT.missingLink}</StateBox>
           <Link className="btn btn--primary btn--block" href="/esqueci-senha" style={{ marginTop: 16 }}>Pedir novo link</Link>
+          <BackToLogin />
+        </>
+      );
+      break;
+    case "waiting_previous":                                   // sem formulário nem botão até A terminar
+      body = (
+        <>
+          <div className="state-box" role="status" aria-busy="true">
+            <Info size={20} aria-hidden />
+            <span>{RECOVERY_TEXT.waitingPrevious}</span>
+          </div>
           <BackToLogin />
         </>
       );
@@ -203,6 +216,12 @@ export function IntegratedResetPassword() {
     default:                                                     // form | sending
       body = (
         <>
+          {state.notice === "replaced" ? (
+            <div className="form-note" role="status">
+              <Info size={16} aria-hidden />
+              <span>{RECOVERY_TEXT.replaced}</span>
+            </div>
+          ) : null}
           <div className="form-note">
             <Info size={16} aria-hidden />
             <span>{RECOVERY_TEXT.memoryOnly}</span>
