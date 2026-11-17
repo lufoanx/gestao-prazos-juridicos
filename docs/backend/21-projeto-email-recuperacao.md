@@ -12,7 +12,7 @@
 > **Status:** **E1, E2 e E3 implementadas** (E1: configuração, composição e transporte isolado, §14;
 > E2: `RecoveryDispatcher`, ligação com `forgot-password`, limite por IP e `status`, §15, com as
 > correções de auditoria em §16–§17; E3: capturador SMTP local no CI e integração real com PostgreSQL,
-> §18, aguardando auditoria). **E4–E6 pendentes**: rotas BFF, telas integradas e E2E da recuperação,
+> §18, com a correção da auditoria em §19, aguardando auditoria). **E4–E6 pendentes**: rotas BFF, telas integradas e E2E da recuperação,
 > documentação operacional. Produção continua bloqueada; nenhum provedor foi contratado e nenhum
 > e-mail externo foi enviado.
 >
@@ -1130,8 +1130,9 @@ de URLs/storage do navegador (E5).
 ### 18.5 Segurança dos testes
 - Contas fictícias (`@exemplo.com`) e bancos descartáveis pelas fixtures protegidas existentes.
 - O capturador só aceita API/SMTP em loopback; a caixa é esvaziada antes e depois de cada teste.
-- Nenhuma asserção imprime corpo, link ou token (`CapturedMessage.__repr__` é opaco; a extração do link
-  não o inclui em mensagens de falha). Nada do conteúdo vai para logs ou artefatos do CI.
+- Nenhuma falha imprime corpo, link, token, senha ou destinatário: as verificações sensíveis passam por
+  `tests/recovery_mail_checks.py`/`tests/sensitive_checks.py` (corrigido na auditoria, §19). Nada do
+  conteúdo vai para logs ou artefatos do CI.
 
 ### 18.6 Comandos locais reproduzíveis
 ```bash
@@ -1164,3 +1165,49 @@ docker compose -f backend/test-infra/mailpit/compose.yaml down
 3. "Com o token do e-mail, redefinimos a senha: a antiga para de funcionar, a nova funciona e as sessões
    antigas caem. Dois pedidos geram dois e-mails, mas só o último link vale. E quando o SMTP falha ou fica
    lento, nada é repetido e nada é prometido."
+
+## 19. Correção da auditoria da E3: falhas de teste sem reproduzir segredos
+
+### 19.1 Achado (reproduzido pela auditoria com token sintético; nenhuma credencial real exposta)
+- O `repr` opaco de `CapturedMessage` não impedia a exposição: a reescrita de `assert` do pytest explica
+  os **operandos**. `assert "Gerado em: …" in msg.text` imprimia o corpo inteiro (com o link e o token)
+  ao falhar; o mesmo valia para "Válido até" e o texto explicativo.
+- `assert segredo not in caplog.text` imprimia o segredo e o log ao detectar um vazamento, e o pytest
+  ainda anexava os registros capturados ("Captured log") ao relatório.
+- Também identificado na revisão: chamadas com token, senha ou credencial **dentro** de `assert` (ex.:
+  `assert client.post(..., json={"token": …}).status_code == 400`) exibem os argumentos na explicação.
+
+### 19.2 Correção (somente testes; nenhum código de produto alterado)
+| Arquivo | Mudança |
+|---|---|
+| `tests/sensitive_checks.py` (novo) | `require`, `require_contains`, `require_absent`: avaliam a condição fora de qualquer `assert` e falham com `pytest.fail(rótulo, pytrace=False)` — só o nome do requisito, sem operandos e sem traceback (portanto sem variáveis locais mesmo com `--showlocals`). `private_log_capture`: retira temporariamente os handlers da raiz (inclusive os do pytest) e grava os registros numa lista privada; restauração em `finally` |
+| `tests/recovery_mail_checks.py` (novo) | verificações da E3 (remetente, destinatário, assunto, link/origem/fragmento, instantes persistidos, aviso do último link, só o hash no banco, logs limpos), usadas pelos testes reais e pela prova negativa |
+| `tests/test_recovery_mailpit.py` | todas as verificações sensíveis passam pelos módulos acima; requisições com token, senha ou credencial ficam fora de `assert` (só os códigos de status são comparados); os cenários de logs (ausência de segredos e SMTP lento) usam a captura privada |
+
+Nenhuma verificação foi removida ou enfraquecida; os diagnósticos do restante da suíte não mudaram
+(nada foi desabilitado globalmente).
+
+### 19.3 Prova negativa automatizada
+`tests/test_recovery_mail_checks_negative.py` executa o pytest num **subprocesso** sobre um módulo
+sintético com dados **inteiramente fictícios** (token aleatório gerado no teste e passado pelo
+ambiente), usando as mesmas funções dos testes reais, com o máximo de diagnóstico (`--showlocals`,
+`--log-level=DEBUG`, JUnit com `junit_logging=all`):
+1. divergência deliberada em "Gerado em" → o caso falha com
+   `requisito não atendido: corpo: 'Gerado em' = registro persistido`;
+2. token fictício deliberadamente registrado no log → o caso falha com
+   `requisito não atendido: log expõe token`.
+
+A **falha do subprocesso é o resultado esperado** (código 1, "2 failed"). O teste externo **passa**
+quando stdout, stderr e o JUnit não contêm o token, o link completo, o fragmento `redefinir-senha#` nem o
+corpo sensível, e quando os rótulos sanitizados identificam cada requisito. O próprio teste externo usa
+`require`, de modo que nada é impresso se ele falhar.
+
+Contraprova executada uma vez (fora do repositório, sem imprimir o conteúdo): o estilo antigo
+(`assert … in BODY` e `assert TOKEN not in caplog.text`) com um token fictício expôs o token 5 vezes na
+saída do pytest; com as verificações novas, 0 vezes.
+
+### 19.4 Validação desta correção
+Os resultados executados estão no relatório desta entrega. Frontend, integração (memory/postgres), E2E e
+o ciclo de migrations/manutenção **não foram reexecutados** nesta correção (nenhum arquivo dessas áreas
+mudou); permanecem validados pela entrega anterior (`508edde`). O serviço Mailpit em contêiner do CI
+continua **não executado** aqui (imagem inacessível pela rede deste ambiente; §18.7).

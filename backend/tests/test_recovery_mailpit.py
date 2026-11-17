@@ -9,17 +9,17 @@ Classificação:
   segura a saudação) para o prazo total; porta fechada para "servidor indisponível".
 Coordenação: espera do worker por Condition (`drain`), gate no envio e condições observáveis na API do
 capturador (prazo só de proteção). Sem sleeps para ordenar cenários, sem retries.
-Nenhuma asserção imprime corpo, link ou token (o `repr` das mensagens capturadas é opaco).
+Correção da auditoria da E3: TODA verificação que envolve corpo, link, token, senha, destinatário ou
+registros sensíveis passa por `tests/recovery_mail_checks.py`/`tests/sensitive_checks.py`, que falham só
+com o NOME do requisito (sem operandos, sem traceback). Chamadas que levam token, senha ou credencial no
+corpo da requisição ficam FORA de `assert` (a explicação do pytest mostraria os argumentos). O cenário
+de logs usa captura privada: os registros não aparecem no relatório nem quando o teste falha.
 """
 from __future__ import annotations
 
 import contextvars
-import logging
 import socket
 import threading
-import urllib.parse
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -27,10 +27,17 @@ from sqlalchemy import event, func, select
 
 from app.db.tables import password_reset_tokens, users
 from app.recovery.dispatcher import WORKER_THREAD_NAME, DispatcherState
-from app.security.tokens import hash_opaque_token
 from tests.auth_utils import API, PASSWORD, bearer, register, register_and_login
 from tests.mailpit_support import FROM_ADDRESS, FROM_NAME, ORIGIN, smtp_env
+from tests.recovery_mail_checks import (
+    check_logs_clean,
+    check_message,
+    check_only_hash_stored,
+    check_persisted_instants,
+    extract_reset_token,
+)
 from tests.recovery_support import WAIT, dispatcher, drain
+from tests.sensitive_checks import private_log_capture, require
 from tests.test_email_transport import live_children
 
 pytestmark = [pytest.mark.postgres, pytest.mark.mailpit]
@@ -48,15 +55,8 @@ def transport_of(app):
     return dispatcher(app)._delivery._transport
 
 
-def reset_link_parts(text: str) -> urllib.parse.SplitResult:
-    """Extrai o (único) link de redefinição do corpo sem nunca imprimi-lo."""
-    links = [w for w in text.split() if w.startswith(f"{ORIGIN}/redefinir-senha")]
-    assert len(links) == 1, "o corpo deve conter exatamente um link de redefinição"
-    return urllib.parse.urlsplit(links[0])
-
-
-def local_fmt(moment: datetime) -> str:
-    return moment.astimezone(ZoneInfo(TZ)).strftime("%d/%m/%Y %H:%M") + f" ({TZ})"
+def reset_token(msg) -> str:
+    return extract_reset_token(msg.text, ORIGIN)
 
 
 @pytest.fixture
@@ -143,20 +143,11 @@ def test_mensagem_remetente_origem_fragmento_instantes_e_hash(pg_app, pg_schema,
         drain(app)
         assert box.wait_count(1) == 1
     (msg,) = box.messages_to(EMAIL)
-    assert msg.from_address == FROM_ADDRESS and msg.from_name == FROM_NAME
-    assert msg.to == (EMAIL,) and msg.subject == "PrazoAI: redefinição de senha"
-    link = reset_link_parts(msg.text)
-    assert f"{link.scheme}://{link.netloc}" == ORIGIN                 # origem CONFIGURADA, nunca Host
-    assert link.path == "/redefinir-senha" and link.query == ""        # token fora do caminho e da query
-    token = link.fragment
-    assert token and token not in link.path and token not in link.query
+    token = check_message(msg, origin=ORIGIN, from_name=FROM_NAME, from_address=FROM_ADDRESS, recipient=EMAIL)
     with pg_schema.connect() as c:
         row = c.execute(select(password_reset_tokens)).one()
-        dump = " ".join(str(v) for v in c.execute(select(password_reset_tokens)).one())
-    assert row.token_hash == hash_opaque_token(token) and token not in dump   # só o hash no banco
-    assert f"Gerado em: {local_fmt(row.created_at)}" in msg.text            # instantes PERSISTIDOS
-    assert f"Válido até: {local_fmt(row.expires_at)}" in msg.text
-    assert "apenas o link gerado por último funciona" in msg.text
+    check_only_hash_stored(token, stored_hash=row.token_hash, row_dump=" ".join(str(v) for v in row))
+    check_persisted_instants(msg, created_at=row.created_at, expires_at=row.expires_at, tz=TZ)
 
 
 def test_token_recebido_redefine_senha_e_revoga_sessoes(pg_app, pg_schema, mailpit, no_leftover_children):
@@ -167,16 +158,20 @@ def test_token_recebido_redefine_senha_e_revoga_sessoes(pg_app, pg_schema, mailp
         assert post_forgot(client).status_code == 202
         drain(app)
         assert box.wait_count(1) == 1
-        token = reset_link_parts(box.messages_to(EMAIL)[0].text).fragment
+        token = reset_token(box.messages_to(EMAIL)[0])
+        # Requisições com token, senha ou credencial ficam FORA de `assert` (argumentos não são explicados).
         reset = client.post(f"{API}/auth/reset-password", json={"token": token, "newPassword": NEW_PASSWORD})
-        assert reset.status_code == 204 and reset.content == b""         # sem login automático
-        old = client.post(f"{API}/auth/login", json={"email": EMAIL, "password": PASSWORD})
-        new = client.post(f"{API}/auth/login", json={"email": EMAIL, "password": NEW_PASSWORD})
-        assert old.status_code == 401 and new.status_code == 200
-        assert client.get(f"{API}/auth/me", headers=bearer(session["accessToken"])).status_code == 401
-        assert client.post(f"{API}/auth/refresh", json={"refreshToken": session["refreshToken"]}).status_code == 401
-        again = client.post(f"{API}/auth/reset-password", json={"token": token, "newPassword": "Outra-senha-789"})
-        assert again.status_code == 400                                 # consumo único
+        reset_status, reset_body = reset.status_code, reset.content
+        old_login = client.post(f"{API}/auth/login", json={"email": EMAIL, "password": PASSWORD}).status_code
+        new_login = client.post(f"{API}/auth/login", json={"email": EMAIL, "password": NEW_PASSWORD}).status_code
+        old_access = client.get(f"{API}/auth/me", headers=bearer(session["accessToken"])).status_code
+        old_refresh = client.post(f"{API}/auth/refresh", json={"refreshToken": session["refreshToken"]}).status_code
+        again = client.post(f"{API}/auth/reset-password",
+                            json={"token": token, "newPassword": "Outra-senha-789"}).status_code
+        assert reset_status == 204 and reset_body == b""               # sem login automático
+        assert old_login == 401 and new_login == 200
+        assert old_access == 401 and old_refresh == 401                 # sessões anteriores revogadas
+        assert again == 400                                             # consumo único
     with pg_schema.connect() as c:
         assert c.execute(select(users.c.credential_version)).scalar_one() == 1
 
@@ -191,27 +186,33 @@ def test_dois_pedidos_em_ordem_duas_mensagens_so_o_ultimo_token_vale(pg_app, mai
         assert post_forgot(client).status_code == 202
         drain(app)
         assert box.wait_count(2) == 2
-        first, second = (reset_link_parts(m.text).fragment for m in box.messages_to(EMAIL))
-        assert first != second
-        body = {"token": first, "newPassword": NEW_PASSWORD}
-        assert client.post(f"{API}/auth/reset-password", json=body).status_code == 400   # substituído
-        body["token"] = second
-        assert client.post(f"{API}/auth/reset-password", json=body).status_code == 204
+        first, second = (reset_token(m) for m in box.messages_to(EMAIL))
+        require(first != second, "dois pedidos: tokens distintos")
+        first_status = client.post(f"{API}/auth/reset-password",
+                                   json={"token": first, "newPassword": NEW_PASSWORD}).status_code
+        second_status = client.post(f"{API}/auth/reset-password",
+                                    json={"token": second, "newPassword": NEW_PASSWORD}).status_code
+        assert first_status == 400                                      # substituído
+        assert second_status == 204
 
 
-def test_logs_sem_token_link_corpo_ou_destinatario(pg_app, mailpit, caplog, no_leftover_children):
+def test_logs_sem_token_link_corpo_ou_destinatario(pg_app, mailpit, no_leftover_children):
+    """Captura PRIVADA dos logs (fora dos handlers do pytest): um vazamento faz o teste falhar citando só
+    o rótulo do segredo, e os registros não aparecem em "Captured log" no relatório."""
     box, target = mailpit
-    with caplog.at_level(logging.DEBUG):
+    with private_log_capture() as logs:
         app = pg_app(**smtp_env(target))
         with TestClient(app) as client:
             register(client)
             post_forgot(client)
             drain(app)
             assert box.wait_count(1) == 1
-    token = reset_link_parts(box.messages_to(EMAIL)[0].text).fragment
-    for secret in (token, EMAIL, "redefinir-senha#", PASSWORD, "Recebemos um pedido"):
-        assert secret not in caplog.text
-    assert "result=delivery_accepted" in caplog.text
+    token = reset_token(box.messages_to(EMAIL)[0])
+    check_logs_clean(logs.text, {
+        "token": token, "link do token": f"redefinir-senha#{token}", "destinatário": EMAIL,
+        "senha": PASSWORD, "corpo da mensagem": "Recebemos um pedido",
+    })
+    require("result=delivery_accepted" in logs.text, "log: categoria do resultado da entrega")
 
 
 # ------------------------------------------------------------------ falhas e limites
@@ -251,7 +252,7 @@ def test_servidor_smtp_inacessivel_sem_repeticao_e_sem_prometer_entrega(pg_app, 
         assert c.execute(select(func.count()).select_from(password_reset_tokens)).scalar_one() == 1
 
 
-def test_smtp_lento_vence_o_prazo_total_resultado_incerto_sem_repeticao(pg_app, pg_schema, mailpit, caplog,
+def test_smtp_lento_vence_o_prazo_total_resultado_incerto_sem_repeticao(pg_app, pg_schema, mailpit,
                                                                         no_leftover_children):
     """SIMULAÇÃO controlada: servidor SMTP local que aceita a conexão e NÃO envia a saudação. O supervisor
     encerra o filho no prazo total (`deadline_killed`, entrega INCERTA), sem repetir; nada chega ao
@@ -261,7 +262,7 @@ def test_smtp_lento_vence_o_prazo_total_resultado_incerto_sem_repeticao(pg_app, 
     box, _ = mailpit
     hold = threading.Event()
     with SmtpTestServer(ServerOptions(hold_greeting=hold)) as slow:
-        with caplog.at_level(logging.INFO):
+        with private_log_capture() as logs:
             app = pg_app(**smtp_env(("127.0.0.1", slow.port), SMTP_TIMEOUT_SECONDS="30",
                                     SMTP_SEND_DEADLINE_SECONDS="5", SMTP_TERM_GRACE_SECONDS="0.5",
                                     SMTP_REAP_TIMEOUT_SECONDS="1"))
@@ -273,7 +274,8 @@ def test_smtp_lento_vence_o_prazo_total_resultado_incerto_sem_repeticao(pg_app, 
         assert slow.opts.messages == []
     t = transport_of(app)
     assert t.spawned == 1 and dispatcher(app).counter("delivery_deadline_killed") == 1
-    assert "result=delivery_deadline_killed" in caplog.text and "result=delivery_accepted" not in caplog.text
+    require("result=delivery_deadline_killed" in logs.text, "log: resultado incerto registrado")
+    require("result=delivery_accepted" not in logs.text, "log: sem afirmação de envio aceito")
     assert box.count() == 0
     assert dispatcher(app).state is DispatcherState.STOPPED_CLEAN
     with pg_schema.connect() as c:
