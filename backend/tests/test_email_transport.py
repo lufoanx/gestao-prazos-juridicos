@@ -329,8 +329,13 @@ def test_desabilitado_nao_cria_subprocesso_nem_importa_recursos_linux():
               "from app.email.transport import build_email_transport; "
               "build_email_transport(Settings(_env_file=None)); "
               "print('app.email.smtp_subprocess' in sys.modules, 'resource' in sys.modules, 'signal' in sys.modules)")
+    from app.email.smtp_subprocess import child_env
+
+    # Ambiente mínimo da sonda; com interpretador de libpython compartilhada e relocada (job `integration`,
+    # doc 21 §21) ela precisa do MESMO diretório único que o transporte entrega ao filho — nada mais.
+    lib = {k: v for k, v in child_env(sys.executable).items() if k == "LD_LIBRARY_PATH"}
     out = subprocess.run([sys.executable, "-c", script], cwd=Path(__file__).resolve().parents[1], capture_output=True,
-                         text=True, timeout=60, env={"PATH": os.environ.get("PATH", "")})
+                         text=True, timeout=60, env={"PATH": os.environ.get("PATH", ""), **lib})
     assert out.stdout.strip().split()[:2] == ["False", "False"], out.stderr[-300:]
 
 

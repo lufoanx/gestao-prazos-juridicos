@@ -1342,3 +1342,95 @@ faixa de `org-backend`). O arquivo existente não foi alterado.
 3. "Se a API demora depois de receber o pedido, não dizemos que falhou: dizemos que o resultado é
    desconhecido e não reenviamos. Os testes provam isso com a API real, o e-mail capturado e a troca
    de senha de ponta a ponta."
+
+## 21. Correção da E4 após o CI oficial: o filho SMTP não iniciava no job `integration`
+
+### 21.1 Falha observada (PR #26, execução 44138663520, job `integration` 134237971254)
+Head publicado `d5f1631` (árvore idêntica à de `bc066cb`). Frontend, backend e estrutura passaram; no
+passo "Integração real (BFF + FastAPI, STORAGE=memory)" 41 de 45 testes passaram e 4 falharam — os
+quatro cenários de `recovery-backend.test.mjs` que esperam uma mensagem — todos com
+`requisito não atendido: capturador: mensagem esperada chegou`. O capturador havia subido ("capturador
+pronto"); os cenários que não dependem de mensagem (recuperação desabilitada, limites/IP) passaram.
+
+### 21.2 Causa comprovada
+- O job `integration` roda no contêiner oficial `mcr.microsoft.com/playwright:v1.64.1-noble` e usa o
+  Python do `actions/setup-python` (3.12.16), montado em `/__t/Python/3.12.16/x64`.
+- Esse Python é compilado com `--enable-shared`: o executável depende de `libpython3.12.so.1.0` e a
+  encontra por um **RUNPATH absoluto** `/opt/hostedtoolcache/Python/3.12.16/x64/lib` (verificado com
+  `readelf -d` no pacote oficial `python-3.12.16-linux-24.04-x64.tar.gz` do `actions/python-versions`,
+  SHA-256 `dec61ed2…f2191a`). Dentro do contêiner esse caminho não existe; o pai (uvicorn) só inicia
+  porque o setup-python exporta `LD_LIBRARY_PATH=/__t/Python/3.12.16/x64/lib`.
+- A imagem do Playwright não instala Python (Dockerfile `utils/docker/Dockerfile.noble` da v1.64.1:
+  Node.js, git, dependências dos navegadores), portanto não há `libpython` do sistema como alternativa.
+- O transporte da E1 cria o filho com o ambiente mínimo (`PATH`, `LANG`, `LC_ALL`) — correto quanto ao
+  isolamento, mas sem o diretório da biblioteca. O carregador dinâmico encerra o filho com **código 127**
+  antes de executar qualquer linha de `smtp_child.py`; o pai classifica a saída vazia como
+  `invalid_output` e nenhuma conexão SMTP é aberta.
+- No job `backend` (fora de contêiner) o toolcache está em `/opt/hostedtoolcache`, o RUNPATH resolve e
+  os testes reais da E1/E3 passavam — por isso a falha só apareceu no job `integration`, o primeiro a
+  exercitar o transporte real dentro do contêiner.
+
+### 21.3 Reprodução e observação por etapa (sanitizadas)
+O contêiner oficial **não pôde ser executado** aqui (sem daemon Docker; `mcr.microsoft.com` bloqueado
+pela rede). A reprodução usou o **mesmo binário** do setup-python, relocado para
+`/__t/Python/3.12.16/x64` (sem `/opt/hostedtoolcache`), com `PATH`/`LD_LIBRARY_PATH`/`pythonLocation`
+como o setup-python exporta e, num namespace de montagem privado, a `libpython` do sistema deste
+ambiente oculta (a imagem do Playwright não a tem). Diferença conhecida: aqui o carregador relata
+"file too short" (arquivo ocultado), no contêiner seria "cannot open shared object file"; ambos saem
+com 127 antes do código Python.
+
+Diagnóstico de UM pedido de conta fictícia (somente contadores, códigos e tamanhos):
+
+| Etapa | Antes da correção | Depois |
+|---|---|---|
+| 1. admissão / retirada da fila | `202`; `enqueued=1`; fila ociosa; 1 item finalizado | igual |
+| 2. consulta da conta e emissão do token | concluídas (o processador só chega à entrega depois de `lookup` e `issue`) | igual |
+| 3. tentativa de entrega | 1 tentativa, categoria `delivery_invalid_output` | `delivery_accepted` |
+| 4. criação / execução do subprocesso | criado (1), **código 127**, 0 bytes de saída; sonda isolada: `carregador_sem_libpython`; chaves do ambiente `LANG, LC_ALL, PATH` | código 0, 9 bytes; chaves `LANG, LC_ALL, LD_LIBRARY_PATH, PATH` |
+| 5. conexão SMTP / aceitação no capturador | nenhuma; 0 mensagens | 1 mensagem |
+
+Controle: o mesmo diagnóstico com o interpretador estático deste ambiente entregava a mensagem antes da
+correção. Com o mecanismo reproduzido, `recovery-backend.test.mjs` falha **exatamente** como no CI
+(testes 2, 3, 4 e 6 com o mesmo rótulo; 1 e 5 passam) e passa 6/6 depois da correção. Hipóteses
+descartadas pela observação: porta, lentidão, Mailpit e protocolo SMTP (o filho não chega a executar).
+
+### 21.4 Correção (menor, sustentada pela reprodução)
+`app/email/smtp_subprocess.py`: `child_env(python)` monta o ambiente do filho a partir de `MINIMAL_ENV`
+e acrescenta `LD_LIBRARY_PATH` com **um único diretório** somente quando (a) o filho é o próprio
+interpretador em uso e (b) ele foi compilado com `libpython` compartilhada. O diretório é o da
+`libpython` que o carregador **efetivamente mapeou** para o processo atual (`/proc/self/maps`, nome
+`INSTSONAME`, caminho absoluto) — não a configuração de compilação (que aponta para o caminho original)
+nem o `LD_LIBRARY_PATH` herdado. É calculado uma vez na construção do transporte.
+
+Preservado: nenhum outro valor do ambiente do pai chega ao filho (segredos, `DATABASE_URL`, o
+`LD_LIBRARY_PATH` do pai); `-I`, `cwd="/"`, `close_fds`, grupo de processos, TLS, limites, prazos, um
+worker e ausência de repetição continuam iguais. Biblioteca não mapeada, caminho relativo, arquivo
+"(deleted)", mapeamentos ilegíveis ou interpretador estático → ambiente mínimo inalterado.
+
+O teste da E1 `test_desabilitado_nao_cria_subprocesso_nem_importa_recursos_linux` inicia uma sonda
+Python com ambiente só com `PATH`; pela mesma causa ela também não iniciaria nesse interpretador. A
+sonda passou a receber o mesmo diretório único (via `child_env`), sem outra mudança.
+
+### 21.5 Regressões (`tests/test_smtp_child_env.py`)
+| Teste | Tipo | Antes | Depois |
+|---|---|---|---|
+| interpretador compartilhado recebe só o diretório da `libpython` carregada (pai com `LD_LIBRARY_PATH` próprio e segredo) | simulação (mapeamentos e variáveis de compilação injetados) | **falha** em qualquer ambiente | passa |
+| estático; biblioteca não localizada (3 formas); mapeamentos ilegíveis; outro interpretador configurado → ambiente mínimo | simulação | passam (protegem o isolamento) | passam |
+| o interpretador em uso inicia (código 0) com o ambiente entregue ao filho | **real** | **falha** no ambiente reproduzido (127) | passa |
+
+Na reprodução, `test_smtp_child_env.py` + `test_email_transport.py`: antes 17 falhas/14 aprovados
+(todos os testes reais da E1 também falhavam); depois 31/31. O teste real só discrimina onde o
+interpretador é compartilhado e relocado: no job `backend` e em interpretadores estáticos ele passa
+antes e depois. No CI, a prova no ambiente exato continua sendo o passo de integração do job
+`integration` (que falhou antes).
+
+### 21.6 Limitações e pendências
+- **Não executado no contêiner oficial nem confirmado no CI**: a reprodução usa o mesmo binário e as
+  mesmas variáveis, mas outro sistema de arquivos base (Ubuntu 24.04 deste ambiente, Node 22 em vez do
+  Node 24 da imagem). A confirmação depende de nova execução do CI.
+- A falha era silenciosa: 127 do carregador vira `delivery_invalid_output`, igual a outras saídas
+  inválidas do filho. Distinguir "filho não iniciou" (ou verificar o início do filho na subida) seria uma
+  melhoria de observabilidade fora do escopo desta correção — pendência separada.
+- Outros testes do backend que iniciam sondas Python com ambiente só com `PATH`
+  (`test_auth_storage_modes`, `test_maintenance_operation`) teriam o mesmo problema nesse interpretador;
+  não rodam no job `integration` e não foram alterados.
