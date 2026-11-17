@@ -12,8 +12,15 @@ class EmailTransport(Protocol):
 
     def send(self, message: OutgoingEmail) -> SendResult: ...
 
-    def cancel(self) -> None:
-        """Pede a parada coordenada (inclusive de um filho em criação); idempotente."""
+    def cancel(self, timeout: float | None = None) -> None:
+        """Pede a parada coordenada (inclusive de um filho em criação); idempotente.
+
+        `timeout` limita a espera total desta chamada (E2: orçamento de desligamento)."""
+        ...
+
+    @property
+    def has_unconfirmed_child(self) -> bool:
+        """Verdadeiro se há filho em criação ou sem coleta confirmada."""
         ...
 
 
@@ -21,11 +28,12 @@ class DisabledTransport:
     """Padrão: nada é enviado e nenhum subprocesso é criado; funciona em qualquer plataforma."""
 
     available = False
+    has_unconfirmed_child = False
 
     def send(self, message: OutgoingEmail) -> SendResult:
         return SendResult.UNAVAILABLE
 
-    def cancel(self) -> None:
+    def cancel(self, timeout: float | None = None) -> None:
         return None
 
 

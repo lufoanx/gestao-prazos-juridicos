@@ -7,9 +7,10 @@ convites e solicitações** (Etapa 3: `/api/v1/offices/*`, `/api/v1/memberships/
 `/api/v1/invitations/*`, `/api/v1/join-requests/*`) e **prazos, comentários, histórico,
 calendário e transferência** (Etapa 4: `/api/v1/deadlines/*`, `/api/v1/calendar`) e
 **intimações (metadados + revisão humana) e notificações internas** (Etapa 5:
-`/api/v1/intimations/*`, `/api/v1/notifications/*`), tudo com armazenamento **em memória**.
-**Não há banco de dados, ORM, armazenamento de arquivos, processamento/IA, envio de e-mail nem
-integração com o frontend** — as telas continuam demonstrativas.
+`/api/v1/intimations/*`, `/api/v1/notifications/*`). Armazenamento `memory` (padrão) ou
+`postgres` (P1–P5, abaixo). **Não há armazenamento de arquivos, processamento/IA nem provedor de
+e-mail contratado**; o envio por SMTP existe só como transporte opcional (`EMAIL_TRANSPORT=smtp`,
+E1/E2 do doc 21) e vem desabilitado. A integração do frontend é a da Etapa 6 (BFF).
 
 > **Stack oficial: Python/FastAPI.** Decisão do projeto é preservar o backend
 > Python existente; não há migração para NestJS. Ver
@@ -96,14 +97,15 @@ oficial é `/api/v1/health`.
 | `GET /api/v1/auth/me` | sim | 200 `{user}` |
 | `GET /api/v1/users/me` | sim | 200 usuário público |
 | `PATCH /api/v1/users/me` `{name}` | sim | 200 usuário público |
-| `POST /api/v1/auth/forgot-password` `{email}` | não | 202 mensagem genérica (sem envio real de e-mail) |
+| `POST /api/v1/auth/forgot-password` `{email}` | não | 202 mensagem genérica (só enfileira; E2) · 429 · 503 `password_recovery_unavailable` (padrão `EMAIL_TRANSPORT=disabled`) |
+| `GET /api/v1/auth/password-recovery/status` | não | 200 `{available}` (somente o booleano) |
 | `POST /api/v1/auth/reset-password` `{token,newPassword}` | não | 204 (revoga todas as sessões) |
 
 Senha: Argon2id, 8–128 caracteres, sem truncamento. Access token: JWT HS256 de 15 min,
 validado também contra a sessão no servidor e a versão da credencial (sessões anteriores a
 uma redefinição deixam de valer). Limites (429 + `Retry-After`, verificados antes de
-qualquer Argon2): login 5 tentativas por IP+e-mail em 5 min; recuperação 3 pedidos por
-e-mail em 15 min; cadastro 10 por IP por hora; redefinição 10 por IP em 15 min. No máximo
+qualquer Argon2): login 5 tentativas por IP+e-mail em 5 min; recuperação 10 pedidos por IP e
+3 por e-mail em 15 min; cadastro 10 por IP por hora; redefinição 10 por IP em 15 min. No máximo
 10 sessões por usuário, 1000 rotações de refresh por sessão (depois, novo login) e um
 token de recuperação ativo por usuário.
 Detalhes, decisões e limitações: `docs/backend/06-etapa-2-autenticacao.md`; contratos:
@@ -163,10 +165,16 @@ padrão o uvicorn confia em `X-Forwarded-For` vindo de 127.0.0.1. Ver
 e por processo, depois da resposta) ou pelo comando `python -m app.maintenance purge` (códigos de
 saída e limites em `docs/backend/20-p5-manutencao-operacao.md`).
 
-**E-mail transacional (doc 21):** a **E1** implementou configuração (`EMAIL_TRANSPORT`, padrão
-`disabled`), composição e transporte SMTP em subprocesso supervisionado (só Linux), **sem** ligar à
-recuperação de senha. Hoje a entrega continua `Noop` e as telas de recuperação seguem indisponíveis
-no modo integrado. E2–E6 pendentes (`docs/backend/21-projeto-email-recuperacao.md`, §14).
+**E-mail transacional (doc 21):**
+- **E1 (implementada):** configuração (`EMAIL_TRANSPORT`, padrão `disabled`), composição e transporte
+  SMTP em subprocesso supervisionado (só Linux) — §14.
+- **E2 (implementada, aguardando auditoria):** `RecoveryDispatcher` (`app/recovery/`): fila em memória
+  limitada e com prazo, **um** worker iniciado no `lifespan`, conexão exclusiva no PostgreSQL e
+  protocolo de encerramento com orçamento. `forgot-password` agora só valida, aplica os limites por IP
+  e por e-mail e enfileira (202 neutro); emissão e envio acontecem no worker, depois do COMMIT. Com
+  `disabled` (padrão), `status` → `available=false` e `forgot-password` → 503 — §15.
+- **E3–E6 pendentes:** capturador SMTP no CI, rotas BFF, telas integradas e E2E da recuperação. As
+  telas de recuperação seguem indisponíveis no modo integrado.
 
 Modos finais: `STORAGE=memory` (padrão) e `STORAGE=postgres` (autenticação **e** domínio no banco;
 `development`/`test`; exige `alembic upgrade head` até `0003`). O modo intermediário `auth-postgres`

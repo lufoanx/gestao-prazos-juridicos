@@ -26,7 +26,14 @@ class FakeClock:
 
 
 class CapturingDelivery:
-    """Adaptador de entrega injetado: captura as mensagens em vez de enviar e-mail."""
+    """Adaptador de entrega injetado: captura as mensagens em vez de enviar e-mail.
+
+    E2: a entrega acontece no WORKER do RecoveryDispatcher (fora da requisição, depois do COMMIT);
+    os testes esperam o processamento de forma determinística com `tests.recovery_support.drain`.
+    `available=True` habilita a recuperação (sem ela, `forgot-password` responde 503).
+    """
+
+    available = True
 
     def __init__(self) -> None:
         self.messages: list = []
@@ -125,7 +132,7 @@ def make_app(monkeypatch, request):
         pytest.skip("teste específico do armazenamento em memória")
 
     def _make(clock=None, delivery=None, password_hasher=None, responsibility_port=None, processing_port=None,
-              sql_checkpoint=None, maintenance_checkpoint=None, **env):
+              sql_checkpoint=None, maintenance_checkpoint=None, recovery_overrides=None, **env):
         if sql_mode and not {"STORAGE", "ENVIRONMENT", "AUTH_STORAGE"} & set(env):
             request.getfixturevalue("pg_schema")
             url = request.getfixturevalue("pg_url")
@@ -140,6 +147,7 @@ def make_app(monkeypatch, request):
                 clock=clock, password_reset_delivery=delivery, password_hasher=password_hasher,
                 responsibility_port=responsibility_port, processing_port=processing_port,
                 sql_checkpoint=sql_checkpoint, maintenance_checkpoint=maintenance_checkpoint,
+                recovery_overrides=recovery_overrides,
             )
             created.append(app)
             if sql_mode:
@@ -152,6 +160,9 @@ def make_app(monkeypatch, request):
 
     yield _make
     for app in created:
+        # E2: encerra o despachante (idempotente; nada a fazer se a thread nunca foi criada) ANTES do engine.
+        if getattr(app.state, "recovery", None) is not None:
+            app.state.recovery.stop()
         if getattr(app.state, "auth", None) is not None:
             app.state.auth.close()
     config_module.get_settings.cache_clear()
@@ -164,9 +175,11 @@ def auth_app(make_app, clock, delivery):
 
 @pytest.fixture
 def client(auth_app):
+    """Com `lifespan` (E2): o worker da recuperação nasce na entrada e é encerrado na saída."""
     from fastapi.testclient import TestClient
 
-    return TestClient(auth_app, raise_server_exceptions=False)
+    with TestClient(auth_app, raise_server_exceptions=False) as test_client:
+        yield test_client
 
 
 # Fixture `org` da Etapa 3 (escritórios/equipe).
@@ -289,11 +302,12 @@ def pg_app(pg_schema, pg_url, make_app):
     raw = pg_url.render_as_string(hide_password=False)
 
     def build(clock=None, delivery=None, sql_checkpoint=None, password_hasher=None, maintenance_checkpoint=None,
-              **env):
+              recovery_overrides=None, **env):
         base = dict(STORAGE="postgres", ENVIRONMENT="test", DATABASE_URL=raw, AUTH_JWT_SECRET=STABLE_JWT_SECRET)
         base.update(env)
         app = make_app(clock=clock, delivery=delivery, sql_checkpoint=sql_checkpoint,
-                       password_hasher=password_hasher, maintenance_checkpoint=maintenance_checkpoint, **base)
+                       password_hasher=password_hasher, maintenance_checkpoint=maintenance_checkpoint,
+                       recovery_overrides=recovery_overrides, **base)
         from tests.sql_store_views import attach
 
         attach(app)

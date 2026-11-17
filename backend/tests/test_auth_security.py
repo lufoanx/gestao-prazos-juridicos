@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import ProductionNotReleasedError
-from tests.auth_utils import API, PASSWORD, bearer, error_code, login, register, register_and_login
+from tests.auth_utils import API, PASSWORD, bearer, error_code, forgot, login, register, register_and_login
 
 
 # ---------- Dados sensíveis em respostas e logs ----------
@@ -21,7 +21,7 @@ def test_fluxo_completo_nao_vaza_senha_hash_ou_tokens(client, auth_app, delivery
     bodies.append(client.patch(f"{API}/users/me", headers=bearer(tokens["accessToken"]), json={"name": "Ana"}).text)
     refreshed = client.post(f"{API}/auth/refresh", json={"refreshToken": tokens["refreshToken"]}).json()
     bodies.append(login(client, password="errada-123456").text)
-    bodies.append(client.post(f"{API}/auth/forgot-password", json={"email": "ana@exemplo.com"}).text)
+    bodies.append(forgot(client, "ana@exemplo.com").text)
     reset_token = delivery.messages[-1].token
     new_password = "Nova-senha-segura-456"
     bodies.append(
@@ -87,13 +87,13 @@ def test_limite_de_recuperacao_retorna_429_sem_revelar_existencia(client, clock,
     register(client)
     for email in ("ana@exemplo.com", "ninguem@exemplo.com"):
         for _ in range(3):
-            assert client.post(f"{API}/auth/forgot-password", json={"email": email}).status_code == 202
-        resp = client.post(f"{API}/auth/forgot-password", json={"email": email})
+            assert forgot(client, email).status_code == 202
+        resp = forgot(client, email)
         assert resp.status_code == 429
         assert int(resp.headers["retry-after"]) == 900
     assert len(delivery.messages) == 3
     clock.advance(900)
-    assert client.post(f"{API}/auth/forgot-password", json={"email": "ana@exemplo.com"}).status_code == 202
+    assert forgot(client, "ana@exemplo.com").status_code == 202
 
 
 def test_limites_configuraveis(make_app, clock):

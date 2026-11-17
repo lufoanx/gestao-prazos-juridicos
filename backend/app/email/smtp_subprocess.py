@@ -71,12 +71,24 @@ class SubprocessSmtpTransport:
         with self._lock:
             return self._available and not self._stop
 
-    def cancel(self) -> None:
-        """Parada coordenada. Não espera nenhuma criação; encerra um filho já publicado."""
+    @property
+    def has_unconfirmed_child(self) -> bool:
+        """Há criação em curso ou filho publicado ainda sem coleta confirmada (E2: encerramento limpo)."""
+        with self._lock:
+            return self._creating or self._child is not None
+
+    def cancel(self, timeout: float | None = None) -> None:
+        """Parada coordenada. Não espera nenhuma criação; encerra um filho já publicado.
+
+        `timeout` (E2): orçamento TOTAL desta chamada para SIGTERM → SIGKILL → coleta; cada espera é
+        limitada ao que resta dele (o encerramento do despachante não pode esperar além do próprio
+        orçamento). Sem `timeout`, valem os limites configurados (comportamento da E1). Filho não
+        coletado dentro do orçamento → transporte indisponível (sem confirmação de encerramento).
+        """
         with self._lock:
             self._stop = True
             child = self._child
-        if child is not None and not self._terminate(child):
+        if child is not None and not self._terminate(child, budget=timeout):
             with self._lock:
                 self._available = False                # filho sem encerramento confirmado
             logger.error("email_smtp_reap_failed")
@@ -129,24 +141,34 @@ class SubprocessSmtpTransport:
         return self._done(result, started)
 
     # ------------------------------------------------------------ fases 3 a 5
-    def _terminate(self, child: subprocess.Popen) -> bool:
-        """SIGTERM → espera limitada → SIGKILL → coleta limitada. True se coletado."""
+    def _terminate(self, child: subprocess.Popen, budget: float | None = None) -> bool:
+        """SIGTERM → espera limitada → SIGKILL → coleta limitada. True se coletado.
+
+        Com `budget`, as duas esperas somadas não passam dele (relógio monotônico): a tolerância ao
+        SIGTERM usa no máximo metade do orçamento, para sobrar tempo à coleta depois do SIGKILL."""
         import signal
 
         if child.poll() is not None:
             return True
+        end = None if budget is None else self._monotonic() + max(0.0, budget)
+
+        def limit(configured: float, share: float = 1.0) -> float:
+            if end is None:
+                return configured
+            return max(0.0, min(configured, (end - self._monotonic()) * share))
+
         self._signal_group(child, signal.SIGTERM)
         try:
-            child.wait(timeout=self._cfg.term_grace_seconds)
+            child.wait(timeout=limit(self._cfg.term_grace_seconds, 0.5))
             return True
         except subprocess.TimeoutExpired:
             pass
         self._signal_group(child, signal.SIGKILL)
         try:
-            child.wait(timeout=self._cfg.reap_timeout_seconds)
+            child.wait(timeout=limit(self._cfg.reap_timeout_seconds))
             return True
         except subprocess.TimeoutExpired:
-            return False
+            return child.poll() is not None
 
     @staticmethod
     def _signal_group(child: subprocess.Popen, sig: int) -> None:

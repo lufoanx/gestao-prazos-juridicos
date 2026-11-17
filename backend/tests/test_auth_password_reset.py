@@ -1,4 +1,10 @@
-"""Etapa 2 — recuperação e redefinição de senha (sem e-mail real)."""
+"""Etapa 2 — recuperação e redefinição de senha (sem e-mail real).
+
+E2 (doc 21): `forgot-password` passou de SÍNCRONO a ASSÍNCRONO (mudança intencional). A requisição só
+enfileira; a emissão e a entrega acontecem no worker do RecoveryDispatcher. Os testes esperam o
+processamento de forma determinística (`drain`: Condition do despachante, sem sleep). As asserções
+sobre resposta, tokens, consumo, expiração e sessões são as mesmas de antes.
+"""
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -6,13 +12,18 @@ import pytest
 
 from app.security.tokens import hash_opaque_token
 from tests.auth_utils import API, PASSWORD, bearer, error_code, login, register, register_and_login
+from tests.recovery_support import drain
 
 NEW_PASSWORD = "Nova-senha-segura-456"
 GENERIC = {"message": "Se o e-mail estiver cadastrado, enviaremos instruções de recuperação."}
 
 
 def _forgot(client, email="ana@exemplo.com"):
-    return client.post(f"{API}/auth/forgot-password", json={"email": email})
+    """Pedido público + espera determinística do worker (E2)."""
+    resp = client.post(f"{API}/auth/forgot-password", json={"email": email})
+    if resp.status_code == 202:
+        drain(client.app)
+    return resp
 
 
 def _reset(client, token, password=NEW_PASSWORD):
@@ -147,25 +158,42 @@ def test_consumo_concorrente_do_mesmo_token_de_reset(client, delivery, auth_app)
     assert login(client, password=f"Senha-concorrente-{winners[0]:02d}").status_code == 200
 
 
-def test_falha_na_entrega_nao_altera_a_resposta(make_app, clock):
+def test_falha_na_entrega_nao_altera_a_resposta_nem_derruba_o_worker(make_app, clock):
+    """E2: a falha acontece no worker (depois da resposta); o worker segue para o próximo item."""
     class FailingDelivery:
+        available = True
+        calls = 0
+
         def send(self, message):
+            FailingDelivery.calls += 1
             raise RuntimeError("provedor fora do ar")
 
     from fastapi.testclient import TestClient
 
-    client = TestClient(make_app(clock=clock, delivery=FailingDelivery()), raise_server_exceptions=False)
-    register(client)
-    resp = _forgot(client)
-    assert resp.status_code == 202 and resp.json() == GENERIC
+    with TestClient(make_app(clock=clock, delivery=FailingDelivery()), raise_server_exceptions=False) as client:
+        register(client)
+        resp = _forgot(client)
+        assert resp.status_code == 202 and resp.json() == GENERIC
+        assert _forgot(client).status_code == 202                 # worker vivo: processa o segundo
+        assert FailingDelivery.calls == 2
+        assert client.get(f"{API}/auth/password-recovery/status").json() == {"available": True}
 
 
-def test_entrega_padrao_nao_envia_email_nem_expoe_token(make_app, clock, caplog):
+def test_transporte_desabilitado_responde_503_sem_emitir_token(make_app, clock, caplog):
+    """E2 (D-E5): com o padrão `EMAIL_TRANSPORT=disabled`, a recuperação fica INDISPONÍVEL.
+
+    Antes da E2 o padrão respondia 202 e registrava `delivery=noop`; agora responde 503
+    `password_recovery_unavailable`, não emite token e `status` informa `available=false`."""
     from fastapi.testclient import TestClient
 
-    client = TestClient(make_app(clock=clock), raise_server_exceptions=False)  # adaptador padrão (noop)
-    register(client)
-    with caplog.at_level("DEBUG"):
-        assert _forgot(client).status_code == 202
-    assert "password_reset_requested delivery=noop" in caplog.text
+    app = make_app(clock=clock)                                    # sem entrega injetada: disabled
+    with TestClient(app, raise_server_exceptions=False) as client:
+        register(client)
+        with caplog.at_level("DEBUG"):
+            resp = client.post(f"{API}/auth/forgot-password", json={"email": "ana@exemplo.com"})
+        assert resp.status_code == 503 and error_code(resp) == "password_recovery_unavailable"
+        assert client.get(f"{API}/auth/password-recovery/status").json() == {"available": False}
+    assert app.state.recovery is None
     assert "ana@exemplo.com" not in caplog.text
+    if app.state.auth.store is not None:
+        assert app.state.auth.store.reset_tokens == {}

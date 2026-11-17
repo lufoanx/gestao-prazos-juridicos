@@ -114,6 +114,11 @@ class Settings(BaseSettings):
     auth_login_window_seconds: int = Field(default=300, alias="AUTH_LOGIN_WINDOW_SECONDS", ge=10, le=24 * 3600)
     auth_forgot_max_requests: int = Field(default=3, alias="AUTH_FORGOT_MAX_REQUESTS", ge=1, le=100)
     auth_forgot_window_seconds: int = Field(default=900, alias="AUTH_FORGOT_WINDOW_SECONDS", ge=10, le=24 * 3600)
+    # E2 (doc 21): limite NOVO por IP no pedido de recuperação, aplicado ANTES do limite por e-mail.
+    auth_forgot_ip_max_requests: int = Field(default=10, alias="AUTH_FORGOT_IP_MAX_REQUESTS", ge=1, le=1000)
+    auth_forgot_ip_window_seconds: int = Field(
+        default=900, alias="AUTH_FORGOT_IP_WINDOW_SECONDS", ge=10, le=24 * 3600
+    )
     # Cadastro e redefinição: limitados por IP ANTES de qualquer cálculo de Argon2.
     auth_register_max_requests: int = Field(default=10, alias="AUTH_REGISTER_MAX_REQUESTS", ge=1, le=1000)
     auth_register_window_seconds: int = Field(
@@ -186,8 +191,9 @@ class Settings(BaseSettings):
     )
 
     # --- E-mail transacional (E1 do doc 21): configuração e transporte isolado ---
-    # Padrão `disabled`: nenhum e-mail é enviado e nada muda no comportamento existente. A E1 NÃO
-    # liga o transporte à recuperação de senha (isso é da E2, ainda não aprovada).
+    # Padrão `disabled`: nenhum e-mail é enviado e a recuperação de senha fica INDISPONÍVEL
+    # (`status` → available=false; `forgot-password` → 503). Com `smtp`, a E2 liga o transporte à
+    # recuperação pelo RecoveryDispatcher (fila em memória, um worker; app/recovery).
     email_transport: str = Field(default="disabled", alias="EMAIL_TRANSPORT")
     public_app_origin: str | None = Field(default=None, alias="PUBLIC_APP_ORIGIN")
     email_from: str | None = Field(default=None, alias="EMAIL_FROM")
@@ -202,6 +208,19 @@ class Settings(BaseSettings):
     smtp_send_deadline_seconds: float = Field(default=30, alias="SMTP_SEND_DEADLINE_SECONDS", ge=5, le=120)
     smtp_term_grace_seconds: float = Field(default=1, alias="SMTP_TERM_GRACE_SECONDS", ge=0.1, le=10)
     smtp_reap_timeout_seconds: float = Field(default=2, alias="SMTP_REAP_TIMEOUT_SECONDS", ge=0.5, le=10)
+
+    # --- RecoveryDispatcher (E2 do doc 21, §4.5–§4.8): fila em memória, limitada, um worker ---
+    recovery_queue_max: int = Field(default=100, alias="RECOVERY_QUEUE_MAX", ge=10, le=10_000)
+    recovery_queue_max_wait_seconds: float = Field(
+        default=60, alias="RECOVERY_QUEUE_MAX_WAIT_SECONDS", ge=10, le=600
+    )
+    recovery_shutdown_grace_seconds: float = Field(
+        default=5, alias="RECOVERY_SHUTDOWN_GRACE_SECONDS", ge=1, le=60
+    )
+    recovery_db_lock_timeout_ms: int = Field(default=1000, alias="RECOVERY_DB_LOCK_TIMEOUT_MS", ge=100, le=30_000)
+    recovery_db_statement_timeout_ms: int = Field(
+        default=3000, alias="RECOVERY_DB_STATEMENT_TIMEOUT_MS", ge=500, le=60_000
+    )
 
     # --- Manutenção (P5): expurgo global de retenção no PostgreSQL ---
     # Lotes pequenos com FOR UPDATE SKIP LOCKED, transações próprias e curtas (doc 20).
@@ -297,6 +316,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _consistent_email(self) -> Settings:
+        if self.recovery_db_lock_timeout_ms > self.recovery_db_statement_timeout_ms:
+            raise ValueError("RECOVERY_DB_LOCK_TIMEOUT_MS não pode exceder RECOVERY_DB_STATEMENT_TIMEOUT_MS.")
         if self.email_transport not in {"disabled", "smtp"}:
             raise ValueError("EMAIL_TRANSPORT inválido: use 'disabled' ou 'smtp'.")
         if self.email_transport == "smtp":

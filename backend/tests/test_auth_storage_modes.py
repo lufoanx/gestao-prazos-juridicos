@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select, text
 
 from app.core.config import ProductionNotReleasedError, Settings
+from tests.auth_utils import forgot
 from tests.conftest import CapturingDelivery, FakeClock
 
 API = "/api/v1"
@@ -153,7 +154,7 @@ def test_fluxos_http_completos_no_postgres(pg_app, caplog):
         revoked_family = client.get(f"{API}/auth/me", headers=bearer(refreshed["accessToken"]))
         assert revoked_family.status_code == 401                                # família revogada
         tokens = client.post(f"{API}/auth/login", json={"email": "ana@exemplo.com", "password": PASSWORD}).json()
-        assert client.post(f"{API}/auth/forgot-password", json={"email": "ana@exemplo.com"}).status_code == 202
+        assert forgot(client, "ana@exemplo.com").status_code == 202
         token = delivery.messages[-1].token
         assert client.post(f"{API}/auth/reset-password", json={"token": token, "newPassword": "Outra-senha-456"}
                            ).status_code == 204
@@ -211,7 +212,7 @@ def test_reinicio_da_aplicacao_e_do_engine_preserva_usuarios_sessoes_e_tokens(pg
     app1 = pg_app(clock=clock, delivery=delivery)
     with TestClient(app1) as client:
         tokens = register_and_login(client)
-        assert client.post(f"{API}/auth/forgot-password", json={"email": "ana@exemplo.com"}).status_code == 202
+        assert forgot(client, "ana@exemplo.com").status_code == 202
     engine1 = app1.state.auth.engine
     assert app1.state.auth._closed is True                                  # 1ª instância encerrada
 
@@ -239,7 +240,7 @@ def test_logs_nao_registram_senhas_hashes_tokens_nem_url(pg_app, caplog, pg_url)
         with TestClient(app) as client:
             tokens = register_and_login(client)
             client.post(f"{API}/auth/refresh", json={"refreshToken": tokens["refreshToken"]})
-            client.post(f"{API}/auth/forgot-password", json={"email": "ana@exemplo.com"})
+            forgot(client, "ana@exemplo.com")
     secrets = [PASSWORD, tokens["refreshToken"], tokens["accessToken"], delivery.messages[-1].token]
     if pg_url.password:
         secrets.append(pg_url.password)

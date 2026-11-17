@@ -129,3 +129,9 @@ class LoginResponse(TokenResponse):
 
 class MessageResponse(_Output):
     message: str
+
+
+class PasswordRecoveryStatus(_Output):
+    """E2: disponibilidade da recuperação de senha — somente um booleano (nada de configuração)."""
+
+    available: bool

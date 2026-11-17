@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.security.rate_limit import OVERFLOW_KEY, RateLimiter
 from app.security.tokens import hash_opaque_token
-from tests.auth_utils import API, bearer, login, register, register_and_login
+from tests.auth_utils import API, bearer, forgot, login, register, register_and_login
 from tests.conftest import FakeClock
 
 WEEK = 7 * 24 * 3600
@@ -165,8 +165,8 @@ def test_tokens_de_recuperacao_inativos_sao_removidos(client, auth_app, delivery
     register(client)
     store = auth_app.state.auth.store
     repo = auth_app.state.auth.service._resets
-    client.post(f"{API}/auth/forgot-password", json={"email": "ana@exemplo.com"})
-    client.post(f"{API}/auth/forgot-password", json={"email": "ana@exemplo.com"})  # invalida o 1º
+    forgot(client, "ana@exemplo.com")
+    forgot(client, "ana@exemplo.com")  # invalida o 1º
     assert len(store.reset_tokens) == 2
     assert repo.purge_expired(clock.now()) == 1                     # inválido removido
     active = delivery.messages[-1].token
@@ -179,9 +179,9 @@ def test_tokens_de_recuperacao_inativos_sao_removidos(client, auth_app, delivery
 def test_limpeza_periodica_de_tokens_no_proximo_pedido(client, auth_app, delivery, clock):
     register(client, email="a@exemplo.com")
     register(client, email="b@exemplo.com")
-    client.post(f"{API}/auth/forgot-password", json={"email": "a@exemplo.com"})
+    forgot(client, "a@exemplo.com")
     clock.advance(1800)
-    client.post(f"{API}/auth/forgot-password", json={"email": "b@exemplo.com"})
+    forgot(client, "b@exemplo.com")
     store = auth_app.state.auth.store
     assert len(store.reset_tokens) == 1   # o de "a" (expirado) foi removido na escrita
     assert client.post(
