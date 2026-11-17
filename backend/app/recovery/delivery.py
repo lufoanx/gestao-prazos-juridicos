@@ -22,10 +22,14 @@ class TransportPasswordResetDelivery:
 
     @property
     def has_unconfirmed_child(self) -> bool:
+        """Leitura sem prazo (testes/observação); o encerramento usa `unconfirmed_child(timeout)`."""
         return bool(getattr(self._transport, "has_unconfirmed_child", False))
 
-    def cancel(self, timeout: float | None = None) -> None:
-        self._transport.cancel(timeout=timeout)
+    def unconfirmed_child(self, timeout: float) -> bool | None:
+        return self._transport.unconfirmed_child(timeout)
+
+    def cancel(self, timeout: float | None = None) -> bool:
+        return self._transport.cancel(timeout=timeout)
 
     def send(self, message: PasswordResetMessage) -> SendResult:
         issued_at = message.issued_at if message.issued_at is not None else message.expires_at

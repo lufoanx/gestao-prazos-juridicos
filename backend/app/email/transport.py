@@ -12,15 +12,15 @@ class EmailTransport(Protocol):
 
     def send(self, message: OutgoingEmail) -> SendResult: ...
 
-    def cancel(self, timeout: float | None = None) -> None:
+    def cancel(self, timeout: float | None = None) -> bool:
         """Pede a parada coordenada (inclusive de um filho em criação); idempotente.
 
-        `timeout` limita a espera total desta chamada (E2: orçamento de desligamento)."""
+        `timeout` limita a espera TOTAL desta chamada, desde a entrada (lock incluído). True só com
+        confirmação de que não há filho ativo."""
         ...
 
-    @property
-    def has_unconfirmed_child(self) -> bool:
-        """Verdadeiro se há filho em criação ou sem coleta confirmada."""
+    def unconfirmed_child(self, timeout: float) -> bool | None:
+        """Filho em criação ou sem coleta confirmada; None se não for possível confirmar no prazo."""
         ...
 
 
@@ -33,8 +33,11 @@ class DisabledTransport:
     def send(self, message: OutgoingEmail) -> SendResult:
         return SendResult.UNAVAILABLE
 
-    def cancel(self, timeout: float | None = None) -> None:
-        return None
+    def cancel(self, timeout: float | None = None) -> bool:
+        return True
+
+    def unconfirmed_child(self, timeout: float) -> bool | None:
+        return False
 
 
 class UnsupportedPlatformError(RuntimeError):

@@ -10,7 +10,8 @@
 > **base**, não este projeto. Branch: `docs/projeto-email-recuperacao`.
 >
 > **Status:** **E1 e E2 implementadas** (E1: configuração, composição e transporte isolado, §14;
-> E2: `RecoveryDispatcher`, ligação com `forgot-password`, limite por IP e `status`, §15). **E3–E6
+> E2: `RecoveryDispatcher`, ligação com `forgot-password`, limite por IP e `status`, §15; correção da
+> auditoria do orçamento de encerramento, §16). **E3–E6
 > pendentes**: capturador SMTP no CI, rotas BFF, telas integradas e E2E da recuperação, documentação
 > operacional. A E2 aguarda auditoria. Produção continua bloqueada; nenhum provedor foi contratado e
 > nenhum e-mail externo foi enviado.
@@ -848,8 +849,9 @@ BFF, telas, capturador em contêiner ou provedor. Produção continua bloqueada.
    emite um token novo e válido para o titular.
 
 ### 15.3 Encerramento (implementação de §4.7–§4.8)
-- `stop()` mede um orçamento monotônico `RECOVERY_SHUTDOWN_GRACE_SECONDS` que cobre a aquisição do
-  lock de admissão (com prazo), o cancelamento, a supervisão do filho e o `join`.
+- `stop()` fixa **na entrada** um único prazo monotônico (`Deadline`, `RECOVERY_SHUTDOWN_GRACE_SECONDS`)
+  que cobre **todas** as aquisições de lock (admissão, registro de cancelamento, transporte), o
+  cancelamento, a supervisão do filho, a verificação final e o `join` (corrigido na auditoria, §16).
 - Sob o lock: `stopping`, drenagem contada (`shutdown_discarded`) e evento de parada; nenhuma
   admissão depois disso. O lock nunca é mantido durante banco, criação do filho ou SMTP.
 - Cancelamento: `delivery.cancel(timeout=restante)` (o transporte marca a parada, encerra o filho
@@ -935,3 +937,66 @@ testes que fazem mais pedidos do que o padrão permite (como já ocorria antes).
    está em andamento — cancelando só a conexão do próprio trabalhador — e esperamos um tempo
    máximo. Só dizemos que desligou limpo quando temos prova; se não, avisamos e mantemos a
    recuperação indisponível."
+
+## 16. Correção da auditoria da E2: o orçamento de encerramento cobre todas as esperas por locks
+
+### 16.1 Defeito
+A auditoria de `69300a9` reproduziu, com gates controlados e `RECOVERY_SHUTDOWN_GRACE_SECONDS=1`:
+1. worker em processamento e lock do `CancelRegistry` retido → `stop()` ainda bloqueado após 1,4 s;
+2. lock do `SubprocessSmtpTransport` retido → `cancel(timeout=1)` ainda bloqueado após 1,4 s.
+
+Causas (todas corrigidas):
+- `stop()` consultava `registry.active` e outros estados por propriedades que adquiriam locks **sem
+  prazo**; `_conclude()` também lia `open_connections` e `has_unconfirmed_child` sem prazo;
+- `cancel_active(timeout)` podia gastar o timeout inteiro adquirindo o lock e depois entregava **o
+  mesmo** timeout ao driver;
+- `transport.cancel(timeout)` adquiria o lock sem prazo e só começava a contar o orçamento depois;
+- a admissão consultava `transport.available`, que tomava o lock do transporte dentro da seção crítica
+  de admissão (espera bloqueante aninhada).
+
+**Reprodução executada nesta correção** (`repro` com gates, mesmos dois cenários, prazo de observação de
+1,4 s): em `69300a9`, `stop()` e `cancel(timeout=1)` continuavam bloqueados após 1,40 s; com a correção,
+ambos retornaram em 1,00 s.
+
+### 16.2 Correção
+| Arquivo | Mudança |
+|---|---|
+| `app/core/deadline.py` (novo) | `Deadline`: instante-limite monotônico fixado na entrada; `remaining(cap)`; `acquire(lock, cap)` espera só o restante (esgotado → tentativa não bloqueante). Nada reinicia o prazo |
+| `app/recovery/dispatcher.py` | `stop()` cria **um** `Deadline` e o repassa a tudo: lock de admissão, `delivery.cancel(timeout=restante)`, `registry.cancel_active(deadline, lock_cap=200 ms)`, `join(restante)`, verificação final e publicação do estado final. Conclusão com **provas obtidas no prazo**: `snapshot(deadline)` do registro e `unconfirmed_child(restante)` da entrega; estado não confirmado → `connection=unknown`/`child=unknown` → `stopped_unclean`. Sem o lock de admissão no prazo: não limpo, sem esperar de novo; o worker (espera ociosa limitada a 0,5 s) reconhece a parada e descarta/conta as pendências não drenadas |
+| `app/recovery/cancel.py` | `cancel_active(deadline, lock_cap, driver_cap=1 s)` → `CancelOutcome`; o driver recebe `min(1 s, restante DEPOIS do lock)`; restante zero → `budget_exhausted`, sem chamar o driver; sem capacidade → `no_capability` sem tocar no lock. `snapshot(deadline)` → `None` quando não confirmado |
+| `app/email/smtp_subprocess.py` | `cancel(timeout)` conta o prazo **desde a entrada**, inclusive o lock; sem o lock no prazo, marca parada e indisponibilidade sem lock (flags de sentido único, relidas por `send` sob o lock antes de criar ou transmitir) e devolve `False` (não confirmado). `_terminate` usa o mesmo `Deadline`. `unconfirmed_child(timeout)` → `None` quando não confirmado. `available` passou a ser leitura sem lock (não bloqueia dentro da admissão) |
+| `app/email/transport.py`, `app/recovery/delivery.py` | contrato `cancel(timeout) -> bool` e `unconfirmed_child(timeout)`; o adaptador repassa ao transporte |
+
+Preservado: propriedade da conexão (o `cancel_safe` continua chamado **segurando** o lock do registro e
+só com o registro ATIVO), nenhuma consulta alheia cancelada, parada reconhecida antes de cada etapa,
+nenhum worker ou subprocesso substituto, nenhuma ordem inversa de locks e nenhum callback bloqueante
+dentro de seção crítica. O prazo configurado não foi alterado.
+
+### 16.3 Testes de regressão (`tests/test_recovery_shutdown_budget.py`, 12)
+| Teste | Tipo | Cobre |
+|---|---|---|
+| `test_lock_de_admissao_retido…` | dublê (processador com gate) + despachante real | `stop()` no orçamento; 2ª chamada também; nenhuma emissão/entrega após liberar; pendência contada pelo worker; nunca promovido a limpo |
+| `test_lock_do_registro_retido_stop…` [capacidade sim/não] | dublê (conexão de driver falsa) + registro real | `stop()` no orçamento; nenhum `cancel_safe` sem propriedade; `connection=unknown` |
+| `test_sem_provas_nao_ha_encerramento_limpo…` | dublê | worker terminado, mas registro não confirmável → não limpo |
+| `test_orcamento_esgotado_antes_da_conclusao…` | dublê | conclusão sem nova espera depois de esgotado |
+| `test_varias_tentativas…` | dublê | ≥ 2 cancelamentos, cada um com o restante do MESMO prazo (decrescente) |
+| `test_tempo_gasto_no_lock_e_descontado…` | dublê (lock que avança relógio monotônico falso) | 1,0 s − 0,6 s no lock = 0,4 s ao driver; prazo esgotado → driver não chamado; teto de 1 s preservado |
+| `test_cancelamento_sem_capacidade…` | dublê | sem capacidade não espera o lock nem chama o driver |
+| `test_lock_do_registro_retido_cancel_active…` | dublê | `LOCK_TIMEOUT` no prazo; `snapshot` → desconhecido |
+| `test_lock_do_transporte_retido_cancel…` | **SMTP real** (transporte da E1, servidor local) | `cancel(timeout=1)` no prazo, `False`, indisponível; nenhum filho depois |
+| `test_worker_bloqueado_no_lock_do_transporte…` | **SMTP real** + app em memória | `stop()` no orçamento; liberado o lock, `cancelled` sem criar filho nem transmitir |
+| `test_postgres_real_lock_do_registro_retido…` | **PostgreSQL real** | worker preso num bloqueio de linha + lock do registro retido: `stop()` no orçamento, nenhum cancelamento, consulta do worker intacta; ao liberar, emissão em curso conclui (corrida documentada) e nada é enviado |
+
+Ajuste em teste existente: `test_recovery_postgres::test_registro_em_liberacao…` passou a usar o novo
+contrato (`cancel_active(Deadline(1.0))` → `CancelOutcome.NO_ACTIVE`); a asserção é a mesma (sem
+propriedade, nenhum cancelamento).
+
+**Executado durante a correção:** suítes da E2 e regressões da E1 (`test_recovery_*`, `test_email_*`,
+com PostgreSQL real) quatro vezes seguidas — 120 passaram em cada execução. A validação completa da
+árvore final (backend, PostgreSQL, estáticas, frontend, integração, E2E) está no relatório da entrega.
+
+### 16.4 Pendência separada (não alterada)
+`test_notifications::test_marcar_lida_individual_e_de_terceiros` falha quando o servidor PostgreSQL
+usa `TimeZone=America/Sao_Paulo` (datas como `…-03:00` em vez de `…Z`). Reproduzido na **base**
+`c86e4d4`, sem as mudanças da E2; o CI usa UTC. Não foi corrigido nem alterado nesta entrega; as
+validações locais usam o cluster descartável em UTC, como o CI.

@@ -19,8 +19,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select, text
 
+from app.core.deadline import Deadline
 from app.db.tables import password_reset_tokens, users
-from app.recovery.cancel import cancel_with_timeout_supported
+from app.recovery.cancel import CancelOutcome, cancel_with_timeout_supported
 from app.recovery.dispatcher import WORKER_THREAD_NAME, DispatcherState
 from app.recovery.worker_db import WORKER_APPLICATION_NAME
 from app.security.tokens import hash_opaque_token
@@ -226,7 +227,7 @@ def test_registro_em_liberacao_nao_recebe_cancelamento(pg_app, pg_schema):
         assert gate.reached.wait(WAIT)                                 # LIBERANDO feito; conexão ainda aberta
         try:
             assert registry.active is False and registry.open_connections == 1
-            assert registry.cancel_active(timeout=1.0) is False        # sem propriedade: nenhum cancelamento
+            assert registry.cancel_active(Deadline(1.0)) is CancelOutcome.NO_ACTIVE   # sem propriedade: nada
             assert registry.cancel_requests == 0
         finally:
             gate.release.set()

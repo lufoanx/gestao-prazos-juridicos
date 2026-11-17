@@ -11,15 +11,17 @@ Worker (thread única, `daemon=False`, criada uma vez em `start`):
 - falha de um item não derruba o worker; morte inesperada → indisponível, pendências descartadas e
   contadas, SEM thread substituta.
 
-Encerramento (`stop`), com orçamento monotônico TOTAL (`RECOVERY_SHUTDOWN_GRACE_SECONDS`) que cobre a
-aquisição do lock, o cancelamento, a supervisão do filho SMTP e o `join`:
+Encerramento (`stop`), com orçamento monotônico TOTAL (`RECOVERY_SHUTDOWN_GRACE_SECONDS`), um único
+`Deadline` fixado na entrada, que cobre TODAS as aquisições de lock (admissão, registro, transporte), o
+cancelamento, a supervisão do filho SMTP, a verificação final e o `join`:
 1. sob o lock de admissão (aquisição limitada ao orçamento): `stopping`, drenagem contada
    (`shutdown_discarded`), evento de parada;
 2. cancelamento: banco (`CancelRegistry`, só com capacidade e propriedade confirmada) e SMTP
    (`delivery.cancel(timeout=restante)`);
 3. `join` limitado ao restante, com no máximo um cancelamento de banco a cada 200 ms;
-4. `stopped_clean` SOMENTE com thread encerrada, nenhuma conexão exclusiva aberta e nenhum filho sem
-   coleta. Caso contrário `stopped_unclean` (log `dispatcher_stop_unclean`), recuperação indisponível.
+4. `stopped_clean` SOMENTE com thread encerrada e, confirmados DENTRO do prazo, nenhuma conexão exclusiva
+   aberta e nenhum filho sem coleta. Estado não confirmado (lock indisponível no prazo) conta como
+   desconhecido → `stopped_unclean` (log `dispatcher_stop_unclean`), recuperação indisponível.
 O lock de admissão NUNCA é mantido durante banco, criação do filho ou SMTP.
 """
 from __future__ import annotations
@@ -33,6 +35,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
+from app.core.deadline import Deadline
 from app.recovery.cancel import CancelRegistry
 from app.recovery.processor import RecoveryProcessor
 
@@ -40,6 +43,7 @@ logger = logging.getLogger("prazoai.recovery")
 
 WORKER_THREAD_NAME = "prazoai-recovery-worker"
 CANCEL_INTERVAL_SECONDS = 0.2
+IDLE_WAKEUP_SECONDS = 0.5
 
 
 class DispatcherState(str, Enum):
@@ -143,8 +147,11 @@ class RecoveryDispatcher:
             while True:
                 with self._lock:
                     while not self._queue and not self._stop.is_set():
-                        self._cond.wait()
+                        # Espera com limite: se o encerramento não obteve o lock de admissão para notificar
+                        # (orçamento esgotado), o worker ainda percebe o evento de parada e termina.
+                        self._cond.wait(IDLE_WAKEUP_SECONDS)
                     if self._stop.is_set():
+                        self._drain_after_stop()
                         return
                     item = self._queue.popleft()
                     self._busy = True
@@ -175,6 +182,15 @@ class RecoveryDispatcher:
             with self._lock:
                 self._stage = "finished"
                 self._cond.notify_all()
+
+    def _drain_after_stop(self) -> None:               # com o lock
+        """Pendências que o encerramento não conseguiu drenar (lock indisponível no prazo) são descartadas
+        e contadas aqui, quando o worker reconhece a parada; nunca processadas."""
+        dropped = len(self._queue)
+        if dropped:
+            self._queue.clear()
+            self.counters["shutdown_discarded"] += dropped
+            logger.info("dispatcher_shutdown_discarded count=%d by=worker", dropped)
 
     def _handle(self, item: _Item) -> str:
         waited = self._monotonic() - item.enqueued_at
@@ -216,14 +232,16 @@ class RecoveryDispatcher:
 
     # ------------------------------------------------------------------ encerramento (§4.7)
     def stop(self) -> DispatcherState:
-        deadline = time.monotonic() + self._grace
+        """Protocolo de encerramento com UM prazo monotônico fixado na entrada (correção da auditoria).
 
-        def remaining() -> float:
-            return max(0.0, deadline - time.monotonic())
-
-        self._stop.set()                                 # thread-safe; nenhuma etapa nova depois disto
-        if not self._lock.acquire(timeout=remaining()):
-            return self._finish_unclean("admission_lock")
+        Toda aquisição de lock (admissão, registro, transporte), cancelamento e espera recebe só o tempo
+        restante; nada reinicia o orçamento. O que não puder ser confirmado no prazo torna o encerramento
+        não limpo — nunca se presume conexão fechada ou filho coletado e nada espera de novo sem limite.
+        """
+        deadline = Deadline(self._grace)
+        self._stop.set()                                 # nenhuma etapa nova depois disto (sem lock)
+        if not deadline.acquire(self._lock):
+            return self._finish_unclean(deadline, "admission_lock")
         try:
             if self._state in (DispatcherState.STOPPED_CLEAN, DispatcherState.STOPPED_UNCLEAN):
                 return self._state
@@ -239,56 +257,65 @@ class RecoveryDispatcher:
         if dropped:
             logger.info("dispatcher_shutdown_discarded count=%d", dropped)
         if never_started:
-            return self._mark_clean()
+            return self._mark_clean(deadline)
         cancel = getattr(self._delivery, "cancel", None)
         if callable(cancel):
-            # Uma chamada: marca a parada no transporte (nenhum filho novo; criação em curso é encerrada
-            # ao voltar) e encerra um filho publicado, com a supervisão limitada ao orçamento restante.
-            cancel(timeout=remaining())
+            # Uma chamada, com o RESTANTE do prazo (inclui o lock do transporte): marca a parada (nenhum
+            # filho novo; criação em curso é encerrada ao voltar) e encerra um filho publicado.
+            cancel(timeout=deadline.remaining())
         thread = self._thread
         assert thread is not None
-        last_cancel: float | None = None
-        while thread.is_alive() and remaining() > 0:
-            if self._registry is not None and self._registry.active:
-                now = time.monotonic()
-                if last_cancel is None or now - last_cancel >= CANCEL_INTERVAL_SECONDS:
-                    last_cancel = now
-                    self._registry.cancel_active(timeout=min(1.0, remaining()))
-            thread.join(timeout=min(CANCEL_INTERVAL_SECONDS, remaining()))
-        return self._conclude()
+        while thread.is_alive() and not deadline.expired():
+            if self._registry is not None:
+                # No máximo uma tentativa por intervalo; o lock do registro também só espera o restante
+                # (limitado ao intervalo, para não consumir o orçamento do join numa única espera).
+                self._registry.cancel_active(deadline, lock_cap=CANCEL_INTERVAL_SECONDS)
+            if deadline.expired():
+                break
+            thread.join(timeout=deadline.remaining(CANCEL_INTERVAL_SECONDS))
+        return self._conclude(deadline)
 
     def stage_now(self) -> str:
         with self._lock:
             return self._stage
 
-    def _conclude(self) -> DispatcherState:
+    def _conclude(self, deadline: Deadline) -> DispatcherState:
+        """Limpo SÓ com provas obtidas dentro do prazo; qualquer estado não confirmado → não limpo."""
         thread_done = self._thread is None or not self._thread.is_alive()
-        conn_open = self._registry is not None and self._registry.open_connections > 0
-        child = bool(getattr(self._delivery, "has_unconfirmed_child", False))
-        if thread_done and not conn_open and not child:
-            return self._mark_clean()
-        return self._finish_unclean(self._stage, worker_alive=not thread_done, connection_open=conn_open,
-                                    child_unconfirmed=child)
+        connection = "n/a"
+        if self._registry is not None:
+            snap = self._registry.snapshot(deadline)
+            connection = "unknown" if snap is None else ("open" if snap.open_connections > 0 else "closed")
+        child = "n/a"
+        probe = getattr(self._delivery, "unconfirmed_child", None)
+        if callable(probe):
+            found = probe(deadline.remaining())
+            child = "unknown" if found is None else ("unconfirmed" if found else "reaped")
+        if thread_done and connection in ("n/a", "closed") and child in ("n/a", "reaped"):
+            return self._mark_clean(deadline)
+        return self._finish_unclean(deadline, self._stage, worker_alive=not thread_done, connection=connection,
+                                    child=child)
 
-    def _mark_clean(self) -> DispatcherState:
-        with self._lock:
-            self._state = DispatcherState.STOPPED_CLEAN
-            self._cond.notify_all()
-        logger.info("dispatcher_stopped_clean")
-        return DispatcherState.STOPPED_CLEAN
-
-    def _finish_unclean(self, stage: str, *, worker_alive: bool = True, connection_open: bool = False,
-                        child_unconfirmed: bool = False) -> DispatcherState:
-        # Sem esperar o lock (o orçamento já acabou): a admissão já está fechada pelo evento de parada
-        # (`_admissible` o verifica) e o worker não inicia etapa nova.
-        acquired = self._lock.acquire(blocking=False)
+    def _set_final_state(self, state: DispatcherState, deadline: Deadline) -> None:
+        # O estado final é publicado com o lock quando ele vier dentro do prazo; senão sem o lock (atribuição
+        # atômica). A admissão já está fechada pelo evento de parada, verificado em `_admissible`.
+        acquired = deadline.acquire(self._lock)
         try:
-            self._state = DispatcherState.STOPPED_UNCLEAN
+            self._state = state
             if acquired:
                 self._cond.notify_all()
         finally:
             if acquired:
                 self._lock.release()
-        logger.error("dispatcher_stop_unclean stage=%s worker_alive=%s connection_open=%s child_unconfirmed=%s",
-                     stage, str(worker_alive).lower(), str(connection_open).lower(), str(child_unconfirmed).lower())
+
+    def _mark_clean(self, deadline: Deadline) -> DispatcherState:
+        self._set_final_state(DispatcherState.STOPPED_CLEAN, deadline)
+        logger.info("dispatcher_stopped_clean")
+        return DispatcherState.STOPPED_CLEAN
+
+    def _finish_unclean(self, deadline: Deadline, stage: str, *, worker_alive: bool = True,
+                        connection: str = "unknown", child: str = "unknown") -> DispatcherState:
+        self._set_final_state(DispatcherState.STOPPED_UNCLEAN, deadline)
+        logger.error("dispatcher_stop_unclean stage=%s worker_alive=%s connection=%s child=%s",
+                     stage, str(worker_alive).lower(), connection, child)
         return DispatcherState.STOPPED_UNCLEAN
