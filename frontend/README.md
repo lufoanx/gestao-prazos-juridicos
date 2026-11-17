@@ -69,7 +69,7 @@ Para “zerar” a demonstração: limpe o armazenamento do site nas ferramentas
 
 ## Limitações e o que dependerá do backend
 Este protótipo **não** implementa nada do que segue — tudo está claramente rotulado como demonstrativo na interface:
-- **Autenticação/segurança real**: sem senhas, sessões de servidor, tokens, recuperação de senha, RBAC no servidor, auditoria confiável ou HTTPS/headers de segurança.
+- **Autenticação/segurança real** (modo demonstração): sem senhas, sessões de servidor, tokens, recuperação de senha, RBAC no servidor, auditoria confiável ou HTTPS/headers de segurança. No modo integrado, ver abaixo.
 - **Banco de dados e sincronização**: os dados vivem no navegador; não há persistência de servidor nem sincronização entre dispositivos/usuários.
 - **IA / OCR / leitura de PDF**: o “processamento” de intimações é simulado e os dados sugeridos **não** vêm do arquivo.
 - **Cálculo de prazos processuais oficial**: as datas são informadas manualmente; urgência é apenas classificação visual.
@@ -110,10 +110,24 @@ integrados", sem dados demonstrativos. Configuração em `.env.example`; detalhe
   recuperação de senha com e-mail (E4) usam o capturador local: `PRAZOAI_TEST_MAILPIT_SMTP=127.0.0.1:1025`
   e `PRAZOAI_TEST_MAILPIT_API=http://127.0.0.1:8025` (pulados sem elas; obrigatórios no CI).
 
-Rotas públicas de recuperação de senha no BFF (E4, doc 21 §20; as telas só as usarão na E5):
-`GET /bff/public/password/status` (`{ available }`), `POST /bff/public/password/forgot` (`{ email }`) e
-`POST /bff/public/password/reset` (`{ token, newPassword }`). Destino fixo, CSRF/Origin, `no-store`,
-nenhum acesso a cookies ou à sessão; timeout depois do envio = resultado desconhecido (504), sem repetição.
+Recuperação de senha (E4 + E5, doc 21 §20 e §22):
+- Rotas públicas do BFF: `GET /bff/public/password/status` (`{ available }`),
+  `POST /bff/public/password/forgot` (`{ email }`) e `POST /bff/public/password/reset`
+  (`{ token, newPassword }`). Destino fixo, CSRF/Origin, `no-store`, nenhum acesso a cookies ou à
+  sessão; timeout depois do envio = resultado desconhecido (504), sem repetição.
+- Telas (modo integrado): `/esqueci-senha` consulta a disponibilidade e responde sempre de forma neutra;
+  `/redefinir-senha#TOKEN` lê o token do **fragmento**, remove-o da barra com `history.replaceState` e
+  o mantém só em memória (recarregar a página perde o token). O formato antigo `/redefinir-senha/<token>`
+  mostra uma página estática, sem eco e com `Referrer-Policy: no-referrer`, nos dois modos.
+- Peças: `src/lib/integration/recovery-rules.mjs` (regras compartilhadas com o BFF),
+  `fragment-token.mjs` (captura), `recovery-client.mjs` (cliente público), `recovery-flow.mjs`
+  (estados); `src/integrated/useRecoveryFlows.ts` e `RecoveryScreens.tsx` (React).
+- Modo demonstração: as telas seguem simuladas (nenhum e-mail sai); o link demonstrativo é
+  `/redefinir-senha#demo` (`#expirado`, `#usado`).
+- E2E da recuperação (`e2e/recovery.spec.ts`): exige o capturador local, como a integração
+  (`PRAZOAI_TEST_MAILPIT_SMTP`/`PRAZOAI_TEST_MAILPIT_API`; obrigatório com `PRAZOAI_REQUIRE_MAILPIT_TESTS=1`).
+  O Playwright roda sem trace, screenshot, vídeo ou snapshot da página nas falhas (diagnósticos sem
+  tokens ou senhas).
 - `npm run test:e2e` — navegador (Playwright) + Next integrado + FastAPI real, numa única execução;
   cada contexto de navegador simula um cliente com IP próprio (ver `docs/backend/13-ambiente-e2e-identidade-de-rede.md`).
 - Sessões do BFF ficam em memória: um processo Node, perdidas ao reiniciar; não publicar em

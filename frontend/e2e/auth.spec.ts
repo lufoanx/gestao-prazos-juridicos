@@ -113,8 +113,7 @@ test("módulos não integrados não exibem dados demonstrativos; recursos inexis
     await expect(page.getByRole("heading", { name: "Módulo ainda não integrado" })).toBeVisible();
     for (const t of DEMO_TEXTS) await expect(page.getByText(t)).toHaveCount(0);
   }
-  await page.goto("/esqueci-senha");
-  await expect(page.getByRole("heading", { name: "Indisponível nesta fase" })).toBeVisible();
+  // E5: a recuperação de senha deixou de ser "indisponível nesta fase" (coberta em recovery.spec.ts).
   await page.goto("/app");
   await logout(page);
   await page.goto("/login");

@@ -186,8 +186,11 @@ saída e limites em `docs/backend/20-p5-manutencao-operacao.md`).
 - **E4 (implementada, aguardando auditoria):** rotas públicas do BFF `GET /bff/public/password/status`,
   `POST /bff/public/password/forgot` e `POST /bff/public/password/reset` (destino fixo, corpo exato,
   sem tocar na sessão) — doc 21, §20.
-- **E5–E6 pendentes:** telas integradas, captura do fragmento, E2E da recuperação, documentação
-  operacional. As telas de recuperação seguem indisponíveis no modo integrado.
+- **E5 (implementada, aguardando auditoria):** telas integradas `/esqueci-senha` e
+  `/redefinir-senha#TOKEN` (token só no fragmento, removido da barra e mantido em memória), rota antiga
+  `/redefinir-senha/<token>` substituída por página estática com `no-referrer`, e E2E no navegador com
+  PostgreSQL e Mailpit reais — doc 21, §22. O backend não mudou.
+- **E6 pendente:** documentação operacional e revisão de observabilidade.
 
 Modos finais: `STORAGE=memory` (padrão) e `STORAGE=postgres` (autenticação **e** domínio no banco;
 `development`/`test`; exige `alembic upgrade head` até `0003`). O modo intermediário `auth-postgres`

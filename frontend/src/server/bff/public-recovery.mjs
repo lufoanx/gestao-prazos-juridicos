@@ -25,14 +25,10 @@ const ROUTES = Object.freeze({
   reset: Object.freeze({ method: "POST", path: "/auth/reset-password" }),
 });
 
-// Limites espelham o backend (app/schemas/auth.py): EMAIL_MAX=254, senha 8..128 (não só espaços),
-// token opaco 16..256.
-const EMAIL_MAX = 254;
-const PASSWORD_MIN = 8;
-const PASSWORD_MAX = 128;
-const TOKEN_MIN = 16;
-const TOKEN_MAX = 256;
-const CONTROL = /[\u0000-\u001f\u007f]/;
+// Regras de forma (limites do backend) compartilhadas com as telas da E5.
+import { validateForgotBody, validateResetBody } from "../../lib/integration/recovery-rules.mjs";
+
+export { validateForgotBody, validateResetBody };
 
 // Códigos de erro do backend que estas rotas repassam (com a mensagem pública do próprio backend).
 const KNOWN_ERRORS = Object.freeze({
@@ -40,36 +36,6 @@ const KNOWN_ERRORS = Object.freeze({
   forgot: new Set(["validation_error", "rate_limited", "password_recovery_unavailable"]),
   reset: new Set(["validation_error", "rate_limited", "invalid_reset_token", "concurrent_update"]),
 });
-
-// Comprimento em pontos de código, como `len()` no Python (o `.length` do JS conta unidades UTF-16).
-const cpLength = (value) => [...value].length;
-
-const exactKeys = (value, keys) => {
-  const got = Object.keys(value);
-  return got.length === keys.length && keys.every((k) => Object.hasOwn(value, k));
-};
-
-/** @returns {string | null} motivo genérico (sem o valor) ou null se válido */
-export function validateForgotBody(value) {
-  if (!value || !exactKeys(value, ["email"])) return "Envie somente o e-mail.";
-  const { email } = value;
-  if (typeof email !== "string") return "E-mail inválido.";
-  const trimmed = email.trim();
-  if (!trimmed || cpLength(trimmed) > EMAIL_MAX || CONTROL.test(trimmed) || !trimmed.includes("@")) return "E-mail inválido.";
-  return null;
-}
-
-/** @returns {string | null} */
-export function validateResetBody(value) {
-  if (!value || !exactKeys(value, ["token", "newPassword"])) return "Envie somente o token e a nova senha.";
-  const { token, newPassword } = value;
-  if (typeof token !== "string" || cpLength(token) < TOKEN_MIN || cpLength(token) > TOKEN_MAX) return "Link de redefinição inválido.";
-  if (typeof newPassword !== "string" || cpLength(newPassword) < PASSWORD_MIN || cpLength(newPassword) > PASSWORD_MAX
-      || !newPassword.trim()) {
-    return `A senha deve ter entre ${PASSWORD_MIN} e ${PASSWORD_MAX} caracteres.`;
-  }
-  return null;
-}
 
 /**
  * @param {object} deps funções internas do BFF (mesmas proteções das demais rotas)
