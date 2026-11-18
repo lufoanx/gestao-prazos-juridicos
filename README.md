@@ -101,6 +101,7 @@ A solução proposta foi avaliada como altamente relevante (10/10).
 - [Frontend (protótipo navegável) — README](frontend/README.md)
 - [Backend — README](backend/README.md)
 - [Recuperação de senha — guia operacional e demonstração local](docs/backend/22-operacao-recuperacao-senha.md)
+- [Atualização segura das dependências do frontend](docs/backend/23-atualizacao-dependencias-frontend.md)
 
 ---
 
