@@ -9,13 +9,20 @@
 > verde (33/33 passos, incluindo integração nos dois modos e E2E em PostgreSQL). Esse CI valida a
 > **base**, não este projeto. Branch: `docs/projeto-email-recuperacao`.
 >
-> **Status:** **E1–E5 implementadas** (E1: configuração, composição e transporte isolado, §14;
-> E2: `RecoveryDispatcher`, ligação com `forgot-password`, limite por IP e `status`, §15, com as
-> correções de auditoria em §16–§17; E3: capturador SMTP local no CI e integração real com PostgreSQL,
-> §18–§19; E4: rotas públicas de recuperação no BFF, §20, com a correção do CI em §21; E5: telas
-> integradas, captura do fragmento, remoção da rota antiga e E2E da recuperação, §22, com a correção
-> da auditoria em §23, aguardando nova auditoria). **E6 pendente:** documentação operacional. Produção continua bloqueada; nenhum provedor
-> foi contratado e nenhum e-mail externo foi enviado.
+> **Status atual:** **E1–E5 implementadas** e incorporadas à `main`; **E6 entregue, aguardando
+> auditoria** (E1: configuração,
+> composição e transporte isolado, §14; E2: `RecoveryDispatcher`, ligação com `forgot-password`, limite
+> por IP e `status`, §15, com as correções de auditoria em §16–§17; E3: capturador SMTP local no CI e
+> integração real com PostgreSQL, §18–§19; E4: rotas públicas de recuperação no BFF, §20, com a correção
+> do CI em §21; E5: telas integradas, captura do fragmento, remoção da rota antiga e E2E da recuperação,
+> §22, com a correção da auditoria em §23). E6: documentação operacional e revisão da observabilidade em
+> **[doc 22](22-operacao-recuperacao-senha.md)** (aguardando auditoria). Produção continua bloqueada;
+> nenhum provedor foi contratado e nenhum e-mail externo foi enviado.
+>
+> **Como ler este documento:** as seções **1 a 13** são o **projeto original** (mapa de partida,
+> propostas e decisões; as marcações **[PROPOSTA]** e **[LIMITAÇÃO]** descrevem a situação daquela
+> época, e alguns detalhes foram ajustados durante a implementação). As seções **14 a 23** registram o
+> que cada entrega **implementou e corrigiu**. Para operar o sistema **hoje**, use o doc 22.
 >
 > **Revisão 3** (commit incremental sobre `ccff5c2`):
 > - D-E8: prazo total do SMTP por **subprocesso supervisionado** (§4.6);
@@ -635,12 +642,12 @@ continua cobrindo os erros de validação. Produção segue bloqueada.
 ## 8. Plano de implementação (entregas pequenas, cada uma com auditoria)
 | # | Entrega | Critérios de aceite |
 |---|---|---|
-| E1 (**implementada, aguardando auditoria**) | Configuração + `EmailTransport` + `SmtpTransport` **em subprocesso supervisionado** + composer (backend, ainda sem usar no fluxo) | validação completa no startup (TLS, origem, remetente); supervisão em fases (§4.6) com orçamento monotônico e coleta com espera limitada; falha de coleta → transporte indisponível; nenhum segredo ou token em argumentos, arquivos, ambiente ou logs; recusa fora de Linux (§4.9); custos medidos; nenhuma mudança de comportamento com `disabled` |
-| E2 | `RecoveryDispatcher` (§4.5) + caminho de requisição sem banco + limite por IP + `status` | resposta pública sem banco e sem transporte (teste estrutural); prazo de fila, fila cheia, falha e morte do worker; protocolo de encerramento de §4.7 e propriedade da conexão de §4.8 (admissão coordenada, cancelamento pelo driver só com propriedade confirmada, nenhuma etapa nova após a parada, distinção limpo/não limpo, `lifespan` sem prova de término); um worker; garantias da P3 intactas (suítes atuais verdes) |
-| E3 (**implementada, aguardando auditoria — §18**) | Capturador SMTP local no CI + testes de integração do transporte e do fluxo com PostgreSQL | e-mail recebido no capturador com o link correto; falha e timeout do transporte; nenhum token em logs |
-| E4 (**implementada — §20; correção do CI em §21**) | Rotas BFF públicas (`status`, `forgot`, `reset`) | allowlist; CSRF e Origin; corpo exato; `no-store`; cookies intocados; resultado desconhecido sem repetição; testes de integração BFF × FastAPI |
-| E5 (**implementada, aguardando auditoria — §22**) | Telas integradas + remoção de `/redefinir-senha/[token]` + E2E | E2E: pedido → capturador → link → nova senha → senha antiga recusada → nova aceita → sessões anteriores revogadas; nenhum token em URL de requisição, storage ou logs |
-| E6 | Documentação operacional e revisão de observabilidade | doc atualizado; roteiro de operação do transporte |
+| E1 (**implementada — §14**) | Configuração + `EmailTransport` + `SmtpTransport` **em subprocesso supervisionado** + composer (backend, ainda sem usar no fluxo) | validação completa no startup (TLS, origem, remetente); supervisão em fases (§4.6) com orçamento monotônico e coleta com espera limitada; falha de coleta → transporte indisponível; nenhum segredo ou token em argumentos, arquivos, ambiente ou logs; recusa fora de Linux (§4.9); custos medidos; nenhuma mudança de comportamento com `disabled` |
+| E2 (**implementada — §15–§17**) | `RecoveryDispatcher` (§4.5) + caminho de requisição sem banco + limite por IP + `status` | resposta pública sem banco e sem transporte (teste estrutural); prazo de fila, fila cheia, falha e morte do worker; protocolo de encerramento de §4.7 e propriedade da conexão de §4.8 (admissão coordenada, cancelamento pelo driver só com propriedade confirmada, nenhuma etapa nova após a parada, distinção limpo/não limpo, `lifespan` sem prova de término); um worker; garantias da P3 intactas (suítes atuais verdes) |
+| E3 (**implementada — §18–§19**) | Capturador SMTP local no CI + testes de integração do transporte e do fluxo com PostgreSQL | e-mail recebido no capturador com o link correto; falha e timeout do transporte; nenhum token em logs |
+| E4 (**implementada — §20–§21**) | Rotas BFF públicas (`status`, `forgot`, `reset`) | allowlist; CSRF e Origin; corpo exato; `no-store`; cookies intocados; resultado desconhecido sem repetição; testes de integração BFF × FastAPI |
+| E5 (**implementada — §22–§23**) | Telas integradas + remoção de `/redefinir-senha/[token]` + E2E | E2E: pedido → capturador → link → nova senha → senha antiga recusada → nova aceita → sessões anteriores revogadas; nenhum token em URL de requisição, storage ou logs |
+| E6 (**entregue, aguardando auditoria — doc 22**) | Documentação operacional e revisão de observabilidade | doc atualizado; roteiro de operação do transporte |
 
 Cada entrega preserva:
 - a imagem oficial do Playwright e as proteções dos bancos descartáveis;

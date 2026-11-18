@@ -165,16 +165,18 @@ padrão o uvicorn confia em `X-Forwarded-For` vindo de 127.0.0.1. Ver
 e por processo, depois da resposta) ou pelo comando `python -m app.maintenance purge` (códigos de
 saída e limites em `docs/backend/20-p5-manutencao-operacao.md`).
 
-**E-mail transacional (doc 21):**
-- **E1 (implementada):** configuração (`EMAIL_TRANSPORT`, padrão `disabled`), composição e transporte
-  SMTP em subprocesso supervisionado (só Linux) — §14.
-- **E2 (implementada, aguardando auditoria):** `RecoveryDispatcher` (`app/recovery/`): fila em memória
-  limitada e com prazo, **um** worker iniciado no `lifespan`, conexão exclusiva no PostgreSQL e
-  protocolo de encerramento com orçamento. `forgot-password` agora só valida, aplica os limites por IP
-  e por e-mail e enfileira (202 neutro); emissão e envio acontecem no worker, depois do COMMIT. Com
-  `disabled` (padrão), `status` → `available=false` e `forgot-password` → 503 — §15.
-- **E3 (implementada, aguardando auditoria):** capturador SMTP local (Mailpit `axllent/mailpit:v1.31.6`,
-  sem relay) no CI e testes de integração do fluxo completo com PostgreSQL — §18. Localmente:
+**E-mail transacional e recuperação de senha (doc 21; operação no doc 22):**
+- **Guia operacional atual:** `docs/backend/22-operacao-recuperacao-senha.md` — componentes, caminho
+  completo, configuração conferida contra o código, demonstração local com capturador, observabilidade
+  existente, diagnóstico e procedimentos seguros.
+- **E1–E5 (implementadas):** configuração (`EMAIL_TRANSPORT`, padrão `disabled`) e transporte SMTP em
+  subprocesso supervisionado (**só Linux**, inclusive contêiner) — doc 21 §14; `RecoveryDispatcher`
+  (fila em memória limitada, **um** worker, encerramento com orçamento; `forgot-password` só valida,
+  limita e enfileira, 202 neutro; com `disabled`, `status` → `available=false` e pedido → 503) — §15–§17;
+  capturador SMTP local (Mailpit `v1.31.6`, sem relay) no CI e integração real — §18–§19; rotas públicas
+  do BFF — §20–§21; telas integradas e E2E — §22–§23.
+- **E6 (documental, aguardando auditoria):** doc 22. Produção continua bloqueada.
+- Testes contra o capturador local:
   ```bash
   docker compose -f test-infra/mailpit/compose.yaml up -d          # ou o binário oficial da mesma versão
   ENVIRONMENT=test TEST_DATABASE_URL=postgresql+psycopg://...prazoai_test \
@@ -183,14 +185,6 @@ saída e limites em `docs/backend/20-p5-manutencao-operacao.md`).
   docker compose -f test-infra/mailpit/compose.yaml down
   ```
   Sem as variáveis, os testes da E3 são pulados; com `PRAZOAI_REQUIRE_MAILPIT_TESTS=1` (CI), falham.
-- **E4 (implementada, aguardando auditoria):** rotas públicas do BFF `GET /bff/public/password/status`,
-  `POST /bff/public/password/forgot` e `POST /bff/public/password/reset` (destino fixo, corpo exato,
-  sem tocar na sessão) — doc 21, §20.
-- **E5 (implementada, aguardando auditoria):** telas integradas `/esqueci-senha` e
-  `/redefinir-senha#TOKEN` (token só no fragmento, removido da barra e mantido em memória), rota antiga
-  `/redefinir-senha/<token>` substituída por página estática com `no-referrer`, e E2E no navegador com
-  PostgreSQL e Mailpit reais — doc 21, §22. O backend não mudou.
-- **E6 pendente:** documentação operacional e revisão de observabilidade.
 
 Modos finais: `STORAGE=memory` (padrão) e `STORAGE=postgres` (autenticação **e** domínio no banco;
 `development`/`test`; exige `alembic upgrade head` até `0003`). O modo intermediário `auth-postgres`

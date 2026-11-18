@@ -100,6 +100,7 @@ A solução proposta foi avaliada como altamente relevante (10/10).
 - [Requisitos Não Funcionais](docs/requisitos/requisitos-nao-funcionais.md)
 - [Frontend (protótipo navegável) — README](frontend/README.md)
 - [Backend — README](backend/README.md)
+- [Recuperação de senha — guia operacional e demonstração local](docs/backend/22-operacao-recuperacao-senha.md)
 
 ---
 
@@ -160,7 +161,9 @@ notificações internas; o dashboard segue em integração. Ver o [README do bac
 - Integração frontend–backend dos demais módulos (onboarding/escritório, prazos, intimações, notificações)
 - IA/OCR para análise de intimações em PDF
 - Cálculo de prazos processuais oficial
-- Integrações externas (tribunais, e-mail, Google, etc.)
+- Integrações externas (tribunais, Google, etc.) e envio de e-mail por provedor real — a recuperação
+  de senha por e-mail já funciona localmente com um capturador SMTP (ver o guia operacional), mas
+  nenhum provedor foi configurado e produção continua bloqueada
 - Testes de segurança e hardening (ISO 27001, HTTPS, headers)
 - Infraestrutura, CI/CD e observabilidade
 

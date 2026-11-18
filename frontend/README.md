@@ -110,7 +110,8 @@ integrados", sem dados demonstrativos. Configuração em `.env.example`; detalhe
   recuperação de senha com e-mail (E4) usam o capturador local: `PRAZOAI_TEST_MAILPIT_SMTP=127.0.0.1:1025`
   e `PRAZOAI_TEST_MAILPIT_API=http://127.0.0.1:8025` (pulados sem elas; obrigatórios no CI).
 
-Recuperação de senha (E4 + E5, doc 21 §20 e §22):
+Recuperação de senha (E4 + E5, doc 21 §20 e §22; operação e demonstração local no
+`docs/backend/22-operacao-recuperacao-senha.md`):
 - Rotas públicas do BFF: `GET /bff/public/password/status` (`{ available }`),
   `POST /bff/public/password/forgot` (`{ email }`) e `POST /bff/public/password/reset`
   (`{ token, newPassword }`). Destino fixo, CSRF/Origin, `no-store`, nenhum acesso a cookies ou à
