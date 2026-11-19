@@ -102,6 +102,7 @@ A solução proposta foi avaliada como altamente relevante (10/10).
 - [Backend — README](backend/README.md)
 - [Recuperação de senha — guia operacional e demonstração local](docs/backend/22-operacao-recuperacao-senha.md)
 - [Atualização segura das dependências do frontend](docs/backend/23-atualizacao-dependencias-frontend.md)
+- [Fuso das notificações: instantes do PostgreSQL sempre em UTC](docs/backend/24-fuso-instantes-notificacoes.md)
 
 ---
 
