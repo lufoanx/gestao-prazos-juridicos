@@ -1009,6 +1009,14 @@ usa `TimeZone=America/Sao_Paulo` (datas como `…-03:00` em vez de `…Z`). Repr
 `c86e4d4`, sem as mudanças da E2; o CI usa UTC. Não foi corrigido nem alterado nesta entrega; as
 validações locais usam o cluster descartável em UTC, como o CI.
 
+> **Resolução (doc 24, branch `fix/fuso-notificacoes`, base `75f3b66`):** só a representação estava
+> errada; o instante gravado sempre foi o correto. O psycopg devolve `timestamptz` no fuso da sessão,
+> e a API serializava esse deslocamento. A inconsistência atingia todos os instantes lidos do banco,
+> não só os das notificações. A correção converte cada leitura para UTC (`astimezone`) no tipo
+> compartilhado das colunas (`UtcInstant` em `instant()`), sem migration e sem depender do fuso do
+> servidor. Testes com PostgreSQL real em UTC, America/Sao_Paulo e Pacific/Kiritimati estão em
+> [24-fuso-instantes-notificacoes.md](24-fuso-instantes-notificacoes.md). O registro acima foi mantido.
+
 ## 17. Segunda auditoria da correção: espera residual no cancelamento SMTP e diagnóstico do E2E de convite
 
 ### 17.1 Espera residual em `SubprocessSmtpTransport.cancel()`
