@@ -1088,6 +1088,14 @@ botão, nenhum estado de envio, nenhum erro, nenhum convite). Não é defeito da
   (Chromium 156; aqui foi usado o Chromium 153 pré-instalado), de preferência com rastreamento de rede
   sanitizado em caso de falha.
 
+> **Resolução (doc 25, branch `fix/convite-deslocamento`, base `6dbbf9e`):** o mecanismo foi reproduzido
+> de novo na base: botão desloca 65 px no desktop e 135 px em 360 px; sem `submit`, sem `POST`, sem
+> link. Foi corrigido no **produto**: o cartão "Código de ingresso" reserva, enquanto carrega ou falha,
+> o espaço do conteúdo pronto, e o botão de convite não se move. A regressão E2E
+> (`e2e/invite-layout.spec.ts`) controla a chegada da resposta entre o pressionar e o soltar e exige um
+> único `POST` e o link. A causa da **falha histórica** continua não comprovada: a reprodução mostra o
+> mecanismo, não o que ocorreu naquela execução. O diagnóstico acima foi mantido.
+
 ## 18. O que a E3 implementou: capturador SMTP local e integração real com PostgreSQL
 
 **Base:** `main` `7701b062304a667ad8a375d7abd185f5ad685d48` (merge do PR #24), árvore
