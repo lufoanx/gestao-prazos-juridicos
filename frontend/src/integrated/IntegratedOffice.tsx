@@ -63,6 +63,22 @@ function OfficeView({ officeId }: { officeId: string }) {
   );
 }
 
+// Comprimento do código de ingresso emitido pelo backend (JOIN_CODE_LENGTH); só dimensiona a reserva.
+const JOIN_CODE_PLACEHOLDER = "0".repeat(10);
+
+function JoinCodeBody({ code, codeTestId, rotateDisabled, onRotate, children }: {
+  code: string; codeTestId?: string; rotateDisabled?: boolean; onRotate?: () => void; children?: React.ReactNode;
+}) {
+  return (
+    <>
+      <p>Compartilhe este código com quem deve solicitar ingresso: <strong data-testid={codeTestId} style={{ fontFamily: "monospace", fontSize: "var(--fs-lg)" }}>{code}</strong></p>
+      <p className="text-muted">Quem usar o código cria uma solicitação; a entrada só acontece após aprovação.</p>
+      {children}
+      <Button variant="secondary" disabled={rotateDisabled} onClick={onRotate}>Gerar novo código</Button>
+    </>
+  );
+}
+
 function JoinCodeCard({ officeId }: { officeId: string }) {
   const { org } = useOrg();
   const res = useResource("join-code", () => org.joinCode(officeId));
@@ -71,15 +87,22 @@ function JoinCodeCard({ officeId }: { officeId: string }) {
   const [ok, setOk] = useState<string | null>(null);
   return (
     <Card title="Código de ingresso">
-      <ResourceState res={res}>{(data) => (
-        <>
-          <p>Compartilhe este código com quem deve solicitar ingresso: <strong data-testid="join-code" style={{ fontFamily: "monospace", fontSize: "var(--fs-lg)" }}>{data.joinCode}</strong></p>
-          <p className="text-muted">Quem usar o código cria uma solicitação; a entrada só acontece após aprovação.</p>
-          {m.error ? <Notice kind="error">{m.error}</Notice> : null}
-          {ok ? <Notice kind="ok">{ok}</Notice> : null}
-          <Button variant="secondary" disabled={m.busy} onClick={() => setConfirm(true)}>Gerar novo código</Button>
-        </>
-      )}</ResourceState>
+      {/* Enquanto o código não chega (ou falha), o espaço do conteúdo pronto fica reservado por uma
+          cópia invisível e inerte: o que está abaixo (ex.: "Gerar link de convite") não se desloca
+          entre o pressionar e o soltar do clique. A reserva só define altura mínima — nada é cortado. */}
+      <div className="stable-slot">
+        {res.status !== "ready" ? (
+          <div className="stable-slot__reserve" aria-hidden="true"><JoinCodeBody code={JOIN_CODE_PLACEHOLDER} rotateDisabled /></div>
+        ) : null}
+        <div>
+          <ResourceState res={res}>{(data) => (
+            <JoinCodeBody code={data.joinCode} codeTestId="join-code" rotateDisabled={m.busy} onRotate={() => setConfirm(true)}>
+              {m.error ? <Notice kind="error">{m.error}</Notice> : null}
+              {ok ? <Notice kind="ok">{ok}</Notice> : null}
+            </JoinCodeBody>
+          )}</ResourceState>
+        </div>
+      </div>
       <ConfirmDialog open={confirm} title="Gerar novo código?" danger confirmLabel="Gerar novo código"
         message="O código atual deixará de funcionar imediatamente." onCancel={() => setConfirm(false)}
         onConfirm={async () => { setConfirm(false); setOk(null); const r = await m.run(() => org.rotateJoinCode(officeId)); if (r.ok) { setOk("Novo código gerado."); res.reload(); } }} />

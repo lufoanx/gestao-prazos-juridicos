@@ -175,6 +175,11 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .card__title svg { color: var(--teal-700); }
 .card__body { padding: var(--sp-5); }
 .card__body--flush { padding: 0; }
+/* Espaço reservado enquanto um conteúdo carrega: a reserva (invisível, fora da ordem de foco e da árvore
+   de acessibilidade) e o estado atual ocupam a MESMA célula; a altura é a maior das duas, sem corte. */
+.stable-slot { display: grid; }
+.stable-slot > * { grid-area: 1 / 1; min-width: 0; }
+.stable-slot__reserve { visibility: hidden; pointer-events: none; }
 
 /* ---------- Tabela ---------- */
 .table-wrap { width: 100%; overflow-x: auto; }
