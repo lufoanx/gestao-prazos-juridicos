@@ -104,6 +104,7 @@ A solução proposta foi avaliada como altamente relevante (10/10).
 - [Atualização segura das dependências do frontend](docs/backend/23-atualizacao-dependencias-frontend.md)
 - [Fuso das notificações: instantes do PostgreSQL sempre em UTC](docs/backend/24-fuso-instantes-notificacoes.md)
 - [Estabilidade do botão "Gerar link de convite" (deslocamento de layout)](docs/backend/25-estabilidade-botao-convite.md)
+- [Ambientes pessoal e escritório: diagnóstico e descoberta das ações](docs/backend/26-fluxos-pessoal-escritorio.md)
 
 ---
 

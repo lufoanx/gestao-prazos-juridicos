@@ -311,6 +311,12 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 .scope-switch__btn:hover { color: #fff; }
 .scope-switch__btn[aria-pressed="true"] { background: var(--surface); color: var(--navy-700); box-shadow: var(--shadow-sm); }
 .scope-switch__btn svg { flex: none; }
+.scope-switch__btn:disabled { opacity: .55; cursor: not-allowed; }
+.scope-switch__btn:disabled:hover { color: #cfe0ec; }
+.scope-switch__hint { margin: 6px 2px 0; font-size: var(--fs-xs); color: #cfe0ec; }
+.scope-switch__hint a { color: #fff; text-decoration: underline; }
+.scope-switch__hint--light { color: var(--muted); }
+.scope-switch__hint--light a { color: var(--navy-700); }
 .scope-switch--light { background: var(--surface-alt); }
 .scope-switch--light .scope-switch__btn { color: var(--muted); }
 .scope-switch--light .scope-switch__btn:hover { color: var(--navy-700); }

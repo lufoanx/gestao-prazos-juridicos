@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Users, ShieldAlert, Copy, Link2, Check, X, UserMinus } from "lucide-react";
 import { useScope } from "@/context/ScopeContext";
+import { DemoOfficeEntry } from "@/components/shell/DemoOfficeEntry";
 import { useOrg } from "@/context/OrgContext";
 import { useData } from "@/context/DataContext";
 import { useSession } from "@/context/SessionContext";
@@ -76,18 +77,7 @@ function DemoEquipePage() {
   const [inviteRole, setInviteRole] = useState("Advogado(a)");
   const [lastLink, setLastLink] = useState<string>();
 
-  if (scopeKind !== "office" || !office) {
-    return (
-      <div>
-        <div className="page-head"><div className="page-head__title">
-          <h1 style={{ fontSize: "var(--fs-2xl)", fontWeight: 700, color: "var(--text-strong)", margin: 0 }}>Equipe</h1>
-        </div></div>
-        <div className="card"><div className="card__body">
-          <EmptyState icon={<Users size={30} aria-hidden />} title="Ambiente pessoal">Alterne para um escritório para gerenciar a equipe.</EmptyState>
-        </div></div>
-      </div>
-    );
-  }
+  if (scopeKind !== "office" || !office) return <DemoOfficeEntry title="Equipe" icon={<Users size={30} aria-hidden />} />;
   if (!canManageTeam) {
     return (
       <div>

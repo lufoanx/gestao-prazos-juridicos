@@ -4,10 +4,11 @@ import { APP_MODE } from "@/lib/integration/mode.mjs";
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Building2, ShieldAlert, Users, Copy, LogOut } from "lucide-react";
+import { ShieldAlert, Users, Copy, LogOut } from "lucide-react";
 import { useScope } from "@/context/ScopeContext";
+import { DemoOfficeEntry } from "@/components/shell/DemoOfficeEntry";
 import { useOrg } from "@/context/OrgContext";
-import { Input, Button, EmptyState, Badge, Select, Modal, useToast } from "@/components/ui";
+import { Input, Button, Badge, Select, Modal, useToast } from "@/components/ui";
 
 function DemoEscritorioPage() {
   const router = useRouter();
@@ -22,20 +23,7 @@ function DemoEscritorioPage() {
   const [leaving, setLeaving] = useState(false);
   const [transferTo, setTransferTo] = useState("");
 
-  if (scopeKind !== "office" || !office) {
-    return (
-      <div>
-        <div className="page-head"><div className="page-head__title">
-          <h1 style={{ fontSize: "var(--fs-2xl)", fontWeight: 700, color: "var(--text-strong)", margin: 0 }}>Escritório</h1>
-        </div></div>
-        <div className="card"><div className="card__body">
-          <EmptyState icon={<Building2 size={30} aria-hidden />} title="Você está no ambiente pessoal">
-            Alterne para um escritório (ou crie um) para ver e editar os dados.
-          </EmptyState>
-        </div></div>
-      </div>
-    );
-  }
+  if (scopeKind !== "office" || !office) return <DemoOfficeEntry title="Escritório" />;
 
   const officeMembers = office ? memberships.filter((m) => m.officeId === office.id) : [];
   const memberCount = officeMembers.length;

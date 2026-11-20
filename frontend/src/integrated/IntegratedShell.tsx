@@ -6,11 +6,13 @@ import { usePathname, useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { useAuth } from "./AuthProvider";
 import { useOrg } from "./OrgProvider";
+import { OFFICE_ENTRY_TEXT } from "@/lib/office-entry.mjs";
 import { UnreadCount } from "./IntegratedNotifications";
 
 const NAV = [
   { href: "/app", label: "Início", ready: true },
-  { href: "/app/escritorio", label: "Escritório", ready: true, office: true },
+  // Sempre visível: sem vínculo, a tela mostra como criar ou entrar (doc 26); Equipe só com vínculo.
+  { href: "/app/escritorio", label: "Escritório", ready: true },
   { href: "/app/escritorio/equipe", label: "Equipe", ready: true, office: true },
   { href: "/app/perfil", label: "Perfil", ready: true },
   { href: "/app/dashboard", label: "Dashboard", ready: false },
@@ -84,8 +86,9 @@ export function IntegratedShell({ children }: { children: ReactNode }) {
           </div>
         </header>
         <main className="app-content" id="conteudo" key={contentKey}>
-          {org.status === "unavailable" ? (
-            <p role="alert" className="field__error">Não foi possível carregar o vínculo com escritório (serviço indisponível).
+          {org.status === "unavailable" || org.status === "error" ? (
+            <p role="alert" className="field__error">
+              {org.status === "unavailable" ? "Não foi possível carregar o vínculo com escritório (serviço indisponível)." : OFFICE_ENTRY_TEXT.loadError}
               {" "}<button className="btn btn--secondary btn--sm" onClick={() => void orgCtl.revalidate()}>Tentar novamente</button></p>
           ) : null}
           {children}
