@@ -8,6 +8,7 @@ import { Badge, Button, ConfirmDialog, EmptyState, Input, Modal, Select } from "
 import { ALL_PERMS, canEditTarget, capabilities, grantablePermissions } from "@/lib/integration/org-controller.mjs";
 import type { MemberAdmin, MemberPublic, MembersResponse } from "@/lib/integration/dto.d.mts";
 import { useAuth } from "./AuthProvider";
+import { OfficeGate } from "./OfficeGate";
 import { useOrg } from "./OrgProvider";
 import { useResource } from "./useResource";
 import { Card, Notice, PERMISSION_LABELS, PageHead, ResourceState, useMutation } from "./ui";
@@ -15,11 +16,7 @@ import { Card, Notice, PERMISSION_LABELS, PageHead, ResourceState, useMutation }
 type Member = MemberAdmin | MemberPublic;
 
 export function IntegratedTeam() {
-  const { state } = useOrg();
-  if (state.status !== "ready") return <p aria-busy="true">Carregando…</p>;
-  if (!state.office) return <><PageHead title="Equipe" /><Notice>Você não pertence a um escritório no momento.</Notice></>;
-  if (state.scope !== "office") return <><PageHead title="Equipe" /><Notice>Selecione o ambiente do escritório no topo para ver a equipe.</Notice></>;
-  return <TeamView officeId={state.office.id} />;
+  return <OfficeGate title="Equipe">{(officeId) => <TeamView officeId={officeId} />}</OfficeGate>;
 }
 
 function TeamView({ officeId }: { officeId: string }) {

@@ -6,6 +6,7 @@ import { Badge, Button, ConfirmDialog, EmptyState, Input } from "@/components/ui
 import { capabilities } from "@/lib/integration/org-controller.mjs";
 import { buildInviteLink } from "@/lib/integration/invite-token.mjs";
 import type { InvitationAdmin, OfficeJoinRequest } from "@/lib/integration/dto.d.mts";
+import { OfficeGate } from "./OfficeGate";
 import { useOrg } from "./OrgProvider";
 import { useResource } from "./useResource";
 import { Card, Notice, PageHead, ResourceState, fmtDate, useMutation } from "./ui";
@@ -15,15 +16,7 @@ const INVITE_LABEL = { valid: "Válido", expired: "Expirado", revoked: "Revogado
 const REQUEST_LABEL = { pending: "Pendente", approved: "Aprovada", rejected: "Rejeitada", cancelled: "Cancelada" } as const;
 
 export function IntegratedOffice() {
-  const { state } = useOrg();
-  if (state.status !== "ready") return <p aria-busy="true">Carregando…</p>;
-  if (!state.office || !state.membership) {
-    return <><PageHead title="Escritório" /><Notice>Você não pertence a um escritório no momento.</Notice></>;
-  }
-  if (state.scope !== "office") {
-    return <><PageHead title="Escritório" /><Notice>Você está no ambiente pessoal. Selecione o ambiente do escritório no topo para ver esta área.</Notice></>;
-  }
-  return <OfficeView officeId={state.office.id} />;
+  return <OfficeGate title="Escritório">{(officeId) => <OfficeView officeId={officeId} />}</OfficeGate>;
 }
 
 function OfficeView({ officeId }: { officeId: string }) {

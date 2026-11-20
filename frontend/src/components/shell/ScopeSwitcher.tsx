@@ -1,5 +1,8 @@
 "use client";
+import { useId } from "react";
+import Link from "next/link";
 import { User, Building2 } from "lucide-react";
+import { OFFICE_ENTRY_TEXT } from "@/lib/office-entry.mjs";
 import { useScope } from "@/context/ScopeContext";
 import { useToast } from "@/components/ui";
 
@@ -11,6 +14,7 @@ import { useToast } from "@/components/ui";
 export function ScopeSwitcher({ light = false }: { light?: boolean }) {
   const { scopeKind, setScopeKind, hasOffice, office } = useScope();
   const toast = useToast();
+  const hintId = useId();
 
   function choose(kind: "personal" | "office") {
     if (kind === scopeKind) return;
@@ -23,6 +27,7 @@ export function ScopeSwitcher({ light = false }: { light?: boolean }) {
   }
 
   return (
+    <>
     <div
       className={`scope-switch${light ? " scope-switch--light" : ""}`}
       role="group" aria-label="Ambiente de trabalho"
@@ -39,10 +44,17 @@ export function ScopeSwitcher({ light = false }: { light?: boolean }) {
         aria-pressed={scopeKind === "office"}
         onClick={() => choose("office")}
         disabled={!hasOffice}
-        title={hasOffice ? undefined : "Você ainda não participa de um escritório"}
+        aria-describedby={hasOffice ? undefined : hintId}
       >
         <Building2 size={15} aria-hidden /> Escritório
       </button>
     </div>
+    {/* Sem vínculo, o motivo e o caminho ficam VISÍVEIS (antes: só um title, invisível ao toque). */}
+    {!hasOffice ? (
+      <p id={hintId} className={`scope-switch__hint${light ? " scope-switch__hint--light" : ""}`}>
+        {OFFICE_ENTRY_TEXT.switchNoOffice} <Link href="/onboarding">{OFFICE_ENTRY_TEXT.switchNoOfficeAction}</Link>
+      </p>
+    ) : null}
+    </>
   );
 }
