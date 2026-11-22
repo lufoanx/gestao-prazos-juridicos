@@ -109,7 +109,11 @@ def test_permissoes_atuais_valem_com_token_antigo(env):
     d = create(o, ana, responsibleId=bia.id)
     assert patch(o, bia, d["id"], 1, title="Novo título").status_code == 200
     o.set_perms(ana, oid, bia, READ_ONLY)                             # mesmo access token de bia
+    assert get(o, bia, d["id"]).status_code == 200
     assert patch(o, bia, d["id"], 2, title="Outro título").status_code == 403
+    restored = o.set_perms(ana, oid, bia, [*READ_ONLY, "deadline.edit"])
+    assert restored.status_code == 200
+    assert patch(o, bia, d["id"], 2, title="Título restaurado").status_code == 200
     o.set_perms(ana, oid, bia, ["deadline.create"])                   # sem read: deixa de ver
     assert get(o, bia, d["id"]).status_code == 404
     assert listing(o, bia).status_code == 403
