@@ -2,8 +2,9 @@
 
     python -m app.maintenance purge [--max-batches N] [--batch-size N]
 
-Valida tudo ANTES de apagar: produção recusada; STORAGE=postgres obrigatório (em `memory` o estado
-pertence a cada processo e o comando NÃO finge limpá-lo); só o destino de DATABASE_URL (sem
+Valida tudo ANTES de apagar: homologação/produção só com todos os requisitos de implantação;
+STORAGE=postgres obrigatório (em `memory` o estado pertence a cada processo e o comando NÃO finge
+limpá-lo); só o destino de DATABASE_URL (sem
 fallback); revisão do esquema exigida, verificada SOMENTE LEITURA (migrations nunca rodam aqui).
 Não importa a aplicação web (nenhum container, rota ou engine duplicado). O engine é fechado em
 qualquer saída. Saída em JSON, só com contagens CONFIRMADAS.
@@ -12,7 +13,7 @@ Códigos de saída:
   0  concluído: todas as categorias visitadas e esgotadas (exceto linhas bloqueadas, `skippedLocked`)
   6  PARCIAL: o limite de trabalho acabou antes (`limitReached`); restam pendências para outra execução
   1  interrompido por falha (lock_timeout, deadlock, statement_timeout, erro); lotes anteriores confirmados
-  2  configuração inválida (inclui ENVIRONMENT=production e DATABASE_URL ausente/inválida)
+  2  configuração inválida (inclui staging/production incompletos e DATABASE_URL ausente/inválida)
   3  STORAGE=memory: nada a fazer pelo comando (o estado em memória é de cada processo)
   4  esquema ausente ou em revisão diferente da exigida (nada foi apagado)
   5  banco indisponível ou erro ao verificar o esquema (nada foi apagado)
@@ -39,13 +40,13 @@ def purge(argv: list[str]) -> int:
 
     from pydantic import ValidationError
 
-    from app.core.config import ProductionNotReleasedError, Settings, ensure_not_production
+    from app.core.config import HostedConfigError, Settings, ensure_hosted_requirements
 
     try:
         settings = Settings()
-        ensure_not_production(settings)
-    except (ValidationError, ProductionNotReleasedError) as exc:
-        message = str(exc).splitlines()[0] if isinstance(exc, ProductionNotReleasedError) else "configuração inválida"
+        ensure_hosted_requirements(settings)
+    except (ValidationError, HostedConfigError) as exc:
+        message = str(exc).splitlines()[0] if isinstance(exc, HostedConfigError) else "configuração inválida"
         _emit({"status": "config_error", "message": message})
         return EXIT_CONFIG
     if settings.storage != "postgres":

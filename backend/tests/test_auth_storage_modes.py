@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import func, select, text
 
-from app.core.config import ProductionNotReleasedError, Settings
+from app.core.config import HostedConfigError, Settings
 from tests.auth_utils import forgot
 from tests.conftest import CapturingDelivery, FakeClock
 
@@ -40,6 +40,10 @@ def settings(**env):
 @pytest.mark.parametrize("env", [
     {"STORAGE": "postgres", "ENVIRONMENT": "test"},
     {"STORAGE": "postgres", "ENVIRONMENT": "development"},
+    # Homologação e produção: o modo é aceito pelas Settings; os demais requisitos são conferidos por
+    # ensure_hosted_requirements ao iniciar (tests/test_hosted_config.py).
+    {"STORAGE": "postgres", "ENVIRONMENT": "staging", "AUTH_JWT_SECRET": JWT},
+    {"STORAGE": "postgres", "ENVIRONMENT": "production", "AUTH_JWT_SECRET": JWT},
 ])
 def test_modo_postgres_autorizado(env):
     assert settings(**env).storage == "postgres"
@@ -48,8 +52,6 @@ def test_modo_postgres_autorizado(env):
 @pytest.mark.parametrize("env, reason", [
     ({"STORAGE": "auth-postgres", "ENVIRONMENT": "test"}, "removido na P4"),
     ({"STORAGE": "auth-postgres", "ENVIRONMENT": "development", "ALLOW_VOLATILE_DOMAIN": "true"}, "removido na P4"),
-    ({"STORAGE": "postgres", "ENVIRONMENT": "staging", "AUTH_JWT_SECRET": JWT}, "development ou test"),
-    ({"STORAGE": "postgres", "ENVIRONMENT": "production", "AUTH_JWT_SECRET": JWT}, "development ou test"),
     ({"STORAGE": "postgres", "ENVIRONMENT": "test", "AUTH_STORAGE": "memory"}, "AUTH_STORAGE"),
 ])
 def test_modos_recusados(env, reason):
@@ -60,9 +62,16 @@ def test_modos_recusados(env, reason):
 
 def test_erros_de_configuracao_nao_exibem_valores(monkeypatch):
     with pytest.raises(ValidationError) as exc:
-        settings(STORAGE="postgres", ENVIRONMENT="staging",
+        settings(STORAGE="postgres", ENVIRONMENT="test", AUTH_STORAGE="memory",
                  DATABASE_URL="postgresql+psycopg://u:SEGREDO-P3@localhost/db", AUTH_JWT_SECRET=JWT)
     assert "SEGREDO" not in str(exc.value) and "GREDO" not in str(exc.value) and "xxxx" not in str(exc.value)
+    from app.core.config import ensure_hosted_requirements
+
+    with pytest.raises(HostedConfigError) as hosted:
+        ensure_hosted_requirements(settings(STORAGE="postgres", ENVIRONMENT="staging",
+                                            DATABASE_URL="postgresql+psycopg://u:SEGREDO-P3@localhost/db",
+                                            AUTH_JWT_SECRET=JWT), env={})
+    assert "SEGREDO" not in str(hosted.value) and "xxxx" not in str(hosted.value)
 
 
 def test_postgres_sem_database_url_recusa_iniciar(make_app):
@@ -72,8 +81,8 @@ def test_postgres_sem_database_url_recusa_iniciar(make_app):
         make_app(STORAGE="postgres", ENVIRONMENT="test", AUTH_JWT_SECRET=JWT, DATABASE_URL="")
 
 
-def test_producao_continua_bloqueada(make_app):
-    with pytest.raises((ProductionNotReleasedError, ValidationError)):
+def test_producao_incompleta_continua_recusada(make_app):
+    with pytest.raises(HostedConfigError):
         make_app(ENVIRONMENT="production", STORAGE="postgres", AUTH_JWT_SECRET=JWT)
 
 

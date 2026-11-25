@@ -18,6 +18,17 @@ const NEXT_PORT = PORT + 1;
 // Segredo BFF↔backend gerado POR EXECUÇÃO, só no servidor (nunca NEXT_PUBLIC_*, nunca no navegador).
 // Herdado pelo backend do E2E (global-setup) e pelo Next (webServer); os workers herdam o mesmo valor.
 process.env.PRAZOAI_E2E_PROXY_SECRET ??= randomBytes(32).toString("hex");
+// Sessões do BFF COMPARTILHADAS (doc 27): com PRAZOAI_E2E_BFF_DATABASE_URL (PostgreSQL descartável), o
+// Next usa o armazenamento no PostgreSQL com chave gerada por execução; o global-setup recria o esquema.
+// Sem a variável, as sessões ficam em memória (ou o E2E FALHA com PRAZOAI_REQUIRE_BFF_PG_TESTS=1).
+process.env.PRAZOAI_E2E_BFF_SESSION_KEY ??= randomBytes(32).toString("base64url");
+const sharedSessions = process.env.PRAZOAI_E2E_BFF_DATABASE_URL
+  ? { PRAZOAI_BFF_SESSION_STORE: "postgres", PRAZOAI_BFF_DATABASE_URL: process.env.PRAZOAI_E2E_BFF_DATABASE_URL,
+      PRAZOAI_BFF_SESSION_KEY: process.env.PRAZOAI_E2E_BFF_SESSION_KEY }
+  : {};
+if (!process.env.PRAZOAI_E2E_BFF_DATABASE_URL && process.env.PRAZOAI_REQUIRE_BFF_PG_TESTS === "1") {
+  throw new Error("PRAZOAI_REQUIRE_BFF_PG_TESTS=1 exige PRAZOAI_E2E_BFF_DATABASE_URL");
+}
 const BACKEND_PORT = Number(process.env.PRAZOAI_E2E_BACKEND_PORT || 18900);
 // O BFF fala com o proxy de TESTE (porta do backend + 1), que repassa ao FastAPI real.
 export const E2E = {
@@ -39,6 +50,7 @@ const appEnv = {
   PRAZOAI_PROXY_SECRET: process.env.PRAZOAI_E2E_PROXY_SECRET,
   PRAZOAI_TRUSTED_CLIENT_IP_HEADER: "x-prazoai-e2e-client-ip",
   NEXT_TELEMETRY_DISABLED: "1",
+  ...sharedSessions,
 };
 
 export default defineConfig({

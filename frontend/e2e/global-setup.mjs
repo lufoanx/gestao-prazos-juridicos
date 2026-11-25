@@ -8,9 +8,19 @@ import { createServer, request as httpRequest } from "node:http";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { startEdgeProxy } from "./edge-proxy.mjs";
+import pg from "pg";
 import { mailpitFromEnv } from "../tests/helpers/mailpit.mjs";
+import { migrate } from "../src/server/bff/session-schema.mjs";
 
 export default async function globalSetup() {
+  // Sessões compartilhadas do BFF (doc 27): esquema prazoai_bff recriado num banco DESCARTÁVEL (*_test).
+  const bffDb = process.env.PRAZOAI_E2E_BFF_DATABASE_URL;
+  if (bffDb) {
+    if (!/(_test$|^prazoai_test)/.test(new URL(bffDb).pathname.slice(1))) throw new Error("banco das sessões do E2E deve ser descartável");
+    const c = new pg.Client({ connectionString: bffDb });
+    await c.connect();
+    try { await c.query("DROP SCHEMA IF EXISTS prazoai_bff CASCADE"); await migrate(c); } finally { await c.end(); }
+  }
   const port = Number(process.env.PRAZOAI_E2E_BACKEND_PORT || 18900);
   const proxyPort = port + 1;
   const python = process.env.PRAZOAI_TEST_PYTHON || "python3";

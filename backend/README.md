@@ -85,8 +85,8 @@ oficial é `/api/v1/health`.
 ## Autenticação (Etapa 2 — em memória)
 > ⚠️ **Não é produção.** Usuários, sessões e tokens ficam na memória do processo: são
 > **perdidos ao reiniciar** e **não funcionam com múltiplos workers** (rode com um só).
-> Com `ENVIRONMENT=production`, a aplicação **não inicia** em nenhuma configuração (desde a P1 da
-> persistência, mesmo com `AUTH_ENABLED=false`).
+> Em `ENVIRONMENT=staging|production` a memória é recusada: a aplicação só inicia com `STORAGE=postgres`
+> e os demais requisitos de implantação (doc 27).
 
 | Método e rota | Auth | Resposta |
 |---|---|---|
@@ -112,8 +112,7 @@ Detalhes, decisões e limitações: `docs/backend/06-etapa-2-autenticacao.md`; c
 `docs/backend/04-contratos-api-iniciais.md`.
 
 ## Escritórios e equipe (Etapa 3 — em memória)
-> ⚠️ Mesmas ressalvas da Etapa 2 (memória, um worker, bloqueado em production — inclusive
-> com `AUTH_ENABLED=false` se `OFFICES_ENABLED=true`). Desde a Etapa 4, remoção de membro e
+> ⚠️ Mesmas ressalvas da Etapa 2 (memória só em development/test, um worker). Desde a Etapa 4, remoção de membro e
 > saída reatribuem os prazos em aberto (`reassignTo`) numa única transação.
 
 - Criar escritório cria o vínculo administrativo do criador; no máximo um vínculo por pessoa.
@@ -175,7 +174,7 @@ saída e limites em `docs/backend/20-p5-manutencao-operacao.md`).
   limita e enfileira, 202 neutro; com `disabled`, `status` → `available=false` e pedido → 503) — §15–§17;
   capturador SMTP local (Mailpit `v1.31.6`, sem relay) no CI e integração real — §18–§19; rotas públicas
   do BFF — §20–§21; telas integradas e E2E — §22–§23.
-- **E6 (documental, aguardando auditoria):** doc 22. Produção continua bloqueada.
+- **E6 (documental, aguardando auditoria):** doc 22. Homologação/produção: doc 27.
 - Testes contra o capturador local:
   ```bash
   docker compose -f test-infra/mailpit/compose.yaml up -d          # ou o binário oficial da mesma versão
@@ -210,19 +209,22 @@ Sem `TEST_DATABASE_URL`, os testes com PostgreSQL são **pulados** localmente (o
 `PRAZOAI_REQUIRE_POSTGRES_TESTS=1` e os torna obrigatórios). As URLs precisam indicar o host
 explicitamente, e `PGHOSTADDR`, `PGSERVICE` e `PGSERVICEFILE` não podem estar definidas no ambiente.
 
-**Produção:** `create_app()` recusa `ENVIRONMENT=production` em qualquer configuração
-(`ProductionNotReleasedError`) até a entrega de prontidão.
+**Homologação e produção:** `create_app()` só inicia com `ENVIRONMENT=staging|production` se TODOS os
+requisitos de implantação estiverem presentes e seguros (`HostedConfigError` lista os ausentes, sem
+valores): PostgreSQL com TLS, segredos, origem pública HTTPS, IP confiável via BFF, SMTP autenticado e
+um único worker. Migrations nesses ambientes exigem `PRAZOAI_CONFIRM_MIGRATION_TARGET`. Guia completo:
+`docs/backend/27-implantacao-homologacao-producao.md`.
 
 ## Configuração (variáveis de ambiente)
 Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigatório; nunca versione o `.env`):
 - `SERVICE_NAME` (padrão `prazoai-backend`)
-- `ENVIRONMENT` (`development`/`test`/`staging` habilitam Swagger em `/docs`; `production` é recusado no startup até a entrega de prontidão)
+- `ENVIRONMENT` (`development`/`test` habilitam Swagger em `/docs`; `staging`/`production` desligam a documentação interativa e o OpenAPI e exigem os requisitos do doc 27)
 - `API_PREFIX` (padrão `/api`)
 - `API_VERSION_PREFIX` (padrão `/v1`; base canônica = `API_PREFIX`+`API_VERSION_PREFIX` → `/api/v1`)
 - `ENABLE_LEGACY_HEALTH_ALIAS` (padrão `true`; expõe `/api/health` como alias legado)
 - `CORS_ORIGINS` (lista separada por vírgula; padrão `http://localhost:3000`). Em produção, liste origens explícitas; `"*"` é **descartado** porque `allow_credentials=True`.
 - `LOG_LEVEL` (padrão `INFO`)
-- `AUTH_ENABLED` (padrão `true`) e `AUTH_STORAGE` (`memory`, único valor nesta etapa; bloqueado em `production`)
+- `AUTH_ENABLED` (padrão `true`) e `AUTH_STORAGE` (configuração antiga; use `STORAGE`)
 - `AUTH_JWT_SECRET` (mín. 32 bytes; obrigatório em `staging`/`production`; vazio em `development`/`test` gera segredo aleatório por instância). Gere com `python -c "import secrets; print(secrets.token_urlsafe(64))"`
 - `AUTH_JWT_ISSUER` / `AUTH_JWT_AUDIENCE` (padrões `prazoai-backend` / `prazoai-api`)
 - `AUTH_ACCESS_TOKEN_TTL_SECONDS` (900), `AUTH_REFRESH_TOKEN_TTL_SECONDS` (604800, vida absoluta da sessão), `AUTH_PASSWORD_RESET_TTL_SECONDS` (1800)
@@ -243,4 +245,5 @@ Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigató
 - `/calcular-prazo` desconsidera sábados, domingos e **feriados nacionais**
   (Issue #2). Não contempla recesso forense, feriados estaduais/municipais nem
   calendários de tribunais — ver `docs/backend/05-calculo-de-prazos.md`.
-- Swagger/OpenAPI em `/docs` e `/openapi.json` apenas fora de produção (produção está bloqueada no startup).
+- Swagger/OpenAPI em `/docs` e `/openapi.json` apenas em development/test (nunca em homologação ou produção).
+- Disponibilidade: `GET /api/v1/health` (processo de pé) e `GET /api/v1/health/ready` (banco e esquema; 503 sem detalhes).
