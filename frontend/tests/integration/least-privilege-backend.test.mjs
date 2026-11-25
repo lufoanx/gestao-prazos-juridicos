@@ -21,6 +21,7 @@ import { loadBffConfig } from "../../src/server/bff/config.mjs";
 import { createBff } from "../../src/server/bff/manager.mjs";
 import { createSessionStore } from "../../src/server/bff/instance.mjs";
 import { migrate } from "../../src/server/bff/session-schema.mjs";
+import { syntheticPdf } from "../helpers/pdf.mjs";
 
 const ADMIN = process.env.PRAZOAI_TEST_PG_ADMIN_URL || "";
 if (!ADMIN && process.env.PRAZOAI_REQUIRE_PRIVILEGE_TESTS === "1") {
@@ -30,6 +31,13 @@ if (ADMIN && !["127.0.0.1", "localhost", "[::1]", "postgres"].includes(new URL(A
   throw new Error("PRAZOAI_TEST_PG_ADMIN_URL deve apontar para um servidor descartável local");
 }
 const SKIP = ADMIN ? false : "PRAZOAI_TEST_PG_ADMIN_URL não definida";
+// Doc 28: PDF das intimações com os papéis de execução (Azurite local). Obrigatório com PRAZOAI_REQUIRE_FILES_TESTS=1.
+const AZ = process.env.PRAZOAI_TEST_AZURITE_CONNECTION_STRING || "";
+if (ADMIN && !AZ && process.env.PRAZOAI_REQUIRE_FILES_TESTS === "1") throw new Error("PRAZOAI_REQUIRE_FILES_TESTS=1 exige PRAZOAI_TEST_AZURITE_CONNECTION_STRING");
+if (AZ && !(AZ.includes("devstoreaccount1") && AZ.includes("127.0.0.1"))) throw new Error("somente Azurite local");
+const FILES_SKIP = SKIP || (AZ ? false : "PRAZOAI_TEST_AZURITE_CONNECTION_STRING não definida");
+const FILES_ENV = AZ ? { FILE_STORAGE: "azure_blob", AZURE_STORAGE_CONNECTION_STRING: AZ,
+  AZURE_STORAGE_CONTAINER: `priv${randomBytes(8).toString("hex")}` } : {};
 
 const BACKEND_DIR = fileURLToPath(new URL("../../../backend", import.meta.url));
 const SQL_FILE = fileURLToPath(new URL("../../../backend/deploy/privilegios-minimos.sql", import.meta.url));
@@ -94,10 +102,11 @@ before(async () => {
     .replaceAll("__BFF__", ROLES.bff).replaceAll("__DB__", DB);
   await as("owner", (c) => c.query(sql));
   // FastAPI com o papel da API
+  if (AZ) assert.equal((await run(["-m", "app.files", "create-container"], { STORAGE: "postgres", ...FILES_ENV })).code, 0, "container privado no Azurite");
   proc = spawn(PYTHON, ["-m", "uvicorn", "app.main:app", "--port", String(PORT), "--host", "127.0.0.1", "--no-proxy-headers"], {
     cwd: BACKEND_DIR,
     env: { ...process.env, ENVIRONMENT: "test", STORAGE: "postgres", DATABASE_URL: urlFor("api", { driver: "psycopg" }),
-      AUTH_JWT_SECRET: randomBytes(32).toString("hex"), TRUSTED_PROXY_SECRET: PROXY_SECRET, LOG_LEVEL: "WARNING" },
+      AUTH_JWT_SECRET: randomBytes(32).toString("hex"), TRUSTED_PROXY_SECRET: PROXY_SECRET, LOG_LEVEL: "WARNING", ...FILES_ENV },
     stdio: ["ignore", "ignore", "ignore"],
   });
   for (let i = 0; i < 150; i++) {
@@ -240,4 +249,51 @@ test("operações normais com os papéis de execução (BFF + FastAPI)", { skip:
   assert.equal((await bia.logout()).status, 204);
   assert.equal((await bia.session()).authenticated, false);
   assert.equal((await ana.session()).authenticated, true);
+});
+
+test("PDF com os papéis de execução: reserva, publicação, download, gatilho de remoção e limpeza", { skip: FILES_SKIP }, async () => {
+  const config = loadBffConfig({ PRAZOAI_APP_ENV: "test", PRAZOAI_APP_ORIGIN: ORIGIN, PRAZOAI_COOKIE_INSECURE_LOCAL: "true",
+    PRAZOAI_BACKEND_URL: BASE, PRAZOAI_PROXY_SECRET: PROXY_SECRET, PRAZOAI_TRUSTED_CLIENT_IP_HEADER: "x-test-client-ip",
+    PRAZOAI_BFF_SESSION_STORE: "postgres", PRAZOAI_BFF_DATABASE_URL: urlFor("bff"),
+    PRAZOAI_BFF_SESSION_KEY: randomBytes(32).toString("base64url") });
+  const store = await createSessionStore(config);
+  stores.push(store);
+  const bff = createBff({ config, store, logger: { info() {}, error() {} } });
+  assert.deepEqual((await (await fetch(`${BASE}/api/v1/health/ready`)).json()).checks,
+    { database: "ok", schema: "ok", files: "ok" });
+  const jar = new Map();
+  const h = (extra = {}) => {
+    const x = new Headers({ "x-prazoai-csrf": "1", origin: ORIGIN, "x-test-client-ip": "198.51.100.200", ...extra });
+    if (jar.size) x.set("cookie", [...jar].map(([n, v]) => `${n}=${v}`).join("; "));
+    return x;
+  };
+  const keep = (r) => { for (const c of r.headers.getSetCookie()) { const [nv] = c.split(";"); const i = nv.indexOf("="); jar.set(nv.slice(0, i), nv.slice(i + 1)); } return r; };
+  const email = `privpdf${randomBytes(4).toString("hex")}@exemplo.com`;
+  assert.equal((await bff.register(new Request(`${ORIGIN}/bff/auth/register`, { method: "POST", headers: h({ "content-type": "application/json" }),
+    body: JSON.stringify({ name: "Pdf", email, password: PASSWORD }) }))).status, 201);
+  keep(await bff.login(new Request(`${ORIGIN}/bff/auth/login`, { method: "POST", headers: h({ "content-type": "application/json" }),
+    body: JSON.stringify({ email, password: PASSWORD }) })));
+  const reg = await bff.proxy(new Request(`${ORIGIN}/bff/api/intimations`, { method: "POST", headers: h({ "content-type": "application/json" }),
+    body: JSON.stringify({ scope: "personal", fileName: "intimacao.pdf", sizeBytes: 1024, contentType: "application/pdf", receivedAt: "2026-11-20" }) }), "/intimations");
+  const id = (await reg.json()).id;
+  const pdf = syntheticPdf({ payload: "% papeis" });
+  const up = await bff.intimationFileUpload(new Request(`${ORIGIN}/bff/files/intimations/${id}`, { method: "PUT",
+    headers: h({ "content-type": "application/pdf", "x-prazoai-file-name": "a.pdf" }), body: pdf, duplex: "half" }), id);
+  assert.equal(up.status, 200, await up.clone().text());
+  const down = await bff.intimationFileDownload(new Request(`${ORIGIN}/bff/files/intimations/${id}`, { headers: h() }), id);
+  assert.ok(Buffer.from(await down.arrayBuffer()).equals(pdf));
+  // reserva consumida pela publicação (papel da API: INSERT/DELETE em file_cleanup)
+  assert.equal((await as("api", (c) => c.query("SELECT count(*)::int AS n FROM prazoai.file_cleanup"))).rows[0].n, 0);
+  // remoção da intimação pelo papel da API (ex.: expurgo): o gatilho enfileira o blob com os privilégios dela
+  await as("api", (c) => c.query("DELETE FROM prazoai.intimations WHERE id = $1", [id]));
+  const queued = await as("api", (c) => c.query("SELECT reason FROM prazoai.file_cleanup"));
+  assert.deepEqual(queued.rows.map((r) => r.reason), ["intimation_deleted"]);
+  // limpeza com o papel da API apaga o blob e a entrada
+  const clean = await run(["-m", "app.files", "cleanup"], { STORAGE: "postgres", DATABASE_URL: urlFor("api", { driver: "psycopg" }), ...FILES_ENV });
+  assert.equal(clean.code, 0, tail(clean.out));
+  assert.match(clean.out, /removidos: 1/);
+  assert.equal((await as("owner", (c) => c.query("SELECT count(*)::int AS n FROM prazoai.file_cleanup"))).rows[0].n, 0);
+  // o BFF não lê nem altera a fila de arquivos
+  await denied("bff", "SELECT 1 FROM prazoai.file_cleanup");
+  await denied("bff", "DELETE FROM prazoai.file_cleanup");
 });

@@ -144,3 +144,35 @@ malware" e "Processando".
   `intimation_file_missing`, `intimation_file_store_failed`, `file_cleanup_storage_unavailable`.
 - Verificação antimalware (ex.: Microsoft Defender for Storage) é decisão de produto e custo: **não
   existe** nesta entrega.
+
+## 10. Rollback (a versão anterior exige o esquema 0003)
+
+**Voltar só a imagem NÃO funciona** depois de aplicar a 0004: o código anterior confere a revisão do
+esquema no startup e recusa iniciar com `0004` (`SchemaNotReadyError`). Estratégias, em ordem de preferência:
+
+1. **Correção para frente** (padrão): corrigir e publicar nova versão sobre a 0004. Nenhum dado muda.
+2. **Antes de existir qualquer PDF armazenado** (ex.: problema detectado logo após aplicar a 0004):
+   `PRAZOAI_CONFIRM_MIGRATION_TARGET=<host>:<porta>/<banco> alembic downgrade 0003` com o papel dono e,
+   em seguida, a imagem anterior. O downgrade é **recusado** se houver intimação com PDF.
+3. **Rollback de emergência com PDFs já armazenados** (testado em banco descartável,
+   `backend/tests/test_db_0004_files.py`):
+   1. aplicação parada ou em manutenção; **backup** do banco (`pg_dump`) e soft delete ativo nos blobs;
+   2. `psql "<url do dono>" -v ON_ERROR_STOP=1 --single-transaction -f backend/deploy/rollback-0004-preparar.sql`
+      — copia o vínculo dos PDFs e a fila de limpeza para o esquema `prazoai_rollback` e desliga os campos
+      de arquivo (nenhum blob é apagado; nenhum dado de negócio é removido);
+   3. `alembic downgrade 0003` (com a confirmação do destino) e implantação da imagem anterior. Durante
+      esse período os PDFs ficam **inacessíveis** pela aplicação (a versão anterior não os conhece);
+   4. para voltar: imagem nova parada, `alembic upgrade head` e
+      `psql ... --single-transaction -f backend/deploy/rollback-0004-restaurar.sql` — religa os PDFs, envia
+      para a limpeza os blobs de intimações apagadas no intervalo (ex.: expurgo de descartadas pela versão
+      anterior, que não tem gatilho) e restaura reservas pendentes. Se algum arquivo ficar sem destino, a
+      restauração falha **inteira** e nada muda;
+   5. subir a imagem nova e conferir `/api/v1/health/ready` e um download.
+
+Não use `alembic stamp` para "enganar" a verificação de revisão: o código anterior regravaria intimações
+com arquivo como `not_stored` mantendo a chave, o que viola as restrições da 0004.
+
+Testes deste procedimento (PostgreSQL descartável): 0003 → 0004 preservando os dados e criando o gatilho;
+downgrade recusado com PDF (revisão continua 0004); preparar → 0003 → expurgo na versão anterior →
+0004 → restaurar (vínculo e SHA-256 de volta, blob da apagada e reserva pendente na fila, esquema de
+rollback removido); preparar não roda duas vezes; restauração com arquivo sem destino falha sem aplicar nada.

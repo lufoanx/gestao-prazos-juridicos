@@ -410,8 +410,10 @@ Todos precisam ser verdadeiros, com evidência registrada (data, SHA implantado,
 ## 16. Rollback e compatibilidade das migrations
 
 - **Esquema do domínio**: revisão exigida pelo código = `0004` (doc 28; o app recusa iniciar com outra).
-  O downgrade 0004 → 0003 é **recusado** enquanto houver intimação com PDF armazenado (removeria o
-  vínculo com os blobs); voltar o código para antes da 0004 exige, portanto, decisão explícita sobre os PDFs.
+  **Voltar só a imagem anterior não basta** depois da 0004: ela exige o esquema 0003 e recusa iniciar.
+  O downgrade 0004 → 0003 é **recusado** enquanto houver intimação com PDF armazenado; para esse caso
+  há um rollback de emergência testado (preparar → downgrade → imagem anterior; e, para voltar,
+  upgrade → restaurar): **doc 28, §10**, scripts em `backend/deploy/rollback-0004-*.sql`.
   Registro histórico da entrega anterior:
   Esta entrega **não** cria migration nova do domínio; voltar para o SHA anterior (`1d6d7fc`) não exige
   downgrade — mas o código anterior **recusa** `ENVIRONMENT=staging|production` com PostgreSQL (é o

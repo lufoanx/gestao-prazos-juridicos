@@ -451,3 +451,50 @@ def test_cli_check_e_create_container(azurite, tmp_path):
     store._container.set_container_access_policy(signed_identifiers={}, public_access="container")
     out = run("check")
     assert out.returncode == 4 and "público" in out.stderr
+
+
+def test_limpeza_nao_apaga_upload_em_andamento_nem_arquivo_vinculado(files_app, azurite):
+    from app.core.clock import SystemClock
+    from app.files.cleanup import run_file_cleanup
+
+    container, store = azurite
+    holder = {}
+
+    def cleanup_now():                               # limpeza concorrente, com a reserva AINDA vigente
+        holder["removed_during"] = run_file_cleanup(holder["engine"], store, SystemClock().now())
+        holder["rows_during"] = _cleanup_rows(holder["o"])
+
+    o = OrgClient(files_app(file_store=FailingPut(AzureBlobStore(AZ, container, 10), before_return=cleanup_now)))
+    holder.update(o=o, engine=o.app.state.auth.engine)
+    ana = o.person("ana")
+    i = personal(o, ana)
+    data = synthetic_pdf(b"% em andamento")
+    assert put_pdf(o, ana, i["id"], data).status_code == 200
+    assert holder["removed_during"] == 0 and [r.reason for r in holder["rows_during"]] == ["upload_pending"]
+    assert _cleanup_rows(o) == []                                    # reserva consumida na publicação
+    # arquivo vinculado: nenhuma entrada de limpeza, nem com o relógio muito adiante
+    far = SystemClock().now() + timedelta(days=3650)
+    assert run_file_cleanup(holder["engine"], store, far) == 0
+    assert len(blobs(store)) == 1 and get_pdf(o, ana, i["id"]).content == data
+
+
+def test_reserva_consumida_pela_limpeza_durante_o_upload_impede_a_publicacao(files_app, azurite):
+    from app.core.clock import SystemClock
+    from app.files.cleanup import run_file_cleanup
+
+    container, store = azurite
+    holder = {}
+
+    def expired_cleanup():                           # a reserva venceu (upload lento demais) e a limpeza rodou
+        holder["removed"] = run_file_cleanup(holder["engine"], store, SystemClock().now() + timedelta(hours=2))
+
+    o = OrgClient(files_app(file_store=FailingPut(AzureBlobStore(AZ, container, 10), before_return=expired_cleanup)))
+    holder["engine"] = o.app.state.auth.engine
+    ana = o.person("ana")
+    i = personal(o, ana)
+    r = put_pdf(o, ana, i["id"], synthetic_pdf())
+    assert holder["removed"] == 1
+    assert (r.status_code, r.json()["error"]["code"]) == (503, "file_storage_unavailable")
+    after = o.http.get(f"{API}/intimations/{i['id']}", headers=ana.headers).json()
+    assert after["file"]["storage"] == "not_stored"                  # nunca aponta para blob removível
+    assert blobs(store) == [] and _cleanup_rows(o) == []
