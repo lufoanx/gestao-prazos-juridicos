@@ -1,4 +1,4 @@
-"""Backend PrazoAI (FastAPI) — sem banco de dados.
+"""Backend PrazoAI (FastAPI).
 
 Decisão oficial do projeto: o backend é Python/FastAPI, preservando a tecnologia existente.
 Ver docs/backend/02-arquitetura-proposta.md.
@@ -8,8 +8,8 @@ prefixo global /api + versão /v1, validação de ambiente, tratamento global de
 básicos e OpenAPI em dev. Endpoints legados (/ e /calcular-prazo) preservados.
 GET /api/health é mantido como ALIAS LEGADO, restrito ao módulo de saúde.
 
-Etapa 2: autenticação e usuários com armazenamento EM MEMÓRIA por instância (sem banco),
-bloqueado em production. Ver docs/backend/06-etapa-2-autenticacao.md.
+Etapa 2: autenticação e usuários (memória ou PostgreSQL). Homologação/produção exigem PostgreSQL e os
+demais requisitos de implantação (docs/backend/27-implantacao-homologacao-producao.md).
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from pydantic import AfterValidator
 from app.api.health import router as health_router
 from app.api.router import build_api_v1_router
 from app.core.clock import Clock
-from app.core.config import ensure_not_production, get_settings
+from app.core.config import ensure_hosted_requirements, get_settings
 from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging, get_logger
 from app.security.passwords import PasswordHasher
@@ -112,15 +112,16 @@ def create_app(
     registro de cancelamento do RecoveryDispatcher.
     """
     settings = get_settings()
-    # Bloqueio INCONDICIONAL de produção, antes de configurar log, compor módulos ou criar recursos.
-    ensure_not_production(settings)
+    # Homologação/produção: TODOS os requisitos de implantação conferidos antes de configurar log,
+    # compor módulos ou criar recursos (substitui o antigo bloqueio incondicional de produção).
+    ensure_hosted_requirements(settings)
     configure_logging(settings.log_level)
     logger = get_logger("prazoai")
 
-    # Swagger/OpenAPI apenas fora de produção.
-    docs_url = None if settings.is_production else "/docs"
-    redoc_url = None if settings.is_production else "/redoc"
-    openapi_url = None if settings.is_production else "/openapi.json"
+    # Swagger/OpenAPI apenas em development/test (nunca em homologação ou produção).
+    docs_url = None if settings.is_hosted else "/docs"
+    redoc_url = None if settings.is_hosted else "/redoc"
+    openapi_url = None if settings.is_hosted else "/openapi.json"
 
     @asynccontextmanager
     async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
@@ -142,7 +143,7 @@ def create_app(
         lifespan=lifespan,
         title="PrazoAI Backend",
         version="0.1.0",
-        description="Fundação do backend do PrazoAI (sem banco de dados).",
+        description="Backend do PrazoAI.",
         docs_url=docs_url,
         redoc_url=redoc_url,
         openapi_url=openapi_url,

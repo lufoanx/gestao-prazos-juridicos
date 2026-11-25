@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.config import ProductionNotReleasedError
+from app.core.config import HostedConfigError
 from tests.auth_utils import API, PASSWORD, bearer, error_code, forgot, login, register, register_and_login
 
 
@@ -163,24 +163,24 @@ def test_isolamento_mesmo_com_o_mesmo_segredo(make_app, clock):
 
 # ---------- Produção e configuração ----------
 def test_armazenamento_em_memoria_bloqueado_em_production(make_app):
-    # P1 da persistência: production é recusada ANTES de compor a autenticação (bloqueio incondicional;
-    # antes: InMemoryAuthBlockedError, que continua existindo como defesa adicional).
-    with pytest.raises(ProductionNotReleasedError):
+    # Entrega de implantação (doc 27): o bloqueio incondicional virou validação explícita. Memória continua
+    # recusada em production ANTES de compor a autenticação (InMemoryAuthBlockedError segue como defesa).
+    with pytest.raises(HostedConfigError, match="STORAGE deve ser postgres"):
         make_app(ENVIRONMENT="production", AUTH_JWT_SECRET="s" * 48)
 
 
 def test_production_sem_auth_tambem_e_recusada(make_app):
-    # Antes da P1, production com AUTH_ENABLED=false servia /health. O projeto aprovado (doc 15, §5.6)
-    # exige recusa incondicional até a entrega de prontidão: o comportamento foi alterado de propósito.
-    with pytest.raises(ProductionNotReleasedError):
+    with pytest.raises(HostedConfigError, match="AUTH_ENABLED deve ser true"):
         make_app(ENVIRONMENT="production", AUTH_ENABLED="false")
 
 
-def test_staging_exige_segredo_explicito(make_app):
-    with pytest.raises(ValueError):
+def test_staging_exige_configuracao_hospedada_completa(make_app):
+    # Homologação tem as MESMAS exigências de produção (doc 27): antes, staging aceitava memória com
+    # apenas AUTH_JWT_SECRET. Mudança intencional: contas de homologação também precisam persistir.
+    with pytest.raises(HostedConfigError, match="AUTH_JWT_SECRET"):
         make_app(ENVIRONMENT="staging")
-    client = TestClient(make_app(ENVIRONMENT="staging", AUTH_JWT_SECRET="q" * 48), raise_server_exceptions=False)
-    assert register(client).status_code == 201
+    with pytest.raises(HostedConfigError, match="STORAGE deve ser postgres"):
+        make_app(ENVIRONMENT="staging", AUTH_JWT_SECRET="q" * 48)
 
 
 @pytest.mark.parametrize("value", ["curto", "change-me-" + "x" * 40, "troque-este-valor-" + "x" * 40])

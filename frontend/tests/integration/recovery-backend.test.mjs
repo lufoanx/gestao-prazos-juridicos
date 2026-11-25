@@ -142,7 +142,7 @@ test("real (desabilitada): status false, forgot 503 sem efeito, reset com token 
   assert.equal(r.status, 400);
   assert.equal((await r.json()).error.code, "invalid_reset_token");
   noStoreNoCookie(r);
-  assert.ok(env.store.get(a.sid), "sessão BFF continua viva");
+  assert.ok(await env.store.get(a.sid), "sessão BFF continua viva");
   assert.deepEqual(env.paths.filter((p) => /refresh|logout|\/auth\/me/.test(p)), []);
 });
 
@@ -176,7 +176,7 @@ enabledTest("real: token recebido redefine (204, sem login); sessão BFF intocad
   assert.equal(r.status, 204);
   assert.equal(await r.text(), "");
   noStoreNoCookie(r);                                                      // nenhum cookie criado ou apagado
-  assert.ok(env.store.get(a.sid), "rota pública não apagou a sessão BFF");
+  assert.ok(await env.store.get(a.sid), "rota pública não apagou a sessão BFF");
   assert.deepEqual(env.paths.slice(publicStart), ["POST /api/v1/auth/reset-password"]);   // sem refresh/me/logout
   const again = await env.bff.passwordReset(resetReq(token, "Outra-senha-789", { ip: a.ip }));
   assert.equal(again.status, 400);
@@ -253,5 +253,5 @@ enabledTest("real: timeout após o envio — 504 resultado desconhecido, UM enca
   assert.deepEqual(forwarded, ["/api/v1/auth/reset-password"]);
   const login = await plain.bff.login(req("POST", "/bff/auth/login", { body: { email: a.email, password: NEW_PASSWORD }, ip: nextIp() }));
   assert.equal(login.status, 200);                                         // a redefinição TINHA ocorrido
-  assert.ok(plain.store.get(a.sid), "sessão BFF de origem não foi tocada pelas rotas públicas");
+  assert.ok(await plain.store.get(a.sid), "sessão BFF de origem não foi tocada pelas rotas públicas");
 });

@@ -36,10 +36,10 @@ class OrgContainer:
 
 
 def ensure_offices_allowed(settings: Settings) -> None:
-    """Bloqueio em production, avaliado mesmo com a autenticação desligada."""
-    if settings.offices_active and settings.is_production:
+    """Defesa adicional em ambiente hospedado, avaliada mesmo com a autenticação desligada."""
+    if settings.offices_active and settings.is_hosted and settings.storage == "memory":
         raise InMemoryOrgBlockedError(
-            "Escritórios: ENVIRONMENT=production continua bloqueado (defina OFFICES_ENABLED=false)."
+            f"Escritórios em memória são bloqueados em ENVIRONMENT={settings.environment} (use STORAGE=postgres)."
         )
     if settings.offices_active and not settings.auth_enabled:
         raise ValueError("OFFICES_ENABLED=true exige AUTH_ENABLED=true.")

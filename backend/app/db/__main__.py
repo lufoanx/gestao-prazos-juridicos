@@ -1,8 +1,8 @@
 """Verificação explícita de conectividade: `python -m app.db check`.
 
 Lê DATABASE_URL, conecta, mostra o destino (sem credenciais), a versão do servidor, os timeouts
-efetivos e a revisão do Alembic, e encerra o engine. Não cria nem altera nada. A aplicação web não
-executa isto nem se conecta ao banco nesta entrega.
+efetivos e a revisão do Alembic, e encerra o engine. Não cria nem altera nada (permitido também em
+homologação/produção, por ser somente leitura).
 """
 from __future__ import annotations
 
@@ -17,9 +17,6 @@ from app.db.engine import engine_scope
 
 
 def check(settings: Settings) -> int:
-    if settings.is_production:
-        print("Persistência ainda não liberada em ENVIRONMENT=production (P1).", file=sys.stderr)
-        return 2
     try:
         cfg = database_config_from(settings)
     except DatabaseConfigError as exc:

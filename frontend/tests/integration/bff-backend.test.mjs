@@ -71,7 +71,7 @@ test("real: cadastro, login, sessão, perfil e logout com revogação no backend
   assert.equal((await s.json()).user.email, a.email);
   const p = await env.bff.proxy(req("PATCH", "/bff/api/users/me", { cookie: a.cookie, ip: a.ip, body: { name: "Nome Novo" } }), "/users/me");
   assert.equal((await p.json()).name, "Nome Novo");
-  const access = [...[env.store]][0] && env.store.get(a.cookie.split("=")[1]).accessToken;
+  const access = (await env.store.get(a.cookie.split("=")[1])).accessToken;
   assert.equal((await env.bff.logout(req("POST", "/bff/auth/logout", { cookie: a.cookie, ip: a.ip }))).status, 204);
   const direct = await fetch(`${BASE}/api/v1/auth/me`, { headers: { authorization: `Bearer ${access}` } });
   assert.equal(direct.status, 401);                                  // revogado no backend
@@ -99,7 +99,7 @@ test("real: reutilização do refresh antigo revoga a família e o BFF encerra a
   const env = setup();
   const a = await account(env);
   const sid = a.cookie.split("=")[1];
-  const oldRefresh = env.store.get(sid).refreshToken;
+  const oldRefresh = (await env.store.get(sid)).refreshToken;
   env.clock.advance(890_000);
   assert.equal((await env.bff.proxy(req("GET", "/bff/api/users/me", { cookie: a.cookie, ip: a.ip }), "/users/me")).status, 200);
   const replay = await fetch(`${BASE}/api/v1/auth/refresh`, { method: "POST", headers: { "content-type": "application/json" },
@@ -107,7 +107,7 @@ test("real: reutilização do refresh antigo revoga a família e o BFF encerra a
   assert.equal(replay.status, 401);
   const r = await env.bff.proxy(req("GET", "/bff/api/users/me", { cookie: a.cookie, ip: a.ip }), "/users/me");
   assert.equal(r.status, 401);
-  assert.equal(env.store.get(sid), null);
+  assert.equal(await env.store.get(sid), null);
 });
 
 test("real: logout concorrendo com renovação não recria a sessão", async () => {
@@ -196,7 +196,7 @@ test("real (auditoria): corpo do refresh 200 interrompido → sessão invalidada
   } });
   const a = await account(env);
   const sid = a.cookie.split("=")[1];
-  const oldRefresh = env.store.get(sid).refreshToken;
+  const oldRefresh = (await env.store.get(sid)).refreshToken;
   env.clock.advance(890_000);
   const r1 = await env.bff.session(req("GET", "/bff/session", { cookie: a.cookie, ip: a.ip }));
   assert.equal(r1.status, 401);
@@ -312,7 +312,7 @@ test("real: backend fora do ar → 503 sem logout nem dados demonstrativos", asy
   const r = await env.bff.proxy(req("GET", "/bff/api/users/me", { cookie: a.cookie, ip: a.ip }), "/users/me");
   assert.equal(r.status, 503);
   assert.equal((await r.json()).error.code, "backend_unavailable");
-  assert.ok(env.store.get(a.cookie.split("=")[1]));                  // sessão preservada
+  assert.ok(await env.store.get(a.cookie.split("=")[1]));                  // sessão preservada
   const s = await env.bff.session(req("GET", "/bff/session", { cookie: a.cookie, ip: a.ip }));
   assert.equal(s.status, 503);
 });

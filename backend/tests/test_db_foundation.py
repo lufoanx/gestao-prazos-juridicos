@@ -391,12 +391,31 @@ def test_aplicacao_nao_importa_as_tabelas():
     assert out.stdout.strip().endswith("False False")
 
 
-def test_alembic_e_check_bloqueados_em_production(monkeypatch):
-    env = {"ENVIRONMENT": "production", "DATABASE_URL": URL, "PATH": "/usr/bin:/bin", "AUTH_JWT_SECRET": "x" * 48}
-    out = subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=BACKEND, env=env,
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_alembic_hospedado_exige_tls_e_confirmacao_do_destino(environment):
+    # Doc 27: migrations em homologação/produção deixam de ser bloqueadas, mas exigem TLS e a confirmação
+    # explícita do destino. Porta 1 (inalcançável): nenhum servidor real é contatado por este teste.
+    unreachable = f"postgresql+psycopg://prazoai:{SECRET}@127.0.0.1:1/prazoai_test"
+    base = {"ENVIRONMENT": environment, "PATH": "/usr/bin:/bin", "AUTH_JWT_SECRET": "x" * 48}
+
+    def alembic(**extra):
+        return subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=BACKEND,
+                              env={**base, **extra}, capture_output=True, text=True, timeout=60)
+
+    out = alembic(DATABASE_URL=unreachable)
+    assert out.returncode != 0 and "sslmode" in out.stderr
+    out = alembic(DATABASE_URL=unreachable + "?sslmode=require")
+    assert out.returncode != 0 and "PRAZOAI_CONFIRM_MIGRATION_TARGET=127.0.0.1:1/prazoai_test" in out.stderr
+    out = alembic(DATABASE_URL=unreachable + "?sslmode=require", PRAZOAI_CONFIRM_MIGRATION_TARGET="outro:5432/banco")
+    assert out.returncode != 0 and "PRAZOAI_CONFIRM_MIGRATION_TARGET" in out.stderr
+    out = alembic(DATABASE_URL=unreachable + "?sslmode=require",
+                  PRAZOAI_CONFIRM_MIGRATION_TARGET="127.0.0.1:1/prazoai_test")
+    assert out.returncode != 0 and "confirme o destino" not in out.stderr   # passou da confirmação; falha ao conectar
+    for o in (out.stdout, out.stderr):
+        assert SECRET not in o
+    # `check` é somente leitura: permitido também em ambiente hospedado.
+    out = subprocess.run([sys.executable, "-m", "app.db", "check"], cwd=BACKEND,
+                         env={**base, "DATABASE_URL": unreachable + "?sslmode=require"},
                          capture_output=True, text=True, timeout=60)
-    assert out.returncode != 0 and "bloqueadas em ENVIRONMENT=production" in out.stderr
-    out = subprocess.run([sys.executable, "-m", "app.db", "check"], cwd=BACKEND, env=env,
-                         capture_output=True, text=True, timeout=60)
-    assert out.returncode == 2 and "não liberada" in out.stderr
+    assert out.returncode == 1 and "127.0.0.1:1/prazoai_test" in out.stderr
     assert SECRET not in out.stdout + out.stderr
