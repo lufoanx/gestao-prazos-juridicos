@@ -6,7 +6,7 @@
 > pelo responsável do projeto. Os critérios objetivos para liberar contas reais estão na §15.
 
 Base: `main` em `1d6d7fc` (igual a `origin/main` no início do trabalho). Branch: `feature/implantacao-homologacao`.
-O SHA final desta entrega é o do commit que adiciona este arquivo (§17).
+O SHA final desta entrega é o último commit da branch (§17).
 
 ---
 
@@ -54,8 +54,8 @@ O SHA final desta entrega é o do commit que adiciona este arquivo (§17).
 - Login cujo armazenamento falhe depois do backend emitir tokens **revoga** o par emitido.
 
 **CI** — PostgreSQL no job do frontend (contrato + várias instâncias), sessões no PostgreSQL na
-integração e no E2E, PostgreSQL com TLS para os testes de ambiente hospedado. **Não executado no
-GitHub nesta etapa** (nenhum push): ver §16.
+integração e no E2E, PostgreSQL com TLS para os testes de ambiente hospedado, papéis com privilégios
+mínimos e o job `docker` (build e execução das imagens, sem publicar). Resultados no PR #35.
 
 ## 3. Arquitetura e topologia proposta
 
@@ -82,7 +82,7 @@ Navegador ──HTTPS──► Borda/plataforma (TLS, sobrescreve o cabeçalho d
   projeto/URL para o modo integrado.
 - **BFF**: escalável horizontalmente (sessões compartilhadas). Precisa de runtime Node de longa
   duração ou funções Node (não Edge) com acesso ao PostgreSQL; o pool é pequeno (`PRAZOAI_BFF_DATABASE_POOL_MAX`).
-- **Backend**: **uma** instância com **um** worker (§9). Preferencialmente sem rota pública (rede
+- **Backend**: **uma** réplica com **um** worker (§9.1). Preferencialmente sem rota pública (rede
   privada da plataforma); se exposto, só HTTPS e sem CORS para o navegador (o navegador fala só com o BFF).
 - **Banco**: um servidor PostgreSQL 16 gerenciado com TLS; um banco por ambiente (homologação ≠ produção).
 
@@ -170,19 +170,17 @@ Opcionais: `PRAZOAI_BFF_DATABASE_POOL_MAX`, `PRAZOAI_BFF_MAX_SESSIONS`, `PRAZOAI
    npm run bff:sessions -- check                                      # "versão do esquema prazoai_bff: 1"
    ```
 4. Privilégios mínimos (o BFF **não** acessa o domínio; o backend **não** acessa as sessões do BFF):
-   ```sql
-   GRANT USAGE ON SCHEMA prazoai TO prazoai_api;
-   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA prazoai TO prazoai_api;
-   GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA prazoai TO prazoai_api;
-   GRANT USAGE ON SCHEMA prazoai_bff TO prazoai_bff_app;
-   GRANT SELECT, INSERT, UPDATE, DELETE ON prazoai_bff.sessions TO prazoai_bff_app;
-   GRANT SELECT ON prazoai_bff.schema_version TO prazoai_bff_app;
-   REVOKE ALL ON SCHEMA prazoai FROM prazoai_bff_app;
-   REVOKE ALL ON SCHEMA prazoai_bff FROM prazoai_api;
-   ```
-   Repita os `GRANT` de tabelas depois de migrations que criem tabelas novas.
-   **Não verificado localmente:** os testes desta entrega usaram um único papel; confira na homologação
-   que backend e BFF funcionam com estes privilégios (item H3 da §14).
+   execute **`backend/deploy/privilegios-minimos.sql`** com o papel dono, depois de trocar os marcadores
+   `__OWNER__`, `__API__`, `__BFF__` e `__DB__` pelos nomes reais (ex.: `sed` numa cópia local; o
+   arquivo não contém segredos). Ele também define `ALTER DEFAULT PRIVILEGES`, então tabelas novas do
+   esquema `prazoai` criadas por migrations do dono já recebem os privilégios da API. Reexecute-o
+   depois de qualquer migration do esquema `prazoai_bff`.
+   **Testado** com esse mesmo arquivo em `frontend/tests/integration/least-privilege-backend.test.mjs`
+   (§13.1): a API não lê `prazoai_bff`; o BFF não lê `prazoai.*`; nenhum papel de execução cria, altera
+   ou apaga tabelas/esquemas; `alembic downgrade` com o papel da API é recusado sem alterar a revisão;
+   `app.db check` e a manutenção funcionam com o papel da API; cadastro, login, perfil, escritório,
+   convite, prazos, comentário, calendário, intimação, notificações, renovação e logout funcionam com
+   os papéis de execução.
 5. Opcional: banco **separado** para as sessões do BFF (mesmo servidor ou outro). O código só exige
    que `PRAZOAI_BFF_DATABASE_URL` aponte para um banco com o esquema `prazoai_bff`.
 
@@ -244,9 +242,31 @@ repetição automática (doc 22, §12.5).
   backend**. Com a topologia proposta (uma instância, um worker, IP real via BFF) eles são globais e
   por cliente. Limitações aceitas e documentadas: (1) reinício do backend zera os contadores;
   (2) escalar o backend horizontalmente exigiria contadores compartilhados — por isso o startup recusa
-  `WEB_CONCURRENCY≠1`, e a plataforma deve ser configurada com **uma** instância; (3) a fila de
+  `WEB_CONCURRENCY≠1`, e a plataforma deve ser configurada com **uma** réplica (§9.1 — `WEB_CONCURRENCY` não limita réplicas); (3) a fila de
   recuperação também é por processo: pedidos enfileirados se perdem num reinício (o usuário pede de
   novo). O BFF pode ter várias instâncias: ele não aplica limites próprios.
+
+### 9.1 Como limitar o backend a UMA réplica na plataforma
+
+`WEB_CONCURRENCY=1` (e `--workers 1` no Dockerfile) limita os **workers dentro de um contêiner**; o
+startup recusa outros valores. **Isso não impede a plataforma de executar várias réplicas do
+contêiner** — cada réplica teria seus próprios limitadores e sua própria fila de e-mail, e os limites
+por IP ficariam multiplicados pelo número de réplicas. O código não detecta réplicas paralelas; o
+limite precisa ser configurado na plataforma:
+1. **Número de instâncias fixo em 1** no serviço do backend (nome varia: *instances*, *replicas*,
+   *min/max instances*, *scale count*). Mínimo = máximo = 1.
+2. **Autoescala desligada** para o backend (ou máximo = 1). Não use “escalar para zero” se a
+   plataforma recriar várias instâncias ao acordar.
+3. **Estratégia de implantação**: se houver opção *recreate*/*stop-then-start*, use-a; com *rolling*
+   ou *blue-green*, durante a troca a versão antiga e a nova coexistem por alguns segundos. Isso é
+   aceitável (limites momentaneamente divididos; pedidos de recuperação na fila da versão antiga podem
+   se perder — o usuário pede de novo), mas a sobreposição deve terminar quando o health check da nova
+   versão passa.
+4. **Sem réplicas regionais** do backend (multi-região) nem segundo serviço apontando para o mesmo banco.
+5. **Verificação** (item H6b da §14): no painel da plataforma, exatamente 1 instância em execução fora
+   das implantações; nos logs, um único `app_ready` por implantação e um único `dispatcher_started`;
+   11 cadastros seguidos do mesmo IP → o 11º recebe 429 (com 2 réplicas, passaria).
+O BFF não tem essa restrição: pode ter várias réplicas e autoescala.
 
 ## 10. Health checks e disponibilidade
 
@@ -314,6 +334,7 @@ Nenhum banco compartilhado foi usado; todos os dados são fictícios.
 | `npm run test:integration` (backend `STORAGE=postgres`) | **49 aprovados, 0 pulados**; dados persistidos conferidos |
 | `npm run test:e2e` (Chromium; FastAPI em PostgreSQL; Mailpit; sessões do BFF no PostgreSQL) | **70 aprovados, 0 pulados** |
 | CLI `bff:sessions` (check → migrate sem confirmação → migrate → check; banco fora do ar) | 4 → 2 → 0 → 0; 5 |
+| Papéis separados com privilégios mínimos (`least-privilege-backend.test.mjs`, PostgreSQL descartável) | **3/3**; banco e papéis temporários removidos ao final |
 
 Mutações para conferir que os testes novos detectam falhas reais: lease sempre concedido → 3 testes
 falham; publicação de login ignorando o bilhete → 1 falha; encerramento sem bloqueio consultivo → o
@@ -345,10 +366,11 @@ encerramento pós-restauração executado; `app.db check` = 0003.
 |---|---|---|
 | H1 | Startup recusado com configuração incompleta | remova uma variável obrigatória num deploy de teste; o serviço não sobe e o log lista o requisito |
 | H2 | Migrations e esquema | §6.2–6.3; `/api/v1/health/ready` e `/bff/health` = 200 |
-| H3 | Papéis com privilégio mínimo | §6.4; BFF e backend funcionam; o papel do BFF **não** lê `prazoai.users` |
+| H3 | Papéis com privilégio mínimo | §6.4 (arquivo `backend/deploy/privilegios-minimos.sql`); BFF e backend funcionam; o papel do BFF **não** lê `prazoai.users`; o da API não lê `prazoai_bff.sessions` |
 | H4 | HTTPS e cookies | DevTools: cookie `__Host-…; Secure; HttpOnly; SameSite=Strict`; HTTP redireciona para HTTPS |
 | H5 | IP real do cliente | dois aparelhos/redes: limites de cadastro independentes; enviar o cabeçalho de IP forjado pelo navegador **não** muda o IP (11º cadastro do mesmo IP → 429) |
 | H6 | Várias instâncias do BFF | escalar para 2; login, navegação e logout alternando instâncias; reiniciar uma instância sem perder a sessão |
+| H6b | Backend com uma réplica | §9.1: painel com 1 instância, autoescala desligada; um `app_ready` por implantação; 11º cadastro do mesmo IP → 429 |
 | H7 | E-mail real | recuperação para caixas da equipe: entrega, SPF/DKIM/DMARC “pass” nos cabeçalhos, link na origem pública, expiração (30 min) e uso único |
 | H8 | Fluxos do produto | cadastro, login, pessoal × escritório, convite, permissões de leitura/edição, prazos, calendário, intimações — roteiro dos docs 11, 12, 14 e 26 |
 | H9 | Isolamento | duas contas fictícias: nenhuma vê dados da outra; membro sem permissão não edita |
@@ -366,7 +388,7 @@ Todos precisam ser verdadeiros, com evidência registrada (data, SHA implantado,
 4. Domínio de e-mail com SPF, DKIM e DMARC válidos; entrega confirmada em produção para caixa da equipe.
 5. Backup automático ativo e **uma restauração testada** (§12.2) com data registrada.
 6. Alertas mínimos (§11) ativos e testados.
-7. Backend configurado com exatamente 1 instância/worker; BFF com sessões no PostgreSQL.
+7. Backend configurado na plataforma com exatamente 1 réplica, autoescala desligada (§9.1) e 1 worker; BFF com sessões no PostgreSQL.
 8. Termos de uso e política de privacidade publicados (LGPD) — **fora do escopo técnico desta entrega**.
 9. Plano de rollback (§16) ensaiado na homologação.
 
@@ -393,7 +415,8 @@ Todos precisam ser verdadeiros, com evidência registrada (data, SHA implantado,
 |---|---|
 | `main` local e `origin/main` no início | `1d6d7fc4e7eef5d9c7801c17f2c9c3fd65a1a611` |
 | PR #34 (README, aberto, não tocado) | `64eda61d22e27c15c25a7031d34351e0ef094e02` |
-| Commit desta entrega (local, **não publicado**) | o commit que adiciona este arquivo: `git log -1 --format=%H -- docs/backend/27-implantacao-homologacao-producao.md` |
+| Commit inicial desta entrega | `5c49a63de1a63ec01e079bd7f5a3726f1abfc8f4` |
+| SHA final desta entrega | o último commit da branch `feature/implantacao-homologacao` (PR #35, rascunho): `git rev-parse origin/feature/implantacao-homologacao` |
 
 Conferência: no VS Code (linha do tempo do arquivo ou `git log -1`), no GitHub depois do push
 autorizado (o SHA da branch deve ser idêntico ao local) e no deploy (registre o SHA implantado nas
@@ -401,11 +424,10 @@ variáveis/etiquetas da plataforma e compare com este).
 
 ## 18. Limitações conhecidas desta entrega
 
-- Imagens Docker **não foram construídas** localmente (Docker indisponível no WSL); os comandos de
-  execução do `CMD` foram exercitados diretamente.
-- O CI alterado **não rodou no GitHub** (nenhum push). O passo de PostgreSQL com TLS usa `docker run`
-  no runner e precisa ser confirmado na primeira execução.
-- Privilégios mínimos (§6.4) não foram exercitados com papéis separados.
+- Imagens Docker não foram construídas localmente (Docker indisponível no WSL); o job `docker` do CI
+  as constrói e exercita sem publicar (resultado no PR #35).
+- O código não detecta réplicas paralelas do backend; a réplica única depende da configuração da
+  plataforma (§9.1).
 - Entrega por provedor real, SPF/DKIM/DMARC, IP real atrás da borda e backups gerenciados só podem ser
   validados no ambiente hospedado (§14).
 - Limitadores e fila de recuperação seguem por processo (§9), aceitável só com uma instância do backend.

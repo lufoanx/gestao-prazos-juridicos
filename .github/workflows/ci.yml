@@ -190,6 +190,40 @@ jobs:
       - run: mypy --no-incremental app
       - run: python -m compileall app migrations
 
+  # Doc 27: as imagens são CONSTRUÍDAS e exercitadas localmente no runner; nada é publicado (sem login
+  # em registro, sem push). Backend: sobe em development, recusa production incompleta, usuário não-root.
+  # Frontend: build demo (padrão) e integrado; a demo serve páginas sem BFF.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build da imagem do backend
+        run: docker build -t prazoai-backend:ci backend
+      - name: Imagem do backend — execução, recusa de produção incompleta e usuário
+        run: |
+          test "$(docker run --rm prazoai-backend:ci id -u)" != "0"
+          docker run -d --name api -p 127.0.0.1:18000:8000 -e ENVIRONMENT=development prazoai-backend:ci
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:18000/api/v1/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:18000/api/v1/health/ready
+          docker rm -f api
+          set +e
+          docker run --rm -e ENVIRONMENT=production prazoai-backend:ci > prod.log 2>&1; code=$?
+          set -e
+          test "$code" != "0"
+          grep -q "HostedConfigError" prod.log
+      - name: Build da imagem do frontend (demo, padrão)
+        run: docker build -t prazoai-frontend:demo frontend
+      - name: Imagem do frontend (demo) — páginas servidas e BFF desligado
+        run: |
+          test "$(docker run --rm prazoai-frontend:demo id -u)" != "0"
+          docker run -d --name web -p 127.0.0.1:13000:3000 prazoai-frontend:demo
+          for i in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:13000/ && break; sleep 1; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:13000/login)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:13000/bff/health)" = "404"
+          docker rm -f web
+      - name: Build da imagem do frontend (integrado)
+        run: docker build --build-arg NEXT_PUBLIC_PRAZOAI_MODE=integrated -t prazoai-frontend:integrated frontend
+
   # Etapa 6.1: integração REAL BFF ↔ FastAPI e E2E no navegador (Next em modo integrado).
   integration:
     runs-on: ubuntu-24.04
@@ -281,6 +315,9 @@ jobs:
           PRAZOAI_TEST_PYTHON: python
           PRAZOAI_TEST_BFF_DATABASE_URL: postgresql://prazoai:prazoai-ci-only@postgres:5432/prazoai_bff_test
           PRAZOAI_REQUIRE_BFF_PG_TESTS: "1"
+          # Doc 27, §6: papéis separados com privilégios mínimos (banco e papéis temporários criados e removidos).
+          PRAZOAI_TEST_PG_ADMIN_URL: postgresql://prazoai:prazoai-ci-only@postgres:5432/postgres
+          PRAZOAI_REQUIRE_PRIVILEGE_TESTS: "1"
           PRAZOAI_TEST_MAILPIT_SMTP: 127.0.0.1:1025
           PRAZOAI_TEST_MAILPIT_API: http://127.0.0.1:8025
           PRAZOAI_REQUIRE_MAILPIT_TESTS: "1"
@@ -315,6 +352,9 @@ jobs:
           PRAZOAI_TEST_PYTHON: python
           PRAZOAI_TEST_BFF_DATABASE_URL: postgresql://prazoai:prazoai-ci-only@postgres:5432/prazoai_bff_test
           PRAZOAI_REQUIRE_BFF_PG_TESTS: "1"
+          # Doc 27, §6: papéis separados com privilégios mínimos (banco e papéis temporários criados e removidos).
+          PRAZOAI_TEST_PG_ADMIN_URL: postgresql://prazoai:prazoai-ci-only@postgres:5432/postgres
+          PRAZOAI_REQUIRE_PRIVILEGE_TESTS: "1"
           STORAGE: postgres
           DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/prazoai_integ
           PRAZOAI_TEST_MAILPIT_SMTP: 127.0.0.1:1025
