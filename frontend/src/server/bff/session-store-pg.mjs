@@ -7,7 +7,10 @@
 //   bloqueio consultivo transacional, para que um logout e um login concorrentes em instâncias
 //   diferentes tenham uma ordem total (o logout concluído nunca é revertido por um login anterior);
 // - a renovação usa um lease condicionado à geração: só uma instância chama /auth/refresh por
-//   geração; as demais aguardam a troca de geração (manager.mjs);
+//   geração; as demais aguardam a troca de geração (manager.mjs). O VENCIMENTO do lease não o libera
+//   (não prova que o backend deixou de processar): tentativa vencida = resultado desconhecido → a sessão
+//   é encerrada (`abandonRefresh`) e a publicação tardia do antigo dono é recusada (`updateTokens`
+//   exige ser o dono com lease válido);
 // - em repouso: só o SHA-256 do id de sessão e do id do navegador; tokens cifrados (AES-256-GCM,
 //   session-crypto.mjs). Erros do driver nunca chegam a respostas ou logs com dados.
 // O relógio (ms) é o do processo Node, injetável: as instâncias precisam de NTP (desvio de poucos
@@ -191,11 +194,14 @@ export function createPgSessionStore({ pool, limits, cipher, now = () => Date.no
       const t = now();
       const [idleCut, ageCut] = cuts(t);
       const r = await pool.query(
-        `SELECT generation, refresh_lease_until FROM ${T} WHERE id_hash = $1 AND ${LIVE(2)}`,
+        `SELECT generation, refresh_owner, refresh_lease_until FROM ${T} WHERE id_hash = $1 AND ${LIVE(2)}`,
         [hashId(id), idleCut, ageCut],
       );
       const row = r.rows[0];
-      return row ? { generation: row.generation, refreshing: Number(row.refresh_lease_until) > t } : null;
+      if (!row) return null;
+      const open = row.refresh_owner !== null;
+      const until = Number(row.refresh_lease_until);
+      return { generation: row.generation, refreshing: open && until > t, abandoned: open && until <= t };
     }),
 
     liveInfo: guarded(async (id, name) => {
@@ -217,14 +223,18 @@ export function createPgSessionStore({ pool, limits, cipher, now = () => Date.no
       return r.rowCount === 1;
     }),
 
-    updateTokens: guarded(async (id, generation, { accessToken, refreshToken, accessExpiresAt }) => {
+    // Autoridade para publicar: com `owner`, ser o dono do lease AINDA VÁLIDO; sem `owner`, não haver
+    // tentativa em aberto. Uma instância que perdeu o lease não atualiza nem recria a sessão.
+    updateTokens: guarded(async (id, generation, { accessToken, refreshToken, accessExpiresAt }, owner = null) => {
       const h = hashId(id);
       const r = await pool.query(
         `UPDATE ${T} SET access_token_enc = $3, refresh_token_enc = $4, access_expires_at = $5,
                 generation = generation + 1, refresh_owner = NULL, refresh_lease_until = 0
-          WHERE id_hash = $1 AND generation = $2`,
+          WHERE id_hash = $1 AND generation = $2
+            AND (($6::text IS NULL AND refresh_owner IS NULL)
+                 OR (refresh_owner = $6::text AND refresh_lease_until > $7))`,
         [h, generation, cipher.encrypt("access", h, accessToken), cipher.encrypt("refresh", h, refreshToken),
-          Math.floor(accessExpiresAt)],
+          Math.floor(accessExpiresAt), owner, now()],
       );
       return r.rowCount === 1;
     }),
@@ -281,12 +291,26 @@ export function createPgSessionStore({ pool, limits, cipher, now = () => Date.no
       const [idleCut, ageCut] = cuts(t);
       const r = await pool.query(
         `UPDATE ${T} SET refresh_owner = $3, refresh_lease_until = $4
-          WHERE id_hash = $1 AND generation = $2 AND refresh_lease_until <= $5 AND ${LIVE(6)}`,
-        [hashId(id), generation, owner, t + leaseMs, t, idleCut, ageCut],
+          WHERE id_hash = $1 AND generation = $2 AND refresh_owner IS NULL AND ${LIVE(5)}`,
+        [hashId(id), generation, owner, t + leaseMs, idleCut, ageCut],
       );
       return r.rowCount === 1;
     }),
 
+    // Tentativa abandonada (lease vencido sem conclusão): encerra a sessão numa instrução atômica.
+    abandonRefresh: guarded(async (id, generation) => {
+      const h = hashId(id);
+      const r = await pool.query(
+        `DELETE FROM ${T}
+          WHERE id_hash = $1 AND generation = $2 AND refresh_owner IS NOT NULL AND refresh_lease_until <= $3
+          RETURNING access_token_enc`,
+        [h, generation, now()],
+      );
+      if (!r.rows[0]) return null;
+      return { accessToken: decryptToken("access", h, r.rows[0].access_token_enc) ?? "" };
+    }),
+
+    // Só para falha comprovadamente anterior ao envio (ou resposta que prova que nada mudou).
     releaseRefresh: guarded(async (id, owner) => {
       await pool.query(
         `UPDATE ${T} SET refresh_owner = NULL, refresh_lease_until = 0 WHERE id_hash = $1 AND refresh_owner = $2`,
@@ -294,7 +318,17 @@ export function createPgSessionStore({ pool, limits, cipher, now = () => Date.no
       );
     }),
 
-    ping: guarded(async () => { await pool.query("SELECT 1"); return true; }),
+    // Disponibilidade: confere a versão do esquema a CADA chamada (somente leitura; nunca cria nem migra).
+    // Divergência invalida o cache de `ready()`, para que as operações seguintes também a percebam.
+    ping: guarded(async () => {
+      try {
+        await ensureSchemaReady(pool);
+      } catch (e) {
+        readyPromise = null;
+        throw e;
+      }
+      return true;
+    }),
 
     async close() { await pool.end(); },
   };

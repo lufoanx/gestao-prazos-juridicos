@@ -17,7 +17,11 @@
 //   o bilhete ainda for o pendente dela: outro login com o mesmo cookie o substitui (cancela) e o
 //   logout encerra a sessão (cancela). Não há registro de logouts.
 // - Renovação entre instâncias: um "arrendamento" (lease) condicionado à geração da sessão garante
-//   um único refresh por geração; aqui é trivial (um processo), mas segue o mesmo contrato.
+//   um único refresh por geração. O lease só volta a ficar livre quando o dono o LIBERA (falha
+//   comprovadamente anterior ao envio ou resposta que prova que nada mudou) ou PUBLICA o par novo
+//   dentro do prazo. Lease vencido com tentativa em aberto = resultado desconhecido (o backend pode ter
+//   girado o par): ninguém reenvia o refresh; a sessão é encerrada (`abandonRefresh`) e a publicação
+//   tardia do antigo dono é recusada. Aqui é trivial (um processo), mas segue o mesmo contrato.
 // Limitações: perde tudo ao reiniciar; não funciona com várias instâncias nem serverless.
 import { randomBytes } from "node:crypto";
 
@@ -124,10 +128,16 @@ export function createMemorySessionStore(limits, now = () => Date.now()) {
       return s;
     },
 
-    /** Geração e renovação em andamento, sem tocar na inatividade (para quem espera outra renovação). */
+    /**
+     * Geração e estado da renovação, sem tocar na inatividade (para quem espera outra renovação).
+     * `abandoned`: há tentativa em aberto cujo lease venceu — resultado desconhecido.
+     */
     async peek(id) {
       const s = live(id);
-      return s ? { generation: s.generation, refreshing: s.refreshLeaseUntil > now() } : null;
+      if (!s) return null;
+      const open = s.refreshOwner !== null;
+      return { generation: s.generation, refreshing: open && s.refreshLeaseUntil > now(),
+        abandoned: open && s.refreshLeaseUntil <= now() };
     },
 
     /** Data de criação da sessão `id` se ela está viva E pertence ao cookie `name` (sem tocar na inatividade). */
@@ -138,10 +148,15 @@ export function createMemorySessionStore(limits, now = () => Date.now()) {
 
     async isLive(id, name) { return Boolean(live(id, name)); },
 
-    /** Troca os tokens SÓ se a sessão ainda existe e está na mesma geração (sem recriar); libera o lease. */
-    async updateTokens(id, generation, { accessToken, refreshToken, accessExpiresAt }) {
+    /**
+     * Troca os tokens SÓ se a sessão ainda existe, está na mesma geração e quem publica tem autoridade:
+     * com `owner`, ser o dono do lease AINDA VÁLIDO; sem `owner`, não haver tentativa em aberto.
+     * Nunca recria a sessão. Libera o lease.
+     */
+    async updateTokens(id, generation, { accessToken, refreshToken, accessExpiresAt }, owner = null) {
       const s = sessions.get(id);
       if (!s || s.ended || s.generation !== generation) return false;
+      if (owner === null ? s.refreshOwner !== null : (s.refreshOwner !== owner || s.refreshLeaseUntil <= now())) return false;
       s.accessToken = accessToken;
       s.refreshToken = refreshToken;
       s.accessExpiresAt = accessExpiresAt;
@@ -196,15 +211,29 @@ export function createMemorySessionStore(limits, now = () => Date.now()) {
       return { status: "ok", id, previousTokens };
     },
 
-    /** Lease de renovação: concedido só se a sessão está viva, na geração esperada e sem lease ativo. */
+    /**
+     * Lease de renovação: concedido só se a sessão está viva, na geração esperada e SEM tentativa em
+     * aberto (vencida ou não). O vencimento não libera o lease: só `releaseRefresh` ou a publicação.
+     */
     async acquireRefresh(id, generation, owner, leaseMs) {
       const s = live(id);
-      if (!s || s.generation !== generation || s.refreshLeaseUntil > now()) return false;
+      if (!s || s.generation !== generation || s.refreshOwner !== null) return false;
       s.refreshOwner = owner;
       s.refreshLeaseUntil = now() + leaseMs;
       return true;
     },
 
+    /**
+     * Tentativa abandonada (lease vencido, dono não concluiu): encerra a sessão — o refresh guardado pode
+     * já ter sido consumido pelo backend. Devolve o access token (revogação na melhor tentativa) ou null.
+     */
+    async abandonRefresh(id, generation) {
+      const s = sessions.get(id);
+      if (!s || s.ended || s.generation !== generation || s.refreshOwner === null || s.refreshLeaseUntil > now()) return null;
+      return remove(id);
+    },
+
+    /** Só para falha comprovadamente anterior ao envio (ou resposta que prova que nada mudou). */
     async releaseRefresh(id, owner) {
       const s = sessions.get(id);
       if (s && s.refreshOwner === owner) { s.refreshOwner = null; s.refreshLeaseUntil = 0; }

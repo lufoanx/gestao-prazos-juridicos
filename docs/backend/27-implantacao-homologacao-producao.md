@@ -199,7 +199,9 @@ esquema do domínio (papel próprio, §6.4) e os tokens ficam **cifrados em repo
 | Inatividade e idade máxima | predicado em toda leitura (`last_seen_at`, `created_at`); varredura periódica | contrato `[postgres] expiração…` |
 | Revogação e logout | `endSessions` atômico (cookies observados + todo o navegador) e revogação no backend | `[postgres] instâncias distintas…`; integração real |
 | Rotação de tokens | troca condicional por geração (`UPDATE … WHERE generation = $g`) | contrato `[postgres] troca condicional…` |
-| Renovação concorrente | **lease por geração** (`UPDATE … WHERE refresh_lease_until <= now`); outras instâncias aguardam a troca de geração; lease vence se a instância cair | `[postgres] renovação concorrente…` (1 refresh), integração real sem detecção de reutilização |
+| Renovação concorrente | **lease por geração** (`UPDATE … WHERE generation = $g AND refresh_owner IS NULL`); outras instâncias aguardam a troca de geração | `[postgres] renovação concorrente…` (1 refresh), integração real sem detecção de reutilização |
+| Renovação com resultado incerto | o lease **só é liberado** quando a falha é comprovadamente anterior ao envio (conexão recusada) ou o backend respondeu sem girar o par (5xx/429). **Lease vencido com tentativa em aberto não libera nada**: o backend pode ter consumido o refresh (instância caiu, travou ou falhou ao persistir). A próxima instância que acessar a sessão a **encerra** (`abandonRefresh`, atômico), tenta revogar o access token antigo e responde 401 `session_refresh_uncertain` (novo login) — **o refresh antigo nunca é reenviado** | integração real: backend consome o refresh, A trava antes de persistir, B não chama `/auth/refresh` e exige novo login; `[postgres] instância que caiu…`; `[postgres] falha comprovadamente anterior ao envio…` |
+| Publicação tardia | `updateTokens` exige ser o **dono do lease ainda válido** (`refresh_owner = dono AND refresh_lease_until > agora`) e nunca recria a linha. Quem perdeu a autoridade descarta o par, encerra a sessão e revoga o par recém-emitido no backend | integração real: A conclui no backend depois de perder o lease → 401 e o access token novo é recusado pelo backend; `[postgres] publicação tardia…` |
 | Corridas login × logout | `publishLogin` e `endSessions` na mesma transação com `pg_advisory_xact_lock` | teste de estresse (40 iterações); **sem o bloqueio ele falha** em 3/3 execuções (mutação) |
 | Isolamento entre usuários | id de 256 bits; linha por sessão; cifra amarrada à linha | `[postgres] isolamento…`; integração real |
 | Tokens só no servidor | inalterado; banco só com cifras e hashes | `[postgres] em repouso…`; E2E `shared-sessions.spec.ts` |
@@ -274,7 +276,7 @@ O BFF não tem essa restrição: pode ter várias réplicas e autoescala.
 |---|---|---|
 | Backend liveness | `GET /api/v1/health` | processo de pé (`storage`, `durable`) |
 | Backend readiness | `GET /api/v1/health/ready` | banco e esquema (`0003`); 503 sem detalhes. **Use GET** (HEAD → 405) |
-| BFF | `GET /bff/health` | configuração carregada + armazenamento de sessões acessível (conexão e versão `prazoai_bff`) |
+| BFF | `GET /bff/health` | configuração carregada + armazenamento de sessões acessível; **a versão do esquema `prazoai_bff` é consultada a cada chamada** (somente leitura; nunca cria nem migra). Esquema ausente ou em outra versão → 503 sem detalhes; volta a 200 quando o esquema correto for restaurado por migração explícita |
 | Demo | `GET /` | página estática |
 
 Configure a plataforma para só rotear tráfego após `ready`/`/bff/health` = 200.
@@ -328,15 +330,18 @@ Nenhum banco compartilhado foi usado; todos os dados são fictícios.
 | `pytest` (backend, PostgreSQL + Mailpit + PostgreSQL TLS obrigatórios) | **1080 aprovados, 1 pulado** (`test_storage_effective`: só roda no passo seguinte) — linha de base era 1023/1 |
 | `PRAZOAI_TEST_STORAGE=postgres pytest <suítes HTTP do CI>` | **470 aprovados, 24 pulados** (todos marcados “específico do armazenamento em memória”) |
 | `ruff check app tests migrations` · `mypy --no-incremental app` · `compileall` | sem erros |
-| `npm test` (com `PRAZOAI_TEST_BFF_DATABASE_URL`, obrigatório) | **327 aprovados, 0 pulados** (linha de base 303) |
+| `npm test` (com `PRAZOAI_TEST_BFF_DATABASE_URL`, obrigatório) | **330 aprovados, 0 pulados** (linha de base 303) |
 | `npm run typecheck` · `npm run lint` · `npm run build` (demo) | sem erros; demo servida (`/`, `/login`, `/app/dashboard` 200; `/bff/*` 404) |
-| `npm run test:integration` (backend `STORAGE=memory`) | **49 aprovados, 0 pulados** |
-| `npm run test:integration` (backend `STORAGE=postgres`) | **49 aprovados, 0 pulados**; dados persistidos conferidos |
+| `npm run test:integration` (backend `STORAGE=memory`; inclui sessões compartilhadas e privilégios mínimos) | **54 aprovados, 0 pulados** |
+| `npm run test:integration` (backend `STORAGE=postgres`) | **54 aprovados, 0 pulados** (banco recém-criado); dados persistidos conferidos |
 | `npm run test:e2e` (Chromium; FastAPI em PostgreSQL; Mailpit; sessões do BFF no PostgreSQL) | **70 aprovados, 0 pulados** |
 | CLI `bff:sessions` (check → migrate sem confirmação → migrate → check; banco fora do ar) | 4 → 2 → 0 → 0; 5 |
 | Papéis separados com privilégios mínimos (`least-privilege-backend.test.mjs`, PostgreSQL descartável) | **3/3**; banco e papéis temporários removidos ao final |
 
-Mutações para conferir que os testes novos detectam falhas reais: lease sempre concedido → 3 testes
+Revisão do PR #35: os testes de renovação incerta (backend real consumindo o refresh) e de health com
+esquema alterado **falhavam** no código anterior e passam com a correção. Mutações que reintroduzem
+cada defeito (lease vencido adquirível, publicação sem autoridade, health só com `SELECT 1`) são
+detectadas. Mutações anteriores para conferir que os testes novos detectam falhas reais: lease sempre concedido → 3 testes
 falham; publicação de login ignorando o bilhete → 1 falha; encerramento sem bloqueio consultivo → o
 teste de estresse falha em 3/3 execuções.
 
@@ -423,6 +428,13 @@ autorizado (o SHA da branch deve ser idêntico ao local) e no deploy (registre o
 variáveis/etiquetas da plataforma e compare com este).
 
 ## 18. Limitações conhecidas desta entrega
+
+- Renovação: se uma instância cair (ou não conseguir gravar) depois de enviar o refresh, a sessão
+  afetada é encerrada e o usuário entra de novo — não há como recuperar o par emitido. Quando a
+  instância caiu, o par novo fica sem dono no backend até expirar (a revogação do access token antigo
+  é melhor tentativa: ele pode já ter vencido). Uma queda entre obter o lease e enviar a requisição
+  também é tratada como incerta (encerramento conservador). A decisão usa o relógio das instâncias
+  (NTP): o lease tem `PRAZOAI_BFF_TIMEOUT_MS + 5 s`.
 
 - Imagens Docker não foram construídas localmente (Docker indisponível no WSL); o job `docker` do CI
   as constrói e exercita sem publicar (resultado no PR #35).

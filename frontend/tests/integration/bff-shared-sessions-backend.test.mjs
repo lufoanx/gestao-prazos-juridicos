@@ -146,6 +146,77 @@ test("real: renovação concorrente em duas instâncias faz UM refresh e o backe
   assert.equal(r.status, 200);
 });
 
+/** Gate na resposta REAL do backend: a chamada chega e é processada; a instância "trava" antes de persistir. */
+function holdAfterBackend(path) {
+  let consumed; let resume;
+  const consumedP = new Promise((r) => { consumed = r; });
+  const resumeP = new Promise((r) => { resume = r; });
+  const wrap = (f) => async (url, init) => {
+    const r = await f(url, init);
+    if (new URL(url).pathname.endsWith(path)) { consumed(); await resumeP; }
+    return r;
+  };
+  return { wrap, consumed: consumedP, resume };
+}
+const LEASE_MS = 10_000 + 5_000;                                          // PRAZOAI_BFF_TIMEOUT_MS padrão + margem
+
+test("real: backend consome o refresh, A falha antes de persistir; B NÃO reenvia o token antigo; A tardia não ressuscita", { skip: SKIP }, async () => {
+  const gate = holdAfterBackend("/auth/refresh");
+  const A = await instance({ wrapFetch: gate.wrap });
+  const B = await instance();
+  const a = await account(A);
+  const sid = sidOf(a.cookie);
+  clock.advance(16 * 60 * 1000);                                          // access vencido para o BFF
+  const pa = A.bff.proxy(req("GET", "/bff/api/users/me", { cookie: a.cookie }), "/users/me");
+  await gate.consumed;                                                    // (a) o backend JÁ girou o par
+  clock.advance(LEASE_MS + 1000);                                         // lease de A vence
+  const rb = await B.bff.proxy(req("GET", "/bff/api/users/me", { cookie: a.cookie }), "/users/me");   // (b)
+  assert.equal(rb.status, 401);                                           // (c) exige novo login
+  assert.equal((await rb.json()).error.code, "session_refresh_uncertain");
+  assert.equal(B.calls.filter((p) => p === "/auth/refresh").length, 0, "token antigo NÃO reenviado");
+  assert.equal(await B.store.get(sid), null);
+  gate.resume();                                                          // (d) resposta tardia de A
+  const ra = await pa;
+  assert.equal(ra.status, 401);
+  assert.equal(await A.store.get(sid), null, "resposta tardia não ressuscita a sessão");
+  const again = await B.bff.session(req("GET", "/bff/session", { cookie: a.cookie }));
+  assert.equal((await again.json()).authenticated, false);
+  // nova sessão com novo login funciona normalmente
+  const relogin = await B.bff.login(req("POST", "/bff/auth/login", { body: { email: a.email, password: PASSWORD }, ip: a.ip }));
+  assert.equal(relogin.status, 200);
+});
+
+test("real: A conclui no backend depois de perder o lease (sem outra instância): resultado descartado e par revogado", { skip: SKIP }, async () => {
+  let release;
+  const go = new Promise((r) => { release = r; });
+  let reached;
+  const reachedP = new Promise((r) => { reached = r; });
+  let newAccess = null;
+  const A = await instance({ wrapFetch: (f) => async (url, init) => {
+    if (new URL(url).pathname.endsWith("/auth/refresh")) {
+      reached(); await go;
+      const r = await f(url, init);
+      newAccess = (await r.clone().json()).accessToken;
+      return r;
+    }
+    return f(url, init);
+  } });
+  const a = await account(A);
+  const sid = sidOf(a.cookie);
+  clock.advance(16 * 60 * 1000);
+  const pa = A.bff.proxy(req("GET", "/bff/api/users/me", { cookie: a.cookie }), "/users/me");
+  await reachedP;
+  clock.advance(LEASE_MS + 1000);
+  release();
+  const ra = await pa;
+  assert.equal(ra.status, 401);
+  assert.equal((await ra.json()).error.code, "session_refresh_uncertain");
+  assert.equal(await A.store.get(sid), null);
+  assert.ok(newAccess, "o backend emitiu um par novo");
+  const direct = await fetch(`${BASE}/api/v1/auth/me`, { headers: { authorization: `Bearer ${newAccess}` } });
+  assert.equal(direct.status, 401, "par emitido tardiamente revogado no backend");
+});
+
 test("real: contas isoladas entre instâncias (cada cookie vê só a própria conta)", { skip: SKIP }, async () => {
   const A = await instance();
   const B = await instance();

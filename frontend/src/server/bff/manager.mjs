@@ -151,8 +151,14 @@ export function createBff({
    * Renova o par de tokens da sessão se o access token estiver perto de expirar.
    * - Dentro do processo: chamadas concorrentes da mesma sessão aguardam a MESMA promessa.
    * - Entre instâncias: só quem obtém o lease da geração atual chama /auth/refresh; as demais
-   *   aguardam a troca de geração (ou o fim do lease) e releem a sessão. O refresh token de uma
-   *   geração nunca é enviado duas vezes por este BFF.
+   *   aguardam a troca de geração e releem a sessão. O refresh token de uma geração nunca é enviado
+   *   duas vezes por este BFF:
+   *   - o lease só é LIBERADO quando a falha é comprovadamente anterior ao envio (conexão recusada) ou
+   *     quando o backend respondeu sem girar o par (5xx/429);
+   *   - lease VENCIDO com tentativa em aberto (instância caiu, travou ou falhou ao persistir) NÃO prova
+   *     que o backend deixou de processar: a sessão é encerrada (novo login), sem reenviar o refresh;
+   *   - o dono só publica o par novo com o lease ainda válido; publicação tardia é recusada, e o par
+   *     recém-emitido é revogado no backend.
    */
   async function ensureFresh(sessionId) {
     const s = await store.get(sessionId);
@@ -182,9 +188,19 @@ export function createBff({
       const p = await store.peek(sessionId);
       if (!p) return { state: "invalid", code: "session_expired" };
       if (p.generation !== generation) { log("refresh_joined"); return { state: "ok" }; }
+      if (p.abandoned) {
+        // Resultado desconhecido: o refresh guardado pode já ter sido consumido. Encerra, sem reenviar.
+        const snap = await store.abandonRefresh(sessionId, generation);
+        if (snap) {
+          log("refresh_abandoned");
+          await revoke(snap.accessToken ? [snap.accessToken] : [], "refresh_abandoned_revoked");  // melhor tentativa
+          return { state: "invalid", code: "session_refresh_uncertain" };
+        }
+        continue;                                                // outra instância já decidiu: relê
+      }
       if (Date.now() > deadline) return { state: "unavailable" };
       if (p.refreshing) await sleep(refreshPollMs);
-      // Lease liberado (backend indisponível do outro lado) ou vencido (instância caiu): tenta obter.
+      // Lease liberado (falha comprovadamente anterior ao envio, ou backend sem rotação): tenta obter.
     }
   }
 
@@ -204,15 +220,24 @@ export function createBff({
       return { state: "invalid", code: "session_refresh_uncertain" };
     }
     if (r.status === 200) {
-      const ok = await store.updateTokens(sessionId, generation, {
-        accessToken: r.json.accessToken,
-        refreshToken: r.json.refreshToken,
-        accessExpiresAt: now() + r.json.expiresIn * 1000,
-      });
+      let ok;
+      try {
+        ok = await store.updateTokens(sessionId, generation, {
+          accessToken: r.json.accessToken,
+          refreshToken: r.json.refreshToken,
+          accessExpiresAt: now() + r.json.expiresIn * 1000,
+        }, owner);
+      } catch (e) {
+        // O backend girou o par mas não foi possível persistir: o refresh guardado está consumido.
+        await revoke([r.json.accessToken], "refresh_tokens_revoked");
+        throw e;                                                          // 503; o lease vence → sessão encerrada
+      }
       if (!ok) {
+        // Sem autoridade (lease vencido, sessão encerrada/abandonada): descarta, encerra e revoga o par novo.
         log("refresh_discarded");
-        await revoke([r.json.accessToken], "refresh_tokens_revoked");     // sessão já encerrada: não deixa par órfão
-        return { state: "invalid", code: "session_expired" };
+        await store.delete(sessionId);
+        await revoke([r.json.accessToken], "refresh_tokens_revoked");
+        return { state: "invalid", code: "session_refresh_uncertain" };
       }
       log("refresh_ok");
       return { state: "ok" };

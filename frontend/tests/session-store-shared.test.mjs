@@ -161,25 +161,44 @@ for (const K of KINDS) {
     assert.ok(await store.get(c));                                         // outro navegador intacto
   });
 
-  test(`[${K.kind}] lease de renovação: um por geração; liberação; expiração; troca de geração encerra o lease`, { skip: K.skip }, async () => {
+  test(`[${K.kind}] lease de renovação: um por geração; liberação só antes do envio; vencimento NÃO libera`, { skip: K.skip }, async () => {
     if (K.kind === "postgres") await resetSchema();
     let t = 10_000_000;
-    const store = K.make(() => t);
+    const store = K.make(() => t, { limits: { ...LIMITS, maxSessions: 10 } });
+    const tok = (n) => ({ accessToken: `a${n}`.padEnd(20, "a"), refreshToken: `r${n}`.padEnd(20, "r"), accessExpiresAt: 0 });
     const id = await store.create(fields(1));
     assert.equal(await store.acquireRefresh(id, 2, "x", 1000), false);    // geração errada
     assert.equal(await store.acquireRefresh(id, 1, "A", 1000), true);
     assert.equal(await store.acquireRefresh(id, 1, "B", 1000), false);
-    assert.deepEqual(await store.peek(id), { generation: 1, refreshing: true });
+    assert.deepEqual(await store.peek(id), { generation: 1, refreshing: true, abandoned: false });
     await store.releaseRefresh(id, "B");                                    // dono errado: nada muda
     assert.equal(await store.acquireRefresh(id, 1, "B", 1000), false);
-    await store.releaseRefresh(id, "A");
+    await store.releaseRefresh(id, "A");                                    // falha comprovadamente anterior ao envio
+    assert.deepEqual(await store.peek(id), { generation: 1, refreshing: false, abandoned: false });
     assert.equal(await store.acquireRefresh(id, 1, "B", 1000), true);
-    t += 1000;                                                              // lease vencido (instância caiu)
-    assert.equal((await store.peek(id)).refreshing, false);
-    assert.equal(await store.acquireRefresh(id, 1, "C", 1000), true);
-    assert.equal(await store.updateTokens(id, 1, { accessToken: "a".repeat(20), refreshToken: "r".repeat(20), accessExpiresAt: 0 }), true);
-    assert.deepEqual(await store.peek(id), { generation: 2, refreshing: false });
-    assert.equal(await store.acquireRefresh(id, 2, "D", 1000), true);
+    // sem autoridade: dono errado ou sem lease não publicam
+    assert.equal(await store.updateTokens(id, 1, tok(9), "intruso"), false);
+    assert.equal(await store.updateTokens(id, 1, tok(9)), false);
+    assert.equal(await store.updateTokens(id, 1, tok(2), "B"), true);      // dono dentro do lease publica
+    assert.deepEqual(await store.peek(id), { generation: 2, refreshing: false, abandoned: false });
+
+    // Lease VENCIDO com tentativa em aberto: o backend pode ter girado o par. Ninguém reenvia o refresh.
+    assert.equal(await store.acquireRefresh(id, 2, "C", 1000), true);
+    t += 1000;
+    assert.deepEqual(await store.peek(id), { generation: 2, refreshing: false, abandoned: true });
+    assert.equal(await store.acquireRefresh(id, 2, "D", 1000), false);
+    // publicação tardia de quem perdeu a autoridade é recusada
+    assert.equal(await store.updateTokens(id, 2, tok(3), "C"), false);
+    // encerramento da tentativa abandonada: remove a sessão e devolve o access token para revogação
+    assert.deepEqual(await store.abandonRefresh(id, 1), null);             // geração errada: nada
+    assert.deepEqual(await store.abandonRefresh(id, 2), { accessToken: tok(2).accessToken });
+    assert.equal(await store.get(id), null);
+    assert.equal(await store.updateTokens(id, 2, tok(3), "C"), false);     // não ressuscita
+
+    // sem tentativa em aberto (lease liberado), abandonRefresh não encerra nada
+    const id2 = await store.create(fields(2));
+    assert.equal(await store.abandonRefresh(id2, 1), null);
+    assert.ok(await store.get(id2));
   });
 }
 
@@ -347,19 +366,66 @@ test("[postgres] renovação concorrente em duas instâncias: UM refresh; ambas 
   assert.ok(after.every((x) => x.headers.authorization === `Bearer ${c.backend.current.access}`));
 });
 
-test("[postgres] instância que caiu com o lease: outra assume depois do vencimento", { skip: PG_SKIP }, async () => {
+test("[postgres] instância que caiu com o lease: a outra NÃO reenvia o refresh; sessão encerrada e revogada", { skip: PG_SKIP }, async () => {
   await resetSchema();
   const c = cluster();
   const j = jar().apply(await c.A.bff.login(req("POST", "/bff/auth/login", { body: creds })));
   c.clock.advance(900_000);
+  // A obtém o lease e "cai" depois de enviar (resultado desconhecido): ninguém libera o lease.
   assert.equal(await c.A.store.acquireRefresh(j.sid(), 1, "instancia-morta", 6000), true);
-  const pending = c.B.bff.proxy(req("GET", "/bff/api/users/me", { cookie: j.header() }), "/users/me");
-  await new Promise((r) => setTimeout(r, 60));
-  assert.equal(c.backend.calls.filter((x) => x.path === "/auth/refresh").length, 0);   // B respeita o lease
-  c.clock.advance(6000);                                                  // lease vence
+  const peeked = deferred();
+  const watchedB = { ...c.B.store, peek: async (id) => { const p = await c.B.store.peek(id); peeked.resolve(p); return p; } };
+  const bffB = createBff({ config: c.config, store: watchedB, fetchImpl: c.backend.fetch, now: c.clock.now, logger: quiet, refreshPollMs: 5 });
+  const pending = bffB.proxy(req("GET", "/bff/api/users/me", { cookie: j.header() }), "/users/me");
+  assert.deepEqual(await peeked.promise, { generation: 1, refreshing: true, abandoned: false });   // B respeita o lease
+  assert.equal(c.backend.calls.filter((x) => x.path === "/auth/refresh").length, 0);
+  c.clock.advance(6000);                                                  // lease vence: NÃO prova que nada foi processado
   const r = await pending;
+  assert.equal(r.status, 401);
+  assert.equal((await r.json()).error.code, "session_refresh_uncertain");
+  assert.ok(r.headers.getSetCookie().some((x) => x.includes("Max-Age=0")));
+  assert.equal(c.backend.calls.filter((x) => x.path === "/auth/refresh").length, 0, "refresh antigo nunca reenviado");
+  assert.equal(c.backend.current.revoked, true, "sessão revogada no backend (o par novo, se existir, cai junto)");
+  assert.equal(await c.A.store.get(j.sid()), null);
+});
+
+test("[postgres] falha comprovadamente anterior ao envio: lease liberado; próxima renovação segura com UMA chamada", { skip: PG_SKIP }, async () => {
+  await resetSchema();
+  let refuse = true;
+  const c = cluster({ wrap: (f, u, i) => {
+    if (refuse && new URL(u).pathname.endsWith("/auth/refresh")) {
+      refuse = false;
+      const e = new TypeError("fetch failed"); e.cause = { code: "ECONNREFUSED" }; throw e;
+    }
+    return f(u, i);
+  } });
+  const j = jar().apply(await c.A.bff.login(req("POST", "/bff/auth/login", { body: creds })));
+  c.clock.advance(900_000);
+  let r = await c.A.bff.proxy(req("GET", "/bff/api/users/me", { cookie: j.header() }), "/users/me");
+  assert.equal(r.status, 503);
+  assert.deepEqual(await c.B.store.peek(j.sid()), { generation: 1, refreshing: false, abandoned: false });
+  r = await c.B.bff.proxy(req("GET", "/bff/api/users/me", { cookie: j.header() }), "/users/me");
   assert.equal(r.status, 200);
   assert.equal(c.backend.calls.filter((x) => x.path === "/auth/refresh").length, 1);
+  assert.equal(c.backend.current.revoked, false);
+});
+
+test("[postgres] publicação tardia: A conclui no backend depois de perder o lease — descartada, sessão encerrada", { skip: PG_SKIP }, async () => {
+  await resetSchema();
+  const g = gates();
+  const c = cluster({ wrap: (f, u, i) => g.wrap(f, u, i) });
+  const j = jar().apply(await c.A.bff.login(req("POST", "/bff/auth/login", { body: creds })));
+  c.clock.advance(900_000);
+  const held = g.hold("/auth/refresh");
+  const pending = c.A.bff.proxy(req("GET", "/bff/api/users/me", { cookie: j.header() }), "/users/me");
+  await held.reached.promise;
+  c.clock.advance(c.config.timeoutMs + 6000);                             // lease de A venceu (sem outra instância)
+  held.go.resolve();                                                      // o backend gira o par só agora
+  const r = await pending;
+  assert.equal(r.status, 401);
+  assert.equal((await r.json()).error.code, "session_refresh_uncertain");
+  assert.equal(await c.B.store.get(j.sid()), null);
+  assert.equal(c.backend.current.revoked, true, "par novo revogado no backend");
 });
 
 test("[postgres] login pendente em A × logout em B (mesmo navegador): logout vence, nada instalado", { skip: PG_SKIP }, async () => {
@@ -463,4 +529,45 @@ test("[postgres] estresse: login em A × logout em B simultâneos — logout con
     assert.equal(live, 0, `iteração ${i}: login ${li.status} sobreviveu ao logout concluído`);
   }
   assert.ok([...outcomes.keys()].every((s) => s === 409 || s === 200), JSON.stringify([...outcomes]));
+});
+
+test("[postgres] /bff/health confere a versão do esquema a cada chamada, na MESMA instância", { skip: PG_SKIP }, async () => {
+  await resetSchema();
+  const KEY = Symbol.for("prazoai.bff.instance");
+  const keys = ["NEXT_PUBLIC_PRAZOAI_MODE", "PRAZOAI_APP_ENV", "PRAZOAI_APP_ORIGIN", "PRAZOAI_COOKIE_INSECURE_LOCAL",
+    "PRAZOAI_BFF_SESSION_STORE", "PRAZOAI_BFF_DATABASE_URL", "PRAZOAI_BFF_SESSION_KEY"];
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  Object.assign(process.env, { NEXT_PUBLIC_PRAZOAI_MODE: "integrated", PRAZOAI_APP_ENV: "test", PRAZOAI_APP_ORIGIN: ORIGIN,
+    PRAZOAI_COOKIE_INSECURE_LOCAL: "true", PRAZOAI_BFF_SESSION_STORE: "postgres", PRAZOAI_BFF_DATABASE_URL: DB_URL,
+    PRAZOAI_BFF_SESSION_KEY: KEY_A.toString("base64url") });
+  const { getBff, healthResponse } = await import("../src/server/bff/instance.mjs");
+  const check = async (expected) => {
+    const r = await healthResponse();
+    const body = await r.text();
+    assert.equal(r.status, expected, body);
+    if (expected === 503) {
+      assert.deepEqual(JSON.parse(body).error.code, "session_store_unavailable");
+      assert.equal(/vers|esquema|prazoai_bff|migrate/i.test(body), false, "sem detalhes internos");
+    }
+  };
+  try {
+    const first = getBff();
+    await check(200);                                                                  // a) esquema correto
+    await admin("UPDATE prazoai_bff.schema_version SET version = version + 1");
+    await check(503);                                                                  // b) versão incompatível
+    await admin("UPDATE prazoai_bff.schema_version SET version = version - 1");
+    await check(200);                                                                  // c) restaurada
+    await admin("DROP SCHEMA prazoai_bff CASCADE");
+    await check(503);                                                                  // d) esquema removido
+    assert.equal((await admin("SELECT to_regnamespace('prazoai_bff') IS NULL AS ausente")).rows[0].ausente, true,
+      "o health check não recria nada");
+    await resetSchema();                                                               // e) recriado por comando explícito
+    await check(200);
+    assert.equal(getBff(), first, "mesma instância do BFF em todas as verificações");
+  } finally {
+    const bff = await globalThis[KEY]?.catch(() => null);
+    await bff?.store.close();
+    delete globalThis[KEY];
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
 });
