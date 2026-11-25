@@ -61,6 +61,7 @@ const ORG_MESSAGES: Record<string, string> = {
   pdf_encrypted: "PDFs protegidos por senha não são aceitos nesta versão.",
   file_already_stored: "Esta intimação já tem um PDF (limite: 1 por intimação).",
   file_storage_unavailable: "Armazenamento de arquivos indisponível. Tente novamente em instantes.",
+  file_upload_uncertain: "Não foi possível confirmar o envio do PDF. Confira a intimação antes de enviar de novo.",
   file_not_found: "Esta intimação não tem PDF armazenado.",
   file_unavailable: "O arquivo não pôde ser recuperado. Avise o suporte.",
 };

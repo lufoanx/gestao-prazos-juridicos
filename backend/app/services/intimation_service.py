@@ -86,6 +86,7 @@ def safe_file_name(raw: str | None) -> str:
 
 
 _STORAGE_DOWN = ("file_storage_unavailable", "Armazenamento de arquivos indisponível. Tente novamente.")
+_UPLOAD_UNCERTAIN = "Não foi possível confirmar o envio do PDF. Confira a intimação antes de enviar de novo."
 
 
 class IntimationService:
@@ -389,11 +390,13 @@ class IntimationService:
         return i, m
 
     def attach_file(self, actor_id: str, intimation_id: str, file_name: str | None, data: bytes) -> IntimationResult:
-        """Valida → reserva (transação) → grava o blob → publica e libera a reserva (transação).
+        """Valida → reserva (transação) → grava o blob → publica e consome a reserva (transação).
 
         Nunca há metadado `stored` sem blob: a publicação só ocorre depois do upload confirmado, na
-        mesma transação que consome a reserva. Falha depois do upload: o blob é apagado na melhor
-        tentativa e, de qualquer forma, a reserva vencida leva a limpeza a apagá-lo.
+        mesma transação que consome a reserva. Falha na publicação NÃO implica rollback (a confirmação do
+        COMMIT pode se perder): o blob nunca é apagado por suposição — a reconciliação decide NO BANCO
+        (`_reconcile_upload`): só apaga se a reserva ainda existir, isto é, se a publicação não foi
+        confirmada. Sem banco, nada é apagado e a reserva vencida leva a limpeza a decidir depois.
         """
         store = self._require_files()
         try:
@@ -409,28 +412,54 @@ class IntimationService:
         try:
             store.put(key, data)
         except FileStorageUnavailable:
+            # Nada foi publicado nem será (a publicação nem começou): remover já é seguro.
             self._discard_blob(store, key)
             logger.warning("intimation_file_store_failed intimation_id=%s", intimation_id)
             raise AppError(503, *_STORAGE_DOWN) from None
+        reservation_lost = False
         try:
             with self._unit() as tx:
                 i, m = self._authorize_write(tx, actor_id, intimation_id)
                 self._accepts_file(i)
                 if not tx.intimations.release_file_reservation(key):
-                    raise AppError(503, *_STORAGE_DOWN)
-                updated = replace(
-                    i, version=i.version + 1, updated_at=tx.now,
-                    file=FileMeta(safe_file_name(file_name), len(data), "application/pdf", "stored",
-                                  blob_key=key, sha256=sha256, stored_at=tx.now),
-                )
-                tx.intimations.put(updated)
-                self._event(tx, updated, actor_id, "file_stored", sizeBytes=len(data), sha256=sha256)
-                result = self._result(tx, actor_id, m, updated)
-        except BaseException:
-            self._discard_blob(store, key)
+                    # A reserva venceu e a limpeza a consumiu durante o upload: não publica e devolve o
+                    # blob à fila (confirmado nesta transação) para a reconciliação/limpeza.
+                    tx.intimations.reserve_file(key, tx.now)
+                    reservation_lost = True
+                else:
+                    updated = replace(
+                        i, version=i.version + 1, updated_at=tx.now,
+                        file=FileMeta(safe_file_name(file_name), len(data), "application/pdf", "stored",
+                                      blob_key=key, sha256=sha256, stored_at=tx.now),
+                    )
+                    tx.intimations.put(updated)
+                    self._event(tx, updated, actor_id, "file_stored", sizeBytes=len(data), sha256=sha256)
+                    result = self._result(tx, actor_id, m, updated)
+        except AppError:
+            self._reconcile_upload(store, key)       # erro de regra: decidido antes do COMMIT
             raise
+        except Exception:
+            # Resultado do COMMIT desconhecido: o banco decide; a resposta não promete nada.
+            self._reconcile_upload(store, key)
+            logger.warning("intimation_file_publish_uncertain intimation_id=%s", intimation_id)
+            raise AppError(503, "file_upload_uncertain", _UPLOAD_UNCERTAIN) from None
+        if reservation_lost:
+            self._reconcile_upload(store, key)
+            raise AppError(503, *_STORAGE_DOWN)
         logger.info("intimation_file_stored intimation_id=%s size=%s", intimation_id, len(data))
         return result
+
+    def _reconcile_upload(self, store: BlobStore, key: str) -> None:
+        """Remove o blob SÓ se a reserva pendente ainda existir (publicação não confirmada), segurando o
+        bloqueio dela durante a remoção. Qualquer falha (banco ou armazenamento): nada é apagado aqui; a
+        reserva, se existir, vence e a limpeza decide depois."""
+        try:
+            with self._unit() as tx:
+                if tx.intimations.claim_file_reservation(key):
+                    store.delete(key)
+                    tx.intimations.drop_file_reservation(key)
+        except Exception:  # noqa: BLE001
+            logger.warning("intimation_file_reconcile_deferred")
 
     @staticmethod
     def _discard_blob(store: BlobStore, key: str) -> None:

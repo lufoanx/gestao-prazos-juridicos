@@ -92,3 +92,17 @@ class SqlIntimationTransaction:
         r = self._c.conn.execute(delete(file_cleanup).where(file_cleanup.c.blob_key == blob_key,
                                                              file_cleanup.c.reason == "upload_pending"))
         return r.rowcount == 1
+
+    def claim_file_reservation(self, blob_key: str) -> bool:
+        """True se a reserva PENDENTE ainda existe — então a publicação NÃO foi confirmada (ela consome a
+        reserva na mesma transação). A linha fica bloqueada até o fim desta transação: nem a publicação
+        nem a limpeza decidem sobre a mesma chave ao mesmo tempo."""
+        self._c.require_write()
+        row = self._c.conn.execute(select(file_cleanup.c.blob_key).where(
+            file_cleanup.c.blob_key == blob_key, file_cleanup.c.reason == "upload_pending").with_for_update()).first()
+        return row is not None
+
+    def drop_file_reservation(self, blob_key: str) -> None:
+        self._c.require_write()
+        self._c.conn.execute(delete(file_cleanup).where(file_cleanup.c.blob_key == blob_key,
+                                                        file_cleanup.c.reason == "upload_pending"))

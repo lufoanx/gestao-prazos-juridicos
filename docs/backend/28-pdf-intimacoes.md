@@ -69,9 +69,32 @@ tokens do backend só no servidor; a sessão é conferida **antes** de ler o cor
 4. transação: autoriza de novo, consome a reserva e publica o arquivo na intimação (+ evento
    `file_stored`).
 
-Falha em 3 ou 4: o blob é apagado na melhor tentativa e a resposta é erro (503/409). Se até isso falhar
-(ou o processo cair), a reserva vence e a **limpeza** apaga o blob. Se a limpeza já consumiu a reserva,
-a publicação é recusada — nunca há metadado apontando para blob removido.
+**Falha na publicação não significa rollback.** O PostgreSQL pode confirmar o COMMIT e a confirmação se
+perder a caminho da aplicação. Por isso o serviço **nunca apaga o blob por suposição**: a
+**reconciliação** (`_reconcile_upload`) decide no banco. Numa transação, ela bloqueia a reserva pendente
+(`SELECT … FOR UPDATE`):
+- **reserva ainda existe** → a publicação não foi confirmada (ela consome a reserva na mesma transação);
+  o blob é apagado **com o bloqueio mantido** e a reserva removida em seguida;
+- **reserva não existe** → a publicação foi confirmada (ou a limpeza já tratou a chave); nada é apagado.
+
+Resultados para o cliente: erro de regra (ex.: intimação descartada durante o envio, 409) mantém o código
+original; exceção sem diagnóstico (ex.: conexão perdida no COMMIT) responde **503 `file_upload_uncertain`**
+("confira a intimação antes de enviar de novo") — o PDF pode ter sido publicado, e nesse caso o vínculo e
+os bytes ficam intactos. Se o banco estiver indisponível durante a reconciliação, **nada é apagado**; a
+reserva vence e a limpeza decide depois, com o mesmo bloqueio.
+
+Falha **antes** da publicação (gravação no Blob com erro/resultado incerto): a publicação nem começa, então
+o blob é apagado na melhor tentativa; se isso falhar, a reserva vencida leva a limpeza a apagá-lo.
+
+Reserva vencida durante o upload (a limpeza a consumiu): a publicação é recusada (503), a chave volta à
+fila na mesma transação e a reconciliação remove o blob. Limite residual: se, além disso, essa transação
+falhar, o blob pode ficar sem entrada na fila; a reserva (1 h) é muito maior que os prazos de upload
+(20 s no Blob, 60 s no BFF), o que torna esse caso improvável.
+
+Testes (PostgreSQL + Azurite): COMMIT confirmado seguido de exceção (vínculo, bytes e download preservados;
+limpeza com relógio 10 anos adiante não toca o arquivo); rollback real (órfão removido pela reconciliação);
+banco indisponível na reconciliação (nada apagado; limpeza eventual remove depois do vencimento); reserva
+vencida durante o upload (sem falso sucesso; blob removido).
 
 ## 6. Ciclo de vida
 - Intimação **descartada** mantém o arquivo durante a retenção existente

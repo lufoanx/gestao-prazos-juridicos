@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from contextlib import contextmanager
 from datetime import timedelta
 
 import pytest
@@ -498,3 +499,109 @@ def test_reserva_consumida_pela_limpeza_durante_o_upload_impede_a_publicacao(fil
     after = o.http.get(f"{API}/intimations/{i['id']}", headers=ana.headers).json()
     assert after["file"]["storage"] == "not_stored"                  # nunca aponta para blob removível
     assert blobs(store) == [] and _cleanup_rows(o) == []
+
+
+class LostCommitUnit:
+    """Unidade de trabalho com falha CONTROLADA na publicação do arquivo (a que consome a reserva).
+
+    mode="after_commit": a transação é CONFIRMADA no PostgreSQL e só então a exceção é lançada
+    (confirmação perdida a caminho da aplicação). mode="before_commit": a exceção ocorre antes do
+    COMMIT (rollback real). `db_down_after=True`: as unidades seguintes falham (banco indisponível
+    durante a reconciliação)."""
+
+    def __init__(self, real, mode, *, db_down_after=False):
+        self.real, self.mode, self.db_down_after = real, mode, db_down_after
+        self.fired = False
+
+    def __getattr__(self, name):
+        return getattr(self.real, name)
+
+    @contextmanager
+    def unit(self, clock):
+        if self.fired and self.db_down_after:
+            raise ConnectionError("banco indisponível (simulado)")
+        with self.real.unit(clock) as tx:
+            publishing = {"hit": False}
+            original = tx.intimations.release_file_reservation
+
+            def release(key):
+                publishing["hit"] = True
+                return original(key)
+
+            tx.intimations.release_file_reservation = release
+            yield tx
+            if publishing["hit"] and not self.fired and self.mode == "before_commit":
+                self.fired = True
+                raise ConnectionError("conexão perdida antes do COMMIT (simulado)")
+        if publishing["hit"] and not self.fired and self.mode == "after_commit":
+            self.fired = True
+            raise ConnectionError("confirmação do COMMIT perdida (simulado)")
+
+
+def _with_unit(o, wrapper):
+    svc = o.app.state.intimations
+    wrapper_instance = wrapper(svc._uow)
+    svc._uow = wrapper_instance
+    return wrapper_instance
+
+
+def _stored_row(o, iid):
+    with o.app.state.auth.engine.connect() as c:
+        return c.execute(text("SELECT file_storage, file_blob_key FROM prazoai.intimations WHERE id = :i"),
+                         {"i": uuid.UUID(iid)}).one()
+
+
+def test_commit_confirmado_e_confirmacao_perdida_preserva_vinculo_e_bytes(files_app, azurite):
+    _, store = azurite
+    o = OrgClient(files_app())
+    ana = o.person("ana")
+    i = personal(o, ana)
+    unit = _with_unit(o, lambda real: LostCommitUnit(real, "after_commit"))
+    data = synthetic_pdf(b"% commit confirmado")
+    r = put_pdf(o, ana, i["id"], data)
+    assert unit.fired
+    row = _stored_row(o, i["id"])
+    assert row.file_storage == "stored"                         # o PostgreSQL confirmou a publicação
+    assert blobs(store) == [row.file_blob_key]                  # o blob vinculado NÃO foi apagado
+    assert _cleanup_rows(o) == []
+    d = get_pdf(o, ana, i["id"])
+    assert d.status_code == 200 and d.content == data
+    assert r.status_code == 503 and r.json()["error"]["code"] == "file_upload_uncertain"   # resultado incerto
+    from app.core.clock import SystemClock
+    from app.files.cleanup import run_file_cleanup
+    assert run_file_cleanup(o.app.state.auth.engine, store, SystemClock().now() + timedelta(days=3650)) == 0
+    assert get_pdf(o, ana, i["id"]).content == data
+
+
+def test_rollback_real_na_publicacao_remove_o_orfao_pela_limpeza(files_app, azurite):
+    _, store = azurite
+    o = OrgClient(files_app())
+    ana = o.person("ana")
+    i = personal(o, ana)
+    unit = _with_unit(o, lambda real: LostCommitUnit(real, "before_commit"))
+    r = put_pdf(o, ana, i["id"], synthetic_pdf(b"% rollback"))
+    assert unit.fired
+    assert _stored_row(o, i["id"]).file_storage == "not_stored"
+    assert blobs(store) == [] and _cleanup_rows(o) == []         # reserva decidida no banco → blob removido
+    assert r.status_code == 503
+
+
+def test_banco_indisponivel_na_reconciliacao_nao_apaga_nada(files_app, azurite):
+    from app.core.clock import SystemClock
+    from app.files.cleanup import run_file_cleanup
+
+    _, store = azurite
+    o = OrgClient(files_app())
+    ana = o.person("ana")
+    i = personal(o, ana)
+    unit = _with_unit(o, lambda real: LostCommitUnit(real, "before_commit", db_down_after=True))
+    r = put_pdf(o, ana, i["id"], synthetic_pdf(b"% banco fora"))
+    assert unit.fired
+    assert len(blobs(store)) == 1                                # nenhuma exclusão especulativa
+    rows = _cleanup_rows(o)
+    assert [row.reason for row in rows] == ["upload_pending"]   # a decisão fica para a limpeza
+    engine = o.app.state.auth.engine
+    assert run_file_cleanup(engine, store, SystemClock().now()) == 0                         # ainda vigente
+    assert run_file_cleanup(engine, store, SystemClock().now() + timedelta(hours=2)) == 1    # limpeza eventual
+    assert blobs(store) == [] and _cleanup_rows(o) == []
+    assert r.status_code == 503
