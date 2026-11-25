@@ -1,197 +1,82 @@
-# PrazoAI — Sistema Inteligente de Gestão de Prazos Jurídicos
+# PrazoAI — Gestão de prazos jurídicos
 
-## Visão geral
-Este projeto está sendo desenvolvido na disciplina PAC Extensionista VII do curso de Engenharia de Software.
+O PrazoAI ajuda profissionais autônomos e equipes de advocacia a cadastrar, priorizar e acompanhar prazos em um só lugar. É um projeto acadêmico de Engenharia de Software da Católica SC (Joinville).
 
-A proposta é criar uma plataforma web focada na gestão inteligente de prazos jurídicos, com o objetivo de reduzir falhas humanas, melhorar a organização dos processos e trazer mais segurança no acompanhamento de prazos.
+**[Abrir a demonstração](https://prazoai-homolog.vercel.app/)** → clique em **Ver o dashboard** para explorar sem login. Use apenas dados fictícios. Não envie documentos de clientes, dados de processos reais ou senhas de outros serviços.
 
----
+## Estado da entrega
 
-## Problema
+| Ambiente | O que está disponível |
+| --- | --- |
+| Demo pública na Vercel | Dashboard, prazos, calendário e navegação com dados fictícios. Não usa a API, o banco ou o e-mail do ambiente integrado. |
+| Modo integrado local | Cadastro e login com e-mail e senha, perfil, escritórios e equipe, permissões, convites, prazos, calendário, intimações (metadados e revisão humana) e notificações internas. PostgreSQL e recuperação de senha via SMTP foram verificados localmente. |
+| Produção integrada | Pendente. O backend ainda recusa `ENVIRONMENT=production` e as sessões do frontend integrado ficam em memória no servidor Node. A demo online não demonstra prontidão para receber contas ou dados reais. |
 
-O controle de prazos processuais ainda é uma atividade crítica em escritórios de advocacia.
+O calendário organiza vencimentos informados pelo usuário. Os indicadores de urgência **não são cálculo processual oficial**. Leitura real de PDFs por IA/OCR, armazenamento de arquivos e integrações externas não estão disponíveis na demo.
 
-Mesmo com o uso de sistemas jurídicos e terceirização, falhas humanas na atribuição de prazos ainda ocorrem, podendo resultar na perda de processos e prejuízos financeiros significativos.
+## Fluxos principais
 
-Além disso, muitos sistemas atuais apresentam:
-- baixa clareza visual
-- excesso de complexidade
-- dificuldade de organização por prioridade
+- **Prazos e calendário:** cadastre, edite e conclua um prazo; confira o vencimento no calendário.
+- **Pessoal e Escritório:** separe seus registros pessoais dos prazos compartilhados pela equipe.
+- **Convites e permissões:** convide integrantes e controle acesso e edição conforme as permissões concedidas.
+- **Conta:** no modo integrado, o backend autentica a conta; a recuperação de senha depende da configuração de e-mail.
 
----
+## Arquitetura
 
-## Solução proposta
+| Camada | Tecnologia e responsabilidade |
+| --- | --- |
+| `frontend/` | Next.js, React e TypeScript. No modo integrado, as rotas server-side `/bff/*` fazem a ponte entre o navegador e a API. |
+| `backend/` | Python e FastAPI. Expõe a API versionada, aplica regras de negócio e verifica permissões. |
+| Banco | PostgreSQL com migrações Alembic. Armazena autenticação e dados de negócio no modo `STORAGE=postgres`; isso não torna persistentes as sessões do BFF. |
+| `.github/` | GitHub Actions para verificações automatizadas do repositório. |
+| `docs/` | Proposta, requisitos, diagramas e documentação técnica. |
 
-O sistema será desenvolvido com foco em três pilares principais:
+[Diagrama de contexto](docs/diagramas/contexto-c4.png) · [Diagrama de contêineres](docs/diagramas/containers-c4.png)
 
-- Motor automatizado de cálculo de prazos processuais  
-- Análise de intimações em PDF utilizando inteligência artificial  
-- Dashboard visual para organização e priorização de prazos  
+## Executar localmente
 
-A proposta é atuar diretamente na redução do risco de perda de prazos.
+### Frontend demonstrativo
 
----
+Com Node.js 20+ (o projeto foi desenvolvido em Node.js 22), a partir da raiz do clone:
 
-## Diferencial do Projeto
+```bash
+cd frontend
+npm ci
+npm run dev
+```
 
-Diferente dos sistemas jurídicos tradicionais, o PrazoAI é focado especificamente na gestão inteligente de prazos processuais, utilizando inteligência artificial para análise de intimações em PDF, automação no cálculo de prazos e visualização clara das tarefas prioritárias.
+Acesse [localhost:3000](http://localhost:3000). Não configure o modo integrado para esta execução.
 
-Enquanto muitas plataformas do mercado são mais amplas e generalistas, o PrazoAI concentra sua proposta no ponto mais crítico da rotina jurídica: reduzir falhas humanas e aumentar a segurança no acompanhamento dos prazos.
+### Modo integrado
 
----
+1. Siga o [guia do backend](backend/README.md) para instalar as dependências, preparar um PostgreSQL de desenvolvimento, configurar `DATABASE_URL` e executar as migrações.
+2. Inicie o backend em modo local com `STORAGE=postgres` e confirme a rota `GET /api/v1/health`.
+3. Siga o [guia do frontend](frontend/README.md) para configurar o modo `NEXT_PUBLIC_PRAZOAI_MODE=integrated` e apontar o BFF para a API local.
+4. Para testar recuperação de senha sem e-mail real, use o capturador SMTP indicado no [guia operacional](docs/backend/22-operacao-recuperacao-senha.md).
 
-## Validação do problema
+Não coloque credenciais em commits nem em variáveis públicas do frontend.
 
-A ideia foi validada com profissional da área jurídica com experiência em escritório contendo aproximadamente:
+## Testes e evidências
 
-- 5 advogados  
-- cerca de 700 processos ativos  
+- **Frontend:** rode `npm test`, `npm run typecheck`, `npm run lint` e `npm run build` em `frontend/`. O guia do frontend também documenta as suítes de integração e de navegador.
+- **Backend:** o [README do backend](backend/README.md) documenta os testes em memória e as suítes que exigem um PostgreSQL descartável e/ou Mailpit.
+- **Regressão de permissões:** o [PR #33](https://github.com/lufoanx/gestao-prazos-juridicos/pull/33) verifica que a usuária mantém a leitura de um prazo atribuído, recebe `403` ao tentar editar sem permissão e volta a editar após a restauração, sem precisar fazer login novamente. Foram executados 61 testes HTTP de prazos em memória, além das verificações do GitHub Actions no PR.
 
-Principais pontos identificados:
+## Antes de abrir para contas reais
 
-- ocorrência de perda de prazos  
-- falhas humanas na atribuição de datas  
-- dificuldade de organização e visualização  
-
-A solução proposta foi avaliada como altamente relevante (10/10).
-
----
-
-## Métricas de Sucesso (KPIs)
-
-- Redução de erros no controle de prazos em até 90%
-- Aumento da eficiência no cálculo de prazos em até 50%
-- Suporte inicial para no mínimo 10 usuários simultâneos
-- Taxa de acerto da IA superior a 85%
-
----
-
-## Arquitetura inicial
-
-### Diagrama de contexto
-
-![Diagrama de Contexto](docs/diagramas/contexto-c4.png)
-
----
-
-### Diagrama de containers
-
-![Diagrama de Containers](docs/diagramas/containers-c4.png)
-
----
-
-## Tecnologias previstas
-
-- Python
-- FastAPI
-- PostgreSQL
-- Docker
-- GitHub Actions (CI/CD)
-- Cloud computing
-- Inteligência Artificial para análise de documentos
-
----
+- Resolver os bloqueios de produção no backend e no gerenciamento das sessões integradas do frontend. Não usar o modo de desenvolvimento como produção.
+- Implantar e validar frontend, API, PostgreSQL e e-mail em ambiente separado, com HTTPS, segredos no servidor, configuração de acesso e dados fictícios.
+- Testar no endereço hospedado: cadastro, login, recuperação de senha, persistência após reinício, isolamento entre contas e escritórios. Definir rotinas de backup, restauração e monitoramento antes de abrir para uso real.
 
 ## Documentação
 
-- [Proposta Inicial](docs/proposta-inicial.md)
-- [Validação do Problema](docs/pesquisa/validacao-problema.md)
-- [Requisitos Funcionais](docs/requisitos/requisitos-funcionais.md)
-- [Requisitos Não Funcionais](docs/requisitos/requisitos-nao-funcionais.md)
-- [Frontend (protótipo navegável) — README](frontend/README.md)
-- [Backend — README](backend/README.md)
-- [Recuperação de senha — guia operacional e demonstração local](docs/backend/22-operacao-recuperacao-senha.md)
-- [Atualização segura das dependências do frontend](docs/backend/23-atualizacao-dependencias-frontend.md)
-- [Fuso das notificações: instantes do PostgreSQL sempre em UTC](docs/backend/24-fuso-instantes-notificacoes.md)
-- [Estabilidade do botão "Gerar link de convite" (deslocamento de layout)](docs/backend/25-estabilidade-botao-convite.md)
-- [Ambientes pessoal e escritório: diagnóstico e descoberta das ações](docs/backend/26-fluxos-pessoal-escritorio.md)
-
----
-
-## Estrutura do projeto
-
-```bash
-docs/          # documentação do projeto
-backend/       # API e regras de negócio
-frontend/      # interface do sistema
-.github/       # automações e CI/CD
-```
----
-
-## Segurança
-
-O sistema será desenvolvido considerando boas práticas de segurança da informação:
-
-- Uso de HTTPS
-
-- Autenticação segura
-
-- Controle de acesso por usuário
-
-- Isolamento de dados entre escritórios
-
-Além disso, o projeto será inspirado nos princípios da ISO 27001.
-
----
-
-## Protótipo — frontend navegável (concluído)
-
-A interface web foi desenvolvida em **React + Next.js + TypeScript (CSS puro)** e está
-**navegável e concluída** como protótipo, com foco em clareza visual e priorização de
-tarefas. As telas principais já existem e funcionam de ponta a ponta de forma
-**demonstrativa**: landing, autenticação e onboarding simulados, dashboard, prazos
-(lista, calendário, cadastro/edição/detalhe/conclusão, comentários, anexos e histórico),
-intimações (upload, processamento simulado e revisão obrigatória), notificações,
-escritório/equipe (permissões, convites, solicitações, transferência e saída), perfil,
-configurações e assistente demonstrativo.
-
-A **persistência é local/demonstrativa** (no navegador, via localStorage) — não há
-servidor. Detalhes de instalação, execução, testes, credenciais demonstrativas,
-funcionalidades e limitações estão no [README do frontend](frontend/README.md).
-
-### Backend (em andamento)
-O backend FastAPI já tem a fundação versionada (`/api/v1/health`), autenticação e perfil
-(**Etapa 2**), escritórios, equipe, permissões, convites e solicitações (**Etapa 3**) e prazos,
-comentários, histórico, calendário e transferência (**Etapa 4**) e intimações com revisão
-humana e notificações internas (**Etapa 5**, sem arquivos nem IA), com armazenamento **em
-memória** — não é persistente nem está pronto para produção. Na **Etapa 6.1**, o frontend
-ganhou um **modo integrado** (BFF no Next.js) para cadastro, login, sessão, logout e perfil; na
-**6.2**, onboarding, escritório, equipe, convites e solicitações; na **6.3**, prazos e calendário; na **6.4**, intimações (somente metadados, com revisão humana) e
-notificações internas; o dashboard segue em integração. Ver o [README do backend](backend/README.md).
-
-### Ainda são etapas futuras
-- Armazenamento real de arquivos e processamento de intimações (IA/OCR)
-- Banco de dados e persistência real
-- Integração frontend–backend dos demais módulos (onboarding/escritório, prazos, intimações, notificações)
-- IA/OCR para análise de intimações em PDF
-- Cálculo de prazos processuais oficial
-- Integrações externas (tribunais, Google, etc.) e envio de e-mail por provedor real — a recuperação
-  de senha por e-mail já funciona localmente com um capturador SMTP (ver o guia operacional), mas
-  nenhum provedor foi configurado e produção continua bloqueada
-- Testes de segurança e hardening (ISO 27001, HTTPS, headers)
-- Infraestrutura, CI/CD e observabilidade
-
----
-
-## Status do projeto
-
-Projeto acadêmico da disciplina PAC Extensionista VII. O **protótipo de frontend está
-concluído e navegável** (modo demo); o **modo integrado** (Etapas 6.1–6.4) já conecta conta, sessão, perfil, escritório, equipe, convites, solicitações, prazos, calendário, intimações e notificações ao backend. O backend tem a
-fundação, a autenticação (Etapa 2), escritórios/equipe/permissões (Etapa 3) prazos (Etapa 4) e intimações/notificações (Etapa 5), em memória. Requisitos e validação do problema
-foram levantados nas etapas anteriores.
-
-Próximo passo planejado (ainda **não implementado**): persistência em PostgreSQL — projeto técnico em
-`docs/backend/15-projeto-persistencia-postgresql.md` (aguardando aprovação).
-
-Próximos passos:
-- banco de dados, armazenamento de arquivos e processamento de intimações
-- integração frontend–backend e testes de segurança
-- motor de cálculo de prazos e análise de intimações com IA/OCR
-- integrações externas e infraestrutura (CI/CD, deploy)
-- evolução da suíte de testes (incluindo integração e end-to-end)
-
----
+- [Proposta inicial](docs/proposta-inicial.md)
+- [Validação do problema](docs/pesquisa/validacao-problema.md)
+- [Requisitos funcionais](docs/requisitos/requisitos-funcionais.md) e [não funcionais](docs/requisitos/requisitos-nao-funcionais.md)
+- [Frontend](frontend/README.md) e [backend](backend/README.md)
+- [Recuperação de senha: operação e demonstração local](docs/backend/22-operacao-recuperacao-senha.md)
+- [Ambientes pessoal e escritório](docs/backend/26-fluxos-pessoal-escritorio.md)
 
 ## Autor
 
-- José Lucas Andrade Fonseca
+José Lucas Andrade da Fonseca · Engenharia de Software · Católica SC
