@@ -131,7 +131,7 @@ def test_esquema_desatualizado_ou_ausente_recusado_sem_escrita(pg_clean, pg_url,
         return tables, rev
 
     raw = pg_url.render_as_string(hide_password=False)
-    for target in ("0002", "0001", "base"):                         # exigida: 0003
+    for target in ("0003", "0002", "0001", "base"):                 # exigida: 0004
         with pg_clean.begin() as conn:
             command.downgrade(alembic_config_for(conn), target)
         before = state()

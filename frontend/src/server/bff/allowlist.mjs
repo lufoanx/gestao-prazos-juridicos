@@ -107,6 +107,8 @@ export const PROXY_ALLOWLIST = Object.freeze([
   { method: "POST", path: "/intimations/:id/confirm" },
   { method: "POST", path: "/intimations/:id/discard" },
   { method: "GET", path: "/intimations/:id/history", query: PAGED_QUERY },
+  // Doc 28: intimação vinculada ao prazo (para recuperar o PDF a partir do prazo).
+  { method: "GET", path: "/deadlines/:id/intimation" },
   // 6.4 — notificações internas (por destinatário; autorização atual decidida no servidor)
   { method: "GET", path: "/notifications", query: NOTIFICATION_LIST_QUERY },
   { method: "GET", path: "/notifications/unread-count", query: SCOPE_ONLY_QUERY },

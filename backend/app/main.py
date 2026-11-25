@@ -76,6 +76,7 @@ def _attach_opportunistic_maintenance(app: FastAPI, settings, checkpoint) -> Non
         auth.engine, auth.clock, RetentionPolicy.from_settings(settings),
         MaintenanceLimits.from_settings(settings, max_batches=settings.maintenance_opportunistic_max_batches),
         settings.maintenance_interval_seconds, checkpoint=checkpoint,
+        files=getattr(app.state, "files", None),
     )
     app.state.maintenance = maintenance
 
@@ -103,13 +104,15 @@ def create_app(
     sql_checkpoint: Callable[[str], None] | None = None,
     maintenance_checkpoint: Callable[[str], None] | None = None,
     recovery_overrides: Mapping[str, Any] | None = None,
+    file_store: Any = None,
 ) -> FastAPI:
     """Cria uma instância isolada da aplicação.
 
     Parâmetros opcionais permitem injetar relógio, entrega de recuperação e hasher
     (testes). O estado de autenticação em memória pertence a esta instância.
     `recovery_overrides` (testes): relógio monotônico, capacidade de cancelamento e gancho do
-    registro de cancelamento do RecoveryDispatcher.
+    registro de cancelamento do RecoveryDispatcher. `file_store` (testes): armazenamento de arquivos
+    injetado (ex.: falhas controladas) no lugar do construído a partir de FILE_STORAGE.
     """
     settings = get_settings()
     # Homologação/produção: TODOS os requisitos de implantação conferidos antes de configurar log,
@@ -223,6 +226,7 @@ def create_app(
             )
         # Prazos (Etapa 4): mesma unidade de trabalho (ordem de locks escritórios → prazos).
         app.state.deadlines = None
+        app.state.files = None
         app.state.intimations = None
         app.state.notifications = None
         if app.state.org is not None:
@@ -231,8 +235,17 @@ def create_app(
                 timezone=settings.deadlines_timezone, soon_days=settings.deadlines_soon_days,
             )
             # Intimações e notificações (Etapa 5): mesma unidade de trabalho; processamento indisponível.
+            # Arquivos (doc 28): Azure Blob privado; None = desligado (upload/download → 503).
+            if file_store is None:
+                from app.files.storage import build_blob_store
+
+                file_store = build_blob_store(settings)
+            app.state.files = file_store
+            if file_store is not None:
+                logger.info("file_storage enabled backend=%s", settings.file_storage)
             app.state.intimations = IntimationService(
                 unit_of_work=app.state.org.unit_of_work, clock=app.state.auth.clock, processing=processing_port,
+                files=file_store, file_reservation_seconds=settings.file_upload_reservation_seconds,
             )
             app.state.notifications = NotificationService(
                 unit_of_work=app.state.org.unit_of_work, clock=app.state.auth.clock,

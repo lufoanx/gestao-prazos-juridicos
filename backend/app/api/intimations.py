@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 from typing import Annotated, Literal
+from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.api.deadlines import deadline_view, get_deadline_service
 from app.api.deps import CurrentUser
 from app.core.errors import AppError
 from app.domain.intimations import IntimationEvent
+from app.files.pdf import MAX_PDF_BYTES
 from app.schemas.deadlines import ScopeView
 from app.schemas.intimations import (
     ConfirmIntimationRequest,
@@ -71,7 +74,7 @@ def intimation_view(r: IntimationResult) -> IntimationView:
     return IntimationView(
         id=i.id, scope=ScopeView(kind=i.scope.kind, owner_id=i.scope.owner_id, office_id=i.scope.office_id),
         file=FileView(name=i.file.name, size_bytes=i.file.size_bytes, content_type=i.file.content_type,
-                      storage=i.file.storage),
+                      storage=i.file.storage, stored_at=i.file.stored_at),
         received_at=i.received_at, status=i.status,
         processing=ProcessingView(status=i.processing.status, attempts=i.processing.attempts,
                                   failure_code=i.processing.failure_code),
@@ -162,6 +165,62 @@ def history(
 ) -> IntimationHistoryPage:
     items, total = svc.history(current.user.id, intimation_id, page, per_page)
     return IntimationHistoryPage(items=[event_view(e) for e in items], page=page, per_page=per_page, total=total)
+
+
+# ------------------------------------------------------------------ arquivo PDF (doc 28)
+FILE_NAME_HEADER = "x-prazoai-file-name"
+
+
+async def _read_limited(request: Request) -> bytes:
+    declared = request.headers.get("content-length")
+    if declared is not None and (not declared.isdigit() or int(declared) > MAX_PDF_BYTES):
+        raise AppError(413, "file_too_large", "O arquivo excede 10 MiB.")
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():                     # limite aplicado DURANTE a leitura
+        size += len(chunk)
+        if size > MAX_PDF_BYTES:
+            raise AppError(413, "file_too_large", "O arquivo excede 10 MiB.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.put("/intimations/{intimation_id}/file", response_model=IntimationView)
+async def upload_file(intimation_id: Id, request: Request, current: CurrentUser, svc: Intimations) -> IntimationView:
+    """Corpo = bytes do PDF (`Content-Type: application/pdf`); nome de exibição em `X-PrazoAI-File-Name`
+    (UTF-8 codificado em URL). O tipo declarado não basta: o conteúdo é validado no servidor."""
+    if not svc.files_available:
+        raise AppError(503, "file_storage_unavailable", "Armazenamento de arquivos indisponível. Tente novamente.")
+    if (request.headers.get("content-type") or "").split(";")[0].strip().lower() != "application/pdf":
+        raise AppError(415, "file_not_pdf", "Envie o arquivo com Content-Type application/pdf.")
+    raw_name = request.headers.get(FILE_NAME_HEADER)
+    name = unquote(raw_name, errors="replace") if raw_name and len(raw_name) <= 2048 else None
+    data = await _read_limited(request)
+    result = await run_in_threadpool(svc.attach_file, current.user.id, intimation_id, name, data)
+    return intimation_view(result)
+
+
+def _disposition(name: str) -> str:
+    fallback = "".join(ch if 32 <= ord(ch) < 127 and ch not in '"\\;' else "_" for ch in name) or "intimacao.pdf"
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
+
+
+@router.get("/intimations/{intimation_id}/file", response_class=StreamingResponse,
+            responses={200: {"content": {"application/pdf": {}}}})
+def download_file(intimation_id: Id, current: CurrentUser, svc: Intimations) -> StreamingResponse:
+    meta, download = svc.open_file(current.user.id, intimation_id)
+    return StreamingResponse(download.chunks, media_type="application/pdf", headers={
+        "Content-Disposition": _disposition(meta.name),
+        "Content-Length": str(download.size),
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "no-store, private",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+    })
+
+
+@router.get("/deadlines/{deadline_id}/intimation", response_model=IntimationView)
+def linked_intimation(deadline_id: Id, current: CurrentUser, svc: Intimations) -> IntimationView:
+    return intimation_view(svc.linked_to_deadline(current.user.id, deadline_id))
 
 
 # ------------------------------------------------------------------ notificações

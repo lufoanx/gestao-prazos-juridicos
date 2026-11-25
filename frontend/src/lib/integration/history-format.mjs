@@ -41,7 +41,9 @@ export function describeIntimationEvent(event, nameOf) {
   const d = event.details ?? {};
   switch (event.action) {
     case "registered":
-      return `Intimação registrada (somente metadados; arquivo não armazenado)${d.suggestedResponsibleId ? ` · responsável sugerido: ${nameOf(d.suggestedResponsibleId)}` : ""}.`;
+      return `Intimação registrada (metadados)${d.suggestedResponsibleId ? ` · responsável sugerido: ${nameOf(d.suggestedResponsibleId)}` : ""}.`;
+    case "file_stored":
+      return "PDF armazenado em local privado (sem leitura automática).";
     case "draft_updated": {
       const names = Object.keys(d.changes ?? {}).map((k) => DRAFT_FIELD[k] ?? "campo");
       return `Rascunho alterado: ${names.join(", ") || "dados"}.`;

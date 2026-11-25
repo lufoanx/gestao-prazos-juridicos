@@ -1,8 +1,10 @@
 """Intimações e notificações internas (Etapa 5, sem ORM).
 
 Fronteira com etapas futuras:
-- ARQUIVO: só metadados DECLARADOS pelo usuário; `file.storage` é sempre "not_stored".
-  Nenhum PDF é recebido, armazenado ou lido nesta etapa.
+- ARQUIVO: o registro guarda metadados declarados (`file.storage = "not_stored"`). Com o
+  armazenamento de arquivos ligado (doc 28), UM PDF pode ser enviado depois: validado (estrutura
+  básica), guardado em blob privado e publicado aqui (`storage = "stored"`, chave, SHA-256). O
+  conteúdo nunca é interpretado (sem OCR/IA/extração).
 - PROCESSAMENTO: `processing.status = "not_available"`; não há extração, OCR nem IA.
   Estados `processing`/`failed` e sugestões com `source="processing"` estão preparados
   para uma porta futura e só são acionados por operação interna (sem rota HTTP).
@@ -31,7 +33,10 @@ class FileMeta:
     name: str
     size_bytes: int
     content_type: str
-    storage: Literal["not_stored"] = "not_stored"
+    storage: Literal["not_stored", "stored"] = "not_stored"
+    blob_key: str | None = None          # gerada no servidor; nunca exposta pela API
+    sha256: str | None = None
+    stored_at: datetime | None = None
 
 
 @dataclass(frozen=True)

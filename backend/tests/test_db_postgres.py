@@ -147,21 +147,26 @@ def _head_tables() -> list[str]:
     return sorted([*BASE_TABLES, *TABLE_NAMES])
 
 
+def _tables_0002_0003() -> list[str]:
+    """0002 e 0003 têm as 14 tabelas da P2; `file_cleanup` nasce na 0004."""
+    return [t for t in _head_tables() if t != "file_cleanup"]
+
+
 # P2: a revisão head passou de 0001 para 0002 (as 14 tabelas aprovadas). P4: head = 0003 (coluna
-# interna `seq`, sem tabelas novas). As expectativas foram atualizadas para o novo head; os ciclos
-# pedidos na P2 continuam, e o ciclo 0003 ↔ 0002 foi acrescentado. Marcador e objetos externos sobrevivem.
+# interna `seq`, sem tabelas novas). Doc 28: head = 0004 (arquivos das intimações + `file_cleanup`).
+# Os ciclos anteriores continuam e o ciclo 0004 ↔ 0003 foi acrescentado. Marcador e objetos externos sobrevivem.
 def test_alembic_upgrade_downgrade_upgrade_ate_head(pg_clean):
     _migrate(pg_clean, "base", "downgrade")                            # parte de um estado conhecido
     assert _state(pg_clean)[:2] == (BASE_TABLES, None)
     _migrate(pg_clean, "head")
     tables, rev, public = _state(pg_clean)
-    assert rev == "0003"
+    assert rev == "0004"
     assert tables == _head_tables()
     assert public == 0                                                  # nada fora do esquema explícito
     _migrate(pg_clean, "base", "downgrade")
     assert _state(pg_clean)[:2] == (BASE_TABLES, None)                  # marcador preservado
     _migrate(pg_clean, "head")
-    assert _state(pg_clean)[1] == "0003"
+    assert _state(pg_clean)[1] == "0004"
 
 
 def test_banco_sem_historico_de_migrations_vai_ao_head(pg_clean):
@@ -174,7 +179,7 @@ def test_banco_sem_historico_de_migrations_vai_ao_head(pg_clean):
     assert _state(pg_clean)[:2] == ([MARKER_TABLE], None)
     _migrate(pg_clean, "head")
     tables, rev, _ = _state(pg_clean)
-    assert (tables, rev) == (_head_tables(), "0003")
+    assert (tables, rev) == (_head_tables(), "0004")
 
 
 def test_banco_em_0001_avanca_para_0002_e_volta(pg_clean):
@@ -182,15 +187,19 @@ def test_banco_em_0001_avanca_para_0002_e_volta(pg_clean):
     _migrate(pg_clean, "0001")
     assert _state(pg_clean)[:2] == (BASE_TABLES, "0001")
     _migrate(pg_clean, "0002")
-    assert _state(pg_clean)[:2] == (_head_tables(), "0002")
+    assert _state(pg_clean)[:2] == (_tables_0002_0003(), "0002")
     _migrate(pg_clean, "0001", "downgrade")                            # 0002 → 0001
     assert _state(pg_clean)[:2] == (BASE_TABLES, "0001")
     _migrate(pg_clean, "0002")                                          # 0001 → 0002
     assert _state(pg_clean)[1] == "0002"
     _migrate(pg_clean, "0003")                                          # 0002 → 0003 (P4)
-    assert _state(pg_clean)[:2] == (_head_tables(), "0003")
+    assert _state(pg_clean)[:2] == (_tables_0002_0003(), "0003")
     _migrate(pg_clean, "0002", "downgrade")                            # 0003 → 0002
-    assert _state(pg_clean)[:2] == (_head_tables(), "0002")
+    assert _state(pg_clean)[:2] == (_tables_0002_0003(), "0002")
+    _migrate(pg_clean, "0004")                                          # 0002 → 0004 (doc 28)
+    assert _state(pg_clean)[:2] == (_head_tables(), "0004")
+    _migrate(pg_clean, "0003", "downgrade")                            # 0004 → 0003
+    assert _state(pg_clean)[:2] == (_tables_0002_0003(), "0003")
     _migrate(pg_clean, "head")
 
 

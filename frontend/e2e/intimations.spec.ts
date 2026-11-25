@@ -3,18 +3,19 @@
 import { type Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import { BACKEND, backendToken, createOfficeVia, idsOf, joinByInvite, patchMember, personIn } from "./helpers";
+import { syntheticPdf } from "../tests/helpers/pdf.mjs";
 
 test.describe.configure({ mode: "serial" });
 const MEMBER = ["deadline.read", "deadline.create", "deadline.edit", "deadline.complete"];
-const FORBIDDEN_TEXTS = ["PDF enviado", "análise concluída", "extraído por IA", "Extraído por IA"];
+const FORBIDDEN_TEXTS = ["PDF enviado", "análise concluída", "extraído por IA", "Extraído por IA", "livre de malware", "Processando"];
 
-async function registerViaUi(page: Page, f: { file: string; kb?: string; received?: string; suggested?: string }) {
+async function registerViaUi(page: Page, f: { file: string; received?: string; suggested?: string }) {
   await page.goto("/app/intimacoes/upload");
-  await page.getByLabel("Nome do arquivo (.pdf)").fill(f.file);
-  await page.getByLabel("Tamanho declarado (KB)").fill(f.kb ?? "120");
+  // Doc 28: o registro envia um PDF real (sintético). Nome e tamanho vêm do arquivo.
+  await page.getByLabel("Arquivo PDF (até 10 MiB)").setInputFiles({ name: f.file, mimeType: "application/pdf", buffer: syntheticPdf() });
   await page.getByLabel("Recebida em").fill(f.received ?? "2026-11-03");
   if (f.suggested) await page.getByLabel("Responsável sugerido (opcional)").selectOption({ label: f.suggested });
-  await page.getByRole("button", { name: "Registrar metadados" }).click();
+  await page.getByRole("button", { name: "Registrar e enviar PDF" }).click();
   await expect(page).toHaveURL(/\/app\/intimacoes\/(?!upload$)[A-Za-z0-9_-]+$/);   // detalhe, não o formulário
   return page.url().split("/").pop()!;
 }
@@ -49,7 +50,7 @@ async function api(email: string, method: string, path: string, body?: unknown) 
 const FINAL = { caseNumber: "0001234-56.2026", court: "TJSC", practiceArea: "Cível", priority: "normal", startDate: "2026-11-01",
   dueDate: "2026-11-20", countingMode: "business", duration: 10 };
 
-test("pessoal: metadados sem arquivo, rascunho null × omissão, confirmação explícita sem duplicar", async ({ browser }) => {
+test("pessoal: registro com PDF, rascunho null × omissão, confirmação explícita sem duplicar", async ({ browser }) => {
   const ana = await personIn(browser, "Ana Intimações");
   await ana.page.getByRole("button", { name: "Usar ambiente pessoal" }).click();
   const posts: Array<{ url: string; body: string }> = [];
@@ -58,9 +59,10 @@ test("pessoal: metadados sem arquivo, rascunho null × omissão, confirmação e
   const id = await registerViaUi(ana.page, { file: "intimacao-contestacao.pdf" });
   const reg = posts.find((p) => p.url.endsWith("/bff/api/intimations"))!;
   expect(Object.keys(JSON.parse(reg.body)).sort()).toEqual(["contentType", "fileName", "receivedAt", "scope", "sizeBytes"]);   // sem bytes
-  await expect(ana.page.getByText("não é enviado nem armazenado").first()).toBeVisible();
-  await expect(ana.page.getByTestId("storage")).toHaveText("Não armazenado (somente metadados)");
-  await expect(ana.page.getByTestId("processing")).toHaveText("Indisponível nesta fase (sem OCR/IA)");
+  await expect(ana.page.getByText("Preencha os dados do documento. Leitura automática ainda não disponível.").first()).toBeVisible();
+  await expect(ana.page.getByTestId("storage")).toContainText("Armazenado em local privado");
+  await expect(ana.page.getByTestId("processing")).toHaveText("Ainda não disponível (sem OCR/IA): preencha os dados manualmente");
+  expect(posts.some((p) => p.url.endsWith(`/bff/files/intimations/${id}`))).toBe(true);           // PDF pela rota própria
   for (const t of FORBIDDEN_TEXTS) await expect(ana.page.getByText(t)).toHaveCount(0);
 
   const draft = ana.page.getByRole("form", { name: "Rascunho da intimação" });
@@ -71,9 +73,10 @@ test("pessoal: metadados sem arquivo, rascunho null × omissão, confirmação e
   await draft.getByLabel("Horário (opcional)").fill("");
   await draft.getByRole("button", { name: "Salvar rascunho" }).click();
   await expect(ana.page.getByText("Rascunho salvo.")).toBeVisible();
-  const patches = posts.filter((p) => p.url.endsWith(`/intimations/${id}`)).map((p) => JSON.parse(p.body));
-  expect(patches[0]).toEqual({ version: 1, title: "Contestação do rascunho", agendaTime: "09:30" });
-  expect(patches[1]).toEqual({ version: 2, agendaTime: null });                          // null limpa; título omitido = mantido
+  const patches = posts.filter((p) => p.url.endsWith(`/bff/api/intimations/${id}`)).map((p) => JSON.parse(p.body));   // não o PUT binário do PDF
+  // Doc 28: o envio do PDF já gerou a versão 2 da intimação; o rascunho parte dela.
+  expect(patches[0]).toEqual({ version: 2, title: "Contestação do rascunho", agendaTime: "09:30" });
+  expect(patches[1]).toEqual({ version: 3, agendaTime: null });                          // null limpa; título omitido = mantido
 
   await confirmViaUi(ana.page, { title: "Contestação confirmada" });
   await expect(ana.page.getByTestId("confirm-result")).toContainText("Revisão confirmada: prazo criado.");

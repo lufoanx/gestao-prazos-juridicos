@@ -9,8 +9,8 @@ from sqlalchemy import Engine, text
 
 from app.db.config import SCHEMA
 
-#: Revisão Alembic exigida (P4: 0003 — ordem interna `seq` de históricos, eventos e comentários).
-REQUIRED_REVISION = "0003"
+#: Revisão Alembic exigida (0004 — arquivos PDF das intimações; antes, P4: 0003 — `seq`).
+REQUIRED_REVISION = "0004"
 
 
 class SchemaNotReadyError(RuntimeError):

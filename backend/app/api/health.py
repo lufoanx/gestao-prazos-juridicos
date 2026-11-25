@@ -57,4 +57,14 @@ def ready(request: Request) -> JSONResponse:
     if revision != REQUIRED_REVISION:
         get_logger("prazoai.health").warning("readiness_schema_mismatch")
         return JSONResponse({"status": "unavailable", "checks": {"database": "ok", "schema": "fail"}}, status_code=503)
-    return JSONResponse({"status": "ready", "storage": "postgres", "checks": {"database": "ok", "schema": "ok"}})
+    checks = {"database": "ok", "schema": "ok"}
+    files = getattr(request.app.state, "files", None)
+    if files is not None:
+        # Doc 28: container existe e é PRIVADO (público ou ausente → indisponível; nada é criado).
+        try:
+            files.check()
+        except Exception:  # noqa: BLE001 - sem detalhes (conta, container, mensagem do SDK)
+            get_logger("prazoai.health").warning("readiness_file_storage_unavailable")
+            return JSONResponse({"status": "unavailable", "checks": {**checks, "files": "fail"}}, status_code=503)
+        checks["files"] = "ok"
+    return JSONResponse({"status": "ready", "storage": "postgres", "checks": checks})

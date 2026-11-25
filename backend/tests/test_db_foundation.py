@@ -342,7 +342,7 @@ def test_truncate_so_tabelas_do_projeto_qualificadas_e_sem_cascade():
 
     stmt = truncate_statement(metadata)
     assert stmt is not None and stmt.endswith(" RESTRICT") and "CASCADE" not in stmt
-    assert stmt.count('"prazoai".') == len(tables.TABLE_NAMES) == 14
+    assert stmt.count('"prazoai".') == len(tables.TABLE_NAMES) == 15             # 14 (P2) + file_cleanup (0004)
     md = MetaData(schema=SCHEMA)
     Table("a", md, Column("id", Integer, primary_key=True))
     Table("b", md, Column("id", Integer, primary_key=True))
@@ -362,15 +362,17 @@ def test_metadata_unico_com_as_14_tabelas_no_esquema_explicito():
     assert all(t.schema == SCHEMA for t in metadata.tables.values())
 
 
-def test_alembic_tem_0001_intacta_0002_e_0003_explicitas():
+def test_alembic_tem_0001_intacta_0002_0003_e_0004_explicitas():
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(BACKEND / "alembic.ini")))
     revs = {r.revision: r for r in script.walk_revisions()}
-    assert set(revs) == {"0001", "0002", "0003"}
+    assert set(revs) == {"0001", "0002", "0003", "0004"}
     assert revs["0001"].down_revision is None and revs["0002"].down_revision == "0001"
-    assert revs["0003"].down_revision == "0002"
+    assert revs["0003"].down_revision == "0002" and revs["0004"].down_revision == "0003"
+    fourth = (BACKEND / "migrations" / "versions" / "0004_arquivos_intimacoes.py").read_text(encoding="utf-8")
+    assert "from app" not in fourth and "import app" not in fourth and "create_all(" not in fourth
     third = (BACKEND / "migrations" / "versions" / "0003_ordem_interna_eventos.py").read_text(encoding="utf-8")
     assert "from app" not in third and "import app" not in third and "DROP TABLE" not in third
     first = (BACKEND / "migrations" / "versions" / "0001_fundacao.py").read_text(encoding="utf-8")

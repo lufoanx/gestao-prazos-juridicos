@@ -17,6 +17,7 @@ import logging
 import threading
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from typing import Any
 
 from sqlalchemy import Engine
 
@@ -37,8 +38,10 @@ logger = logging.getLogger("prazoai.maintenance")
 
 class OpportunisticMaintenance:
     def __init__(self, engine: Engine, clock: Clock, policy: RetentionPolicy, limits: MaintenanceLimits,
-                 interval_seconds: int, checkpoint: Callable[[str], None] | None = None) -> None:
+                 interval_seconds: int, checkpoint: Callable[[str], None] | None = None,
+                 files: Any = None) -> None:
         self._engine, self._clock, self._policy, self._limits = engine, clock, policy, limits
+        self._files = files                                    # doc 28: limpeza de blobs órfãos (opcional)
         self._interval = timedelta(seconds=interval_seconds)
         self._checkpoint = checkpoint
         self._lock = threading.Lock()
@@ -74,6 +77,10 @@ class OpportunisticMaintenance:
             self.history.append(result)
             del self.history[:-50]
             self.runs += 1
+            if self._files is not None:
+                from app.files.cleanup import run_file_cleanup
+
+                run_file_cleanup(self._engine, self._files, self._clock.now(), max_batches=2)
         except Exception as exc:  # noqa: BLE001 — manutenção nunca derruba a requisição
             logger.warning("maintenance operation=opportunistic failure=%s", type(exc).__name__)
         finally:

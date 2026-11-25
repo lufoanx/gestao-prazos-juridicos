@@ -253,6 +253,7 @@ def test_comando_nao_importa_a_aplicacao_web():
 # ---------------------------------------------------------------- startup
 def test_startup_recusa_revisao_desconhecida_sem_escrita(pg_schema, pg_url, make_app):
     from app.repositories.sql import SchemaNotReadyError
+    from app.repositories.sql.schema_check import REQUIRED_REVISION
 
     with pg_schema.begin() as c:
         c.execute(text("UPDATE prazoai.alembic_version SET version_num = '9999'"))
@@ -264,5 +265,5 @@ def test_startup_recusa_revisao_desconhecida_sem_escrita(pg_schema, pg_url, make
         assert count(pg_schema, "alembic_version", "version_num = '9999'") == before == 1   # nada alterado
     finally:
         with pg_schema.begin() as c:
-            c.execute(text("UPDATE prazoai.alembic_version SET version_num = '0003'"))
+            c.execute(text("UPDATE prazoai.alembic_version SET version_num = :v"), {"v": REQUIRED_REVISION})
     _ = timedelta

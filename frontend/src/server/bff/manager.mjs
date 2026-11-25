@@ -11,7 +11,7 @@
 //   Retry-After), resultado incerto da renovação (sessão local invalidada, novo login);
 // - mutações nunca são repetidas automaticamente; após 401 do backend não há nova tentativa.
 import { isIP } from "node:net";
-import { callBackend } from "./backend-client.mjs";
+import { callBackend, fetchBackendFile } from "./backend-client.mjs";
 import { buildQuery, findRoute, matchAllowlist } from "./allowlist.mjs";
 import {
   CSRF_HEADER, NO_STORE, browserCookie, checkCsrf, clearCookie, newBrowserId, newCookieName, readBrowserId,
@@ -469,6 +469,105 @@ export function createBff({
     return passthrough(r);
   }
 
+  // ------------------------------------------------------------------ arquivo PDF da intimação (doc 28)
+  const FILE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+  const DISPOSITION_RE = /^attachment; filename="[^"\\\r\n]{1,255}"; filename\*=UTF-8''[A-Za-z0-9%._~!*'()-]{1,2048}$/;
+
+  /** Lê o corpo binário com teto aplicado DURANTE a leitura (só nesta rota). */
+  async function readBytes(request, max) {
+    const declared = request.headers.get("content-length");
+    if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > max)) return { tooLarge: true };
+    if (!request.body) return { bytes: new Uint8Array(0) };
+    const reader = request.body.getReader();
+    const chunks = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) { await reader.cancel().catch(() => {}); return { tooLarge: true }; }
+      chunks.push(value);
+    }
+    return { bytes: new Uint8Array(Buffer.concat(chunks)) };
+  }
+
+  async function authorizedSession(request) {
+    const { current } = await resolveCookies(request);
+    if (!current) return { error: err(401, "not_authenticated", "Não autenticado.") };
+    const outcome = await ensureFresh(current.value);
+    if (outcome.state !== "ok") return { error: freshFailure(outcome, current.name) };
+    return { current, session: outcome.session };
+  }
+
+  async function intimationFileUpload(request, intimationId) {
+    if (!FILE_ID_RE.test(intimationId || "")) return err(404, "not_found", "Recurso não encontrado.");
+    if (request.method !== "PUT") return err(405, "method_not_allowed", "Método não permitido.");
+    const denied = guard(request);                                         // Origin + cabeçalho próprio
+    if (denied) return err(denied.status, denied.code, denied.message);
+    if ((request.headers.get("content-type") || "").split(";")[0].trim().toLowerCase() !== "application/pdf") {
+      return err(415, "file_not_pdf", "Envie um arquivo PDF.");
+    }
+    const name = request.headers.get("x-prazoai-file-name") || "";
+    if (name.length > 2048 || !/^[A-Za-z0-9%._~!*'()-]*$/.test(name)) return err(422, "validation_error", "Nome de arquivo inválido.");
+    const auth = await authorizedSession(request);                        // sessão ANTES de ler o corpo
+    if (auth.error) return auth.error;
+    const body = await readBytes(request, config.files.maxBytes);
+    if (body.tooLarge) return err(413, "file_too_large", "O arquivo excede 10 MiB.");
+    const r = await callBackend(ctx, {
+      method: "PUT", path: `/intimations/${intimationId}/file`, token: auth.session.accessToken, clientIp: clientIp(request),
+      raw: { bytes: body.bytes, contentType: "application/pdf", headers: name ? { "x-prazoai-file-name": name } : {} },
+      timeoutMs: config.files.timeoutMs,
+    });
+    if (r.kind === "unreachable") return err(503, "backend_unavailable", "Serviço indisponível. Tente novamente.");
+    if (r.kind === "uncertain") {
+      return json(504, { error: { code: "upstream_timeout", message: "Sem confirmação do envio; confira a intimação antes de repetir." }, outcome: "unknown" });
+    }
+    if (r.status === 401) {
+      await store.delete(auth.current.value);
+      return ended("session_expired", "Sessão encerrada. Entre novamente.", auth.current.name);
+    }
+    log("intimation_file_upload", { result: r.status });                  // nunca nome, conteúdo ou ids de sessão
+    return passthrough(r);
+  }
+
+  async function intimationFileDownload(request, intimationId) {
+    if (!FILE_ID_RE.test(intimationId || "")) return err(404, "not_found", "Recurso não encontrado.");
+    if (request.method !== "GET") return err(405, "method_not_allowed", "Método não permitido.");
+    const denied = guard(request);                                         // exige o cabeçalho próprio (não é link simples)
+    if (denied) return err(denied.status, denied.code, denied.message);
+    const auth = await authorizedSession(request);
+    if (auth.error) return auth.error;
+    const r = await fetchBackendFile(ctx, {
+      path: `/intimations/${intimationId}/file`, token: auth.session.accessToken, clientIp: clientIp(request),
+      timeoutMs: config.files.timeoutMs, maxBytes: config.files.maxBytes,
+    });
+    if (r.kind === "unreachable" || r.kind === "uncertain") return err(503, "backend_unavailable", "Serviço indisponível. Tente novamente.");
+    if (r.kind === "response") {
+      if (r.status === 401) {
+        await store.delete(auth.current.value);
+        return ended("session_expired", "Sessão encerrada. Entre novamente.", auth.current.name);
+      }
+      return passthrough(r);
+    }
+    const disposition = r.headers.get("content-disposition") || "";
+    if (r.headers.get("content-type") !== "application/pdf" || !DISPOSITION_RE.test(disposition)) {
+      r.done();
+      await r.body.cancel().catch(() => {});
+      return err(502, "upstream_error", "Resposta inválida do servidor.");
+    }
+    return new Response(r.body, {
+      status: 200,
+      headers: {
+        ...NO_STORE,
+        "content-type": "application/pdf",
+        "content-disposition": disposition,
+        "content-length": r.headers.get("content-length"),
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; sandbox",
+      },
+    });
+  }
+
   // Recuperação de senha (E4): rotas públicas com as MESMAS proteções (guard, corpo limitado, cliente
   // do backend com destino fixo) e sem nenhum acesso a cookies ou ao armazenamento de sessões.
   const recovery = createPublicRecovery({
@@ -477,6 +576,7 @@ export function createBff({
 
   return {
     register, login, logout, session, proxy, publicInvitationLookup, ensureFresh, CSRF_HEADER,
+    intimationFileUpload, intimationFileDownload,
     passwordStatus: recovery.passwordStatus, passwordForgot: recovery.passwordForgot,
     passwordReset: recovery.passwordReset,
   };

@@ -1,5 +1,9 @@
 # 27 — Implantação: homologação, produção e rollback
 
+> **Atualização (doc 28):** a hospedagem pretendida passou a ser o **Azure**; os PDFs das intimações
+> ficam no Azure Blob Storage privado (requisito hospedado `FILE_STORAGE=azure_blob`) e o esquema exigido
+> passou a `0004`. Os números de testes das §13 referem-se à entrega anterior; os desta estão no doc 28.
+
 > **Situação desta entrega:** **implementado e testado localmente** (recursos descartáveis, dados
 > fictícios). **Nada foi implantado.** O sistema **não está validado para uso real**: os itens da §14
 > só podem ser cumpridos no ambiente hospedado, com provedor de e-mail, domínio e banco definidos
@@ -118,6 +122,9 @@ Navegador ──HTTPS──► Borda/plataforma (TLS, sobrescreve o cabeçalho d
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | credencial **do projeto** no provedor (nunca pessoal) |
 | `LOG_LEVEL` | `INFO` ou `WARNING` (DEBUG recusado) |
 | `WEB_CONCURRENCY` | ausente ou `1` |
+| `FILE_STORAGE` | `azure_blob` (PDF das intimações; doc 28) |
+| `AZURE_STORAGE_CONNECTION_STRING` | segredo; `DefaultEndpointsProtocol=https`, conta real (emulador recusado) |
+| `AZURE_STORAGE_CONTAINER` | container **privado** já criado (`python -m app.files check` = 0) |
 
 Opcionais relevantes: `SMTP_CA_FILE`, `SMTP_TIMEOUT_SECONDS`, `SMTP_SEND_DEADLINE_SECONDS`,
 `AUTH_*` (limites e validades), `DATABASE_POOL_SIZE` (padrão 5), `MAINTENANCE_*`, `RECOVERY_*`
@@ -160,7 +167,7 @@ Opcionais: `PRAZOAI_BFF_DATABASE_POOL_MAX`, `PRAZOAI_BFF_MAX_SESSIONS`, `PRAZOAI
    cd backend
    ENVIRONMENT=staging DATABASE_URL='postgresql+psycopg://prazoai_owner:<senha>@<host>:5432/prazoai_homolog?sslmode=verify-full' \
    PRAZOAI_CONFIRM_MIGRATION_TARGET='<host>:5432/prazoai_homolog' alembic upgrade head
-   ENVIRONMENT=staging DATABASE_URL=... python -m app.db check      # deve mostrar "revisão do esquema: 0003"
+   ENVIRONMENT=staging DATABASE_URL=... python -m app.db check      # deve mostrar "revisão do esquema: 0004"
    ```
 3. Esquema das sessões do BFF — com o papel dono:
    ```bash
@@ -275,7 +282,7 @@ O BFF não tem essa restrição: pode ter várias réplicas e autoescala.
 | Alvo | Rota | Uso |
 |---|---|---|
 | Backend liveness | `GET /api/v1/health` | processo de pé (`storage`, `durable`) |
-| Backend readiness | `GET /api/v1/health/ready` | banco e esquema (`0003`); 503 sem detalhes. **Use GET** (HEAD → 405) |
+| Backend readiness | `GET /api/v1/health/ready` | banco, esquema (`0004`) e container de PDFs existente e privado (`checks.files`); 503 sem detalhes. **Use GET** (HEAD → 405) |
 | BFF | `GET /bff/health` | configuração carregada + armazenamento de sessões acessível; **a versão do esquema `prazoai_bff` é consultada a cada chamada** (somente leitura; nunca cria nem migra). Esquema ausente ou em outra versão → 503 sem detalhes; volta a 200 quando o esquema correto for restaurado por migração explícita |
 | Demo | `GET /` | página estática |
 
@@ -299,12 +306,15 @@ logs de corpo de requisição na plataforma; mascare a query string nos logs de 
 
 1. **Backup**: backups automáticos do provedor (PITR, se disponível) + dump lógico diário do esquema
    do domínio: `pg_dump -Fc --no-owner --schema=prazoai -f prazoai-<data>.dump "<url do papel dono>"`.
-   As sessões do BFF são efêmeras e **não** precisam de backup.
+   As sessões do BFF são efêmeras e **não** precisam de backup. **PDFs das intimações** (doc 28): ative
+   soft delete/versionamento de blobs na conta de armazenamento; o banco guarda chave e SHA-256 de cada
+   arquivo, o que permite conferir a restauração. Restaurar só o banco sem os blobs gera
+   `intimation_file_missing` (502) nos downloads afetados.
 2. **Restauração** (ensaiada localmente, §13.3): restaure num banco **novo** e confira antes de apontar a aplicação:
    ```bash
    createdb <banco_restaurado>
    pg_restore --no-owner --exit-on-error -d "<url do banco restaurado>" prazoai-<data>.dump
-   python -m app.db check                      # revisão 0003
+   python -m app.db check                      # revisão 0004
    ```
    Depois de restaurar, **encerre sessões e tokens** que podem ter sido revogados depois do backup:
    ```sql
@@ -399,7 +409,12 @@ Todos precisam ser verdadeiros, com evidência registrada (data, SHA implantado,
 
 ## 16. Rollback e compatibilidade das migrations
 
-- **Esquema do domínio**: revisão exigida pelo código = `0003` (o app recusa iniciar com outra).
+- **Esquema do domínio**: revisão exigida pelo código = `0004` (doc 28; o app recusa iniciar com outra).
+  **Voltar só a imagem anterior não basta** depois da 0004: ela exige o esquema 0003 e recusa iniciar.
+  O downgrade 0004 → 0003 é **recusado** enquanto houver intimação com PDF armazenado; para esse caso
+  há um rollback de emergência testado (preparar → downgrade → imagem anterior; e, para voltar,
+  upgrade → restaurar): **doc 28, §10**, scripts em `backend/deploy/rollback-0004-*.sql`.
+  Registro histórico da entrega anterior:
   Esta entrega **não** cria migration nova do domínio; voltar para o SHA anterior (`1d6d7fc`) não exige
   downgrade — mas o código anterior **recusa** `ENVIRONMENT=staging|production` com PostgreSQL (é o
   bloqueio removido aqui), então o rollback em ambiente hospedado é para **uma versão anterior desta
@@ -412,7 +427,7 @@ Todos precisam ser verdadeiros, com evidência registrada (data, SHA implantado,
 - **Regras para migrations futuras**: sempre expandir → implantar → contrair (colunas novas opcionais
   primeiro; remoções só depois que nenhuma versão em execução as usa); backup imediatamente antes;
   aplicar em homologação primeiro.
-- Fora de produção, o CI continua exercitando `upgrade`/`downgrade` completos (0003 → 0001 → head).
+- Fora de produção, o CI continua exercitando `upgrade`/`downgrade` completos (0004 → 0003 → 0002 → 0001 → head).
 
 ## 17. Identificação da entrega (SHA)
 

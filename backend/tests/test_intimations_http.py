@@ -26,7 +26,7 @@ def test_registro_somente_metadados_sem_armazenar_nem_processar(env):
     o, oid, ana, *_ = env
     i = register(o, ana)
     assert i["file"] == {"name": "intimacao.pdf", "sizeBytes": 2048, "contentType": "application/pdf",
-                         "storage": "not_stored"}
+                         "storage": "not_stored", "storedAt": None}     # doc 28: storedAt (aditivo)
     assert i["processing"] == {"status": "not_available", "attempts": 0, "failureCode": None}
     assert i["status"] == "awaiting_review" and i["suggestion"] is None
     assert all(v is None for v in i["draft"].values())                     # nada "extraído"

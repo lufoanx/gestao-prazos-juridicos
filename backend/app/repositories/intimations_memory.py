@@ -168,6 +168,19 @@ class MemoryIntimationTransaction:
         self._f.w("events")[event.intimation_id] = self.events(event.intimation_id) + (event,)
         self.touched.add(event.intimation_id)
 
+    # Arquivos exigem STORAGE=postgres (FILE_STORAGE=azure_blob); o serviço recusa antes de chegar aqui.
+    def reserve_file(self, blob_key: str, not_before: datetime) -> None:
+        raise RuntimeError("armazenamento de arquivos exige STORAGE=postgres")
+
+    def release_file_reservation(self, blob_key: str) -> bool:
+        raise RuntimeError("armazenamento de arquivos exige STORAGE=postgres")
+
+    def claim_file_reservation(self, blob_key: str) -> bool:
+        raise RuntimeError("armazenamento de arquivos exige STORAGE=postgres")
+
+    def drop_file_reservation(self, blob_key: str) -> None:
+        raise RuntimeError("armazenamento de arquivos exige STORAGE=postgres")
+
     def validate_capacity(self) -> None:
         lim = self._store.limits
         for key in self.touched_scopes:
