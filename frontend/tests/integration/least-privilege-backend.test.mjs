@@ -60,9 +60,13 @@ async function as(role, fn) {
 const denied = async (role, sql) => {
   await assert.rejects(as(role, (c) => c.query(sql)), (e) => e.code === "42501", `${role} deveria ser recusado: ${sql}`);
 };
+/** Fim da saída de um comando, sem as senhas temporárias desta execução (para mensagens de falha). */
+const tail = (out) => Object.values(PW).reduce((t, pw) => t.replaceAll(pw, "***"), out).slice(-600);
+
 function run(args, env) {
   return new Promise((resolve) => {
-    const p = spawn(PYTHON, args, { cwd: BACKEND_DIR, env: { PATH: process.env.PATH, ENVIRONMENT: "test", ...env },
+    // Ambiente herdado (o Python do CI depende de variáveis como LD_LIBRARY_PATH); destino sempre explícito.
+    const p = spawn(PYTHON, args, { cwd: BACKEND_DIR, env: { ...process.env, ENVIRONMENT: "test", ...env },
       stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     p.stdout.on("data", (d) => { out += d; });
@@ -82,7 +86,7 @@ before(async () => {
   });
   // (1) migrations do backend com o DONO
   const mig = await run(["-m", "alembic", "upgrade", "head"], { DATABASE_URL: urlFor("owner", { driver: "psycopg" }) });
-  assert.equal(mig.code, 0, "alembic com o papel dono");
+  assert.equal(mig.code, 0, `alembic com o papel dono: ${tail(mig.out)}`);
   // (2) esquema do BFF com o DONO
   await as("owner", (c) => migrate(c));
   // (3) privilégios mínimos (arquivo versionado do guia), também com o DONO
@@ -92,7 +96,7 @@ before(async () => {
   // FastAPI com o papel da API
   proc = spawn(PYTHON, ["-m", "uvicorn", "app.main:app", "--port", String(PORT), "--host", "127.0.0.1", "--no-proxy-headers"], {
     cwd: BACKEND_DIR,
-    env: { PATH: process.env.PATH, ENVIRONMENT: "test", STORAGE: "postgres", DATABASE_URL: urlFor("api", { driver: "psycopg" }),
+    env: { ...process.env, ENVIRONMENT: "test", STORAGE: "postgres", DATABASE_URL: urlFor("api", { driver: "psycopg" }),
       AUTH_JWT_SECRET: randomBytes(32).toString("hex"), TRUSTED_PROXY_SECRET: PROXY_SECRET, LOG_LEVEL: "WARNING" },
     stdio: ["ignore", "ignore", "ignore"],
   });
@@ -137,10 +141,10 @@ test("migrations: o papel da API não as executa (sem alteração); a verificaç
   assert.match(down.out, /InsufficientPrivilege|permission denied|must be owner/i);
   assert.equal((await as("owner", (c) => c.query("SELECT version_num FROM prazoai.alembic_version"))).rows[0].version_num, "0003");
   const check = await run(["-m", "app.db", "check"], { DATABASE_URL: urlFor("api", { driver: "psycopg" }) });
-  assert.equal(check.code, 0, "check somente leitura com o papel da API");
+  assert.equal(check.code, 0, `check somente leitura com o papel da API: ${tail(check.out)}`);
   assert.equal(check.out.includes(PW.api), false);
   const purge = await run(["-m", "app.maintenance", "purge"], { STORAGE: "postgres", DATABASE_URL: urlFor("api", { driver: "psycopg" }) });
-  assert.equal(purge.code, 0, "manutenção (DML) com o papel da API");
+  assert.equal(purge.code, 0, `manutenção (DML) com o papel da API: ${tail(purge.out)}`);
   // BFF: verificar o esquema funciona; migrar (DDL) não, com o papel de execução
   await assert.rejects(as("bff", (c) => c.query("ALTER TABLE prazoai_bff.sessions ADD COLUMN x int")), (e) => e.code === "42501");
 });
