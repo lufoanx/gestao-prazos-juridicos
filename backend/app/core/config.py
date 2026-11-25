@@ -120,6 +120,16 @@ def hosted_config_problems(settings: Settings, env: Mapping[str, str] | None = N
             problems.append("SMTP_ALLOW_INSECURE_LOCAL deve ser false")
         if _is_loopback_host((settings.smtp_host or "").strip()):
             problems.append("SMTP_HOST não pode ser loopback (capturador local)")
+    # Arquivos de intimação: Azure Blob privado, por HTTPS, nunca o emulador local.
+    if settings.file_storage != "azure_blob":
+        problems.append("FILE_STORAGE deve ser azure_blob (PDFs das intimações)")
+    elif settings.azure_storage_connection_string is not None:
+        conn = settings.azure_storage_connection_string.get_secret_value()
+        azure = {k.strip().lower(): v.strip() for k, _, v in (p.partition("=") for p in conn.split(";") if p.strip())}
+        if azure.get("defaultendpointsprotocol", "").lower() != "https" or "usedevelopmentstorage" in azure \
+                or azure.get("accountname", "").lower() == "devstoreaccount1" \
+                or any(k.endswith("endpoint") and not azure[k].lower().startswith("https://") for k in azure):
+            problems.append("AZURE_STORAGE_CONNECTION_STRING deve usar https e uma conta real (não o emulador)")
     # Operação.
     if settings.log_level.strip().upper() in {"DEBUG", "NOTSET"}:
         problems.append("LOG_LEVEL não pode ser DEBUG")
@@ -332,6 +342,46 @@ class Settings(BaseSettings):
     recovery_db_statement_timeout_ms: int = Field(
         default=3000, alias="RECOVERY_DB_STATEMENT_TIMEOUT_MS", ge=500, le=60_000
     )
+
+    # --- Arquivos de intimação (PDF) ---
+    # disabled (padrão): upload/download respondem 503 `file_storage_unavailable` (registro só de metadados).
+    # azure_blob: bytes no Azure Blob Storage (container PRIVADO); metadados e vínculo no PostgreSQL
+    # (exige STORAGE=postgres). Obrigatório em staging/production. Ver docs/backend/28-pdf-intimacoes.md.
+    file_storage: str = Field(default="disabled", alias="FILE_STORAGE")
+    # Segredo (somente servidor). Em ambiente hospedado: DefaultEndpointsProtocol=https; nunca o emulador.
+    azure_storage_connection_string: SecretStr | None = Field(default=None, alias="AZURE_STORAGE_CONNECTION_STRING")
+    azure_storage_container: str = Field(default="prazoai-intimacoes", alias="AZURE_STORAGE_CONTAINER")
+    file_storage_timeout_seconds: int = Field(default=20, alias="FILE_STORAGE_TIMEOUT_SECONDS", ge=2, le=120)
+    # Uma reserva de upload não concluída vira limpeza (apaga o blob, se existir) depois deste prazo.
+    file_upload_reservation_seconds: int = Field(
+        default=3600, alias="FILE_UPLOAD_RESERVATION_SECONDS", ge=60, le=24 * 3600
+    )
+
+    @field_validator("azure_storage_container")
+    @classmethod
+    def _valid_container(cls, v: str) -> str:
+        import re
+
+        value = (v or "").strip()
+        if not re.fullmatch(r"[a-z0-9](?!.*--)[a-z0-9-]{1,61}[a-z0-9]", value):
+            raise ValueError("AZURE_STORAGE_CONTAINER inválido (3–63: minúsculas, dígitos e hífen).")
+        return value
+
+    @field_validator("azure_storage_connection_string", mode="before")
+    @classmethod
+    def _empty_azure(cls, v: object) -> object:
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @model_validator(mode="after")
+    def _consistent_files(self) -> Settings:
+        if self.file_storage not in {"disabled", "azure_blob"}:
+            raise ValueError("FILE_STORAGE inválido: use 'disabled' ou 'azure_blob'.")
+        if self.file_storage == "azure_blob":
+            if self.storage != "postgres":
+                raise ValueError("FILE_STORAGE=azure_blob exige STORAGE=postgres (metadados e vínculo no banco).")
+            if self.azure_storage_connection_string is None:
+                raise ValueError("FILE_STORAGE=azure_blob exige AZURE_STORAGE_CONNECTION_STRING.")
+        return self
 
     # --- Manutenção (P5): expurgo global de retenção no PostgreSQL ---
     # Lotes pequenos com FOR UPDATE SKIP LOCKED, transações próprias e curtas (doc 20).

@@ -41,7 +41,11 @@ export function createApiClient({ fetchImpl = (...a) => fetch(...a), base = "" }
   let epoch = 0;
   const pending = new Set();
 
-  async function request(method, path, body) {
+  /**
+   * Núcleo comum: CSRF, mesma origem, sem cache, época e erros categorizados.
+   * `bodyInit`/`headers` já montados pelo chamador; `parse(res)` lê o corpo de sucesso.
+   */
+  async function send(method, path, { body, headers = {} }, parse) {
     if (!path.startsWith("/bff/")) throw new Error("o cliente só fala com o BFF");
     const myEpoch = epoch;
     const ac = new AbortController();
@@ -51,8 +55,8 @@ export function createApiClient({ fetchImpl = (...a) => fetch(...a), base = "" }
       try {
         res = await fetchImpl(base + path, {
           method,
-          headers: { [CSRF_HEADER]: "1", ...(body !== undefined ? { "content-type": "application/json" } : {}) },
-          body: body === undefined ? undefined : JSON.stringify(body),
+          headers: { [CSRF_HEADER]: "1", ...headers },
+          body,
           credentials: "same-origin",
           cache: "no-store",
           signal: ac.signal,
@@ -61,23 +65,53 @@ export function createApiClient({ fetchImpl = (...a) => fetch(...a), base = "" }
         if (myEpoch !== epoch) throw new StaleResponseError();
         throw new ApiError(0, "network_error", "Sem conexão com o servidor.");
       }
-      let data = null;
-      if (res.status !== 204) data = await res.json().catch(() => null);
-      if (myEpoch !== epoch) throw new StaleResponseError();
       if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        if (myEpoch !== epoch) throw new StaleResponseError();
         throw new ApiError(res.status, data?.error?.code || "http_error", data?.error?.message || "Erro inesperado.", {
           retryAfter: res.headers.get("retry-after"),
           outcome: data?.outcome,
         });
       }
-      return data;
+      const value = await parse(res);
+      if (myEpoch !== epoch) throw new StaleResponseError();
+      return value;
+    } catch (e) {
+      if (myEpoch !== epoch && !(e instanceof StaleResponseError)) throw new StaleResponseError();
+      throw e;
     } finally {
       pending.delete(ac);
     }
   }
 
+  function request(method, path, body) {
+    return send(method, path, {
+      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: body !== undefined ? { "content-type": "application/json" } : {},
+    }, async (res) => (res.status === 204 ? null : await res.json().catch(() => null)));
+  }
+
+  /** Envio BINÁRIO (ex.: PDF): corpo e cabeçalhos explícitos; resposta JSON. */
+  function upload(method, path, blob, headers) {
+    return send(method, path, { body: blob, headers }, async (res) => await res.json().catch(() => null));
+  }
+
+  /** Download autenticado (com o cabeçalho anti-CSRF): devolve o Blob e o nome do anexo. */
+  function download(path) {
+    return send("GET", path, {}, async (res) => {
+      const disposition = res.headers.get("content-disposition") || "";
+      const star = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+      const plain = /filename="([^"]*)"/i.exec(disposition);
+      let fileName = plain?.[1] || "documento.pdf";
+      if (star) { try { fileName = decodeURIComponent(star[1]); } catch { /* mantém o simples */ } }
+      return { blob: await res.blob(), fileName, contentType: res.headers.get("content-type") || "" };
+    });
+  }
+
   return {
     request,
+    upload,
+    download,
     get epoch() { return epoch; },
     /** Nova época: aborta pendentes; respostas antigas passam a ser descartadas. */
     bumpEpoch() {

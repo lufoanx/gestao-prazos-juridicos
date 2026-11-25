@@ -53,6 +53,16 @@ const ORG_MESSAGES: Record<string, string> = {
   invalid_state: "A intimação não está mais aguardando revisão (pode ter sido confirmada ou descartada).",
   operational_responsible_required: "O autor não pertence mais ao escritório: a intimação precisa de um responsável sugerido. Seu rascunho foi mantido.",
   processing_unavailable: "Processamento indisponível nesta fase.",
+  // Doc 28: PDF da intimação
+  file_too_large: "O arquivo excede 10 MiB.",
+  file_not_pdf: "O arquivo não é um PDF válido.",
+  file_empty: "O arquivo está vazio.",
+  pdf_invalid: "O PDF está incompleto ou malformado.",
+  pdf_encrypted: "PDFs protegidos por senha não são aceitos nesta versão.",
+  file_already_stored: "Esta intimação já tem um PDF (limite: 1 por intimação).",
+  file_storage_unavailable: "Armazenamento de arquivos indisponível. Tente novamente em instantes.",
+  file_not_found: "Esta intimação não tem PDF armazenado.",
+  file_unavailable: "O arquivo não pôde ser recuperado. Avise o suporte.",
 };
 
 export function orgErrorMessage(e: unknown, fallback?: string): string {

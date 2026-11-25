@@ -109,7 +109,10 @@ test("auditoria 6.4: link ao prazo só pela projeção atual; vínculo ocultado 
 test("histórico de intimação legível e sem identificadores protegidos", () => {
   const nameOf = (id) => ({ u1: "Ana", u2: "Bia" }[id] ?? "Pessoa fora do escritório");
   assert.equal(describeIntimationEvent({ id: "e", actorId: "u1", action: "registered", at: "", details: { fileStorage: "not_stored", suggestedResponsibleId: "u2" } }, nameOf),
-    "Intimação registrada (somente metadados; arquivo não armazenado) · responsável sugerido: Bia.");
+    "Intimação registrada (metadados) · responsável sugerido: Bia.");
+  // Doc 28: envio do PDF aparece no histórico sem nome, conteúdo ou chave do arquivo.
+  assert.equal(describeIntimationEvent({ action: "file_stored", details: { sizeBytes: 10, sha256: "a".repeat(64) } }, nameOf),
+    "PDF armazenado em local privado (sem leitura automática).");
   const hidden = describeIntimationEvent({ id: "e", actorId: "u1", action: "confirmed", at: "", details: { deadlineId: null, deadlineIdHidden: true } }, nameOf);
   assert.match(hidden, /sem permissão de leitura/);
   assert.equal(describeIntimationEvent({ id: "e", actorId: "u1", action: "responsible_suggested", at: "", details: { fromResponsibleId: "u2", toResponsibleId: null } }, nameOf),

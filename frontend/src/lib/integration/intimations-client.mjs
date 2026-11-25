@@ -1,4 +1,5 @@
-// Chamadas da 6.4 ao BFF para intimações. Só METADADOS declarados: nenhum byte do arquivo.
+// Chamadas da 6.4 ao BFF para intimações. O registro leva só metadados; o PDF (doc 28) vai à parte,
+// pela rota binária própria do BFF, e volta como anexo autenticado.
 import { canonicalQuery } from "./deadlines-client.mjs";
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -26,6 +27,12 @@ export function createIntimationsClient(api) {
     /** Confirmação: todos os dados finais explícitos + versão (o servidor não completa nada). */
     confirm: (intimationId, version, data) => api.request("POST", P(`/intimations/${id(intimationId)}/confirm`), { version, ...data }),
     discard: (intimationId, version) => api.request("POST", P(`/intimations/${id(intimationId)}/discard`), { version }),
+    /** Envio do PDF (corpo binário). O servidor valida o conteúdo; tipo/extensão não bastam. */
+    uploadFile: (intimationId, file) => api.upload("PUT", `/bff/files/intimations/${id(intimationId)}`, file,
+      { "content-type": "application/pdf", "x-prazoai-file-name": encodeURIComponent(file.name || "intimacao.pdf") }),
+    downloadFile: (intimationId) => api.download(`/bff/files/intimations/${id(intimationId)}`),
+    /** Intimação vinculada ao prazo (404 se não houver ou se não for visível). */
+    linkedToDeadline: (deadlineId) => api.request("GET", P(`/deadlines/${id(deadlineId)}/intimation`)),
     history: (intimationId, page = 1, perPage = 20) =>
       api.request("GET", withQuery(P(`/intimations/${id(intimationId)}/history`), canonicalQuery({ page, perPage }, ["page", "perPage"]))),
   };

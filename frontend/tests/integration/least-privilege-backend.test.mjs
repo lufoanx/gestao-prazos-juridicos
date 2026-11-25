@@ -124,6 +124,11 @@ test("papéis: API sem acesso às sessões do BFF; BFF sem acesso ao domínio; s
   await denied("bff", "SELECT 1 FROM prazoai.users");
   await denied("bff", "SELECT 1 FROM prazoai.auth_sessions");
   await denied("bff", "SELECT 1 FROM prazoai.deadlines");
+  await denied("bff", "SELECT 1 FROM prazoai.file_cleanup");                // doc 28: fila de arquivos é do domínio
+  // A API usa a fila de limpeza (reserva de upload e gatilho de remoção), sem DDL nela.
+  assert.equal((await as("api", (c) => c.query("SELECT count(*)::int AS n FROM prazoai.file_cleanup"))).rows[0].n, 0);
+  await denied("api", "DROP TRIGGER trg_intimations_file_cleanup ON prazoai.intimations");
+  await denied("api", "ALTER TABLE prazoai.file_cleanup ADD COLUMN x int");
   await denied("api", "CREATE TABLE prazoai.invasora (x int)");
   await denied("bff", "CREATE TABLE prazoai_bff.invasora (x int)");
   await denied("api", "CREATE SCHEMA invasor");
@@ -131,7 +136,7 @@ test("papéis: API sem acesso às sessões do BFF; BFF sem acesso ao domínio; s
   await assert.rejects(as("api", (c) => c.query("DROP TABLE prazoai.users")), (e) => e.code === "42501");
   await assert.rejects(as("bff", (c) => c.query("TRUNCATE prazoai_bff.sessions")), (e) => e.code === "42501");
   // leituras normais de cada papel
-  assert.equal((await as("api", (c) => c.query("SELECT version_num FROM prazoai.alembic_version"))).rows[0].version_num, "0003");
+  assert.equal((await as("api", (c) => c.query("SELECT version_num FROM prazoai.alembic_version"))).rows[0].version_num, "0004");
   assert.equal((await as("bff", (c) => c.query("SELECT version FROM prazoai_bff.schema_version"))).rows[0].version, 1);
 });
 
@@ -139,7 +144,7 @@ test("migrations: o papel da API não as executa (sem alteração); a verificaç
   const down = await run(["-m", "alembic", "downgrade", "0002"], { DATABASE_URL: urlFor("api", { driver: "psycopg" }) });
   assert.notEqual(down.code, 0);
   assert.match(down.out, /InsufficientPrivilege|permission denied|must be owner/i);
-  assert.equal((await as("owner", (c) => c.query("SELECT version_num FROM prazoai.alembic_version"))).rows[0].version_num, "0003");
+  assert.equal((await as("owner", (c) => c.query("SELECT version_num FROM prazoai.alembic_version"))).rows[0].version_num, "0004");
   const check = await run(["-m", "app.db", "check"], { DATABASE_URL: urlFor("api", { driver: "psycopg" }) });
   assert.equal(check.code, 0, `check somente leitura com o papel da API: ${tail(check.out)}`);
   assert.equal(check.out.includes(PW.api), false);

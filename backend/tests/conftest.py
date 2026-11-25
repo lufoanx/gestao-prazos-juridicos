@@ -132,7 +132,7 @@ def make_app(monkeypatch, request):
         pytest.skip("teste específico do armazenamento em memória")
 
     def _make(clock=None, delivery=None, password_hasher=None, responsibility_port=None, processing_port=None,
-              sql_checkpoint=None, maintenance_checkpoint=None, recovery_overrides=None, **env):
+              sql_checkpoint=None, maintenance_checkpoint=None, recovery_overrides=None, file_store=None, **env):
         if sql_mode and not {"STORAGE", "ENVIRONMENT", "AUTH_STORAGE"} & set(env):
             request.getfixturevalue("pg_schema")
             url = request.getfixturevalue("pg_url")
@@ -147,7 +147,7 @@ def make_app(monkeypatch, request):
                 clock=clock, password_reset_delivery=delivery, password_hasher=password_hasher,
                 responsibility_port=responsibility_port, processing_port=processing_port,
                 sql_checkpoint=sql_checkpoint, maintenance_checkpoint=maintenance_checkpoint,
-                recovery_overrides=recovery_overrides,
+                recovery_overrides=recovery_overrides, file_store=file_store,
             )
             created.append(app)
             if sql_mode:

@@ -7,6 +7,8 @@ export interface Bff {
   session(r: Request): Promise<Response>;
   proxy(r: Request, path: string): Promise<Response>;
   publicInvitationLookup(r: Request): Promise<Response>;
+  intimationFileUpload(r: Request, intimationId: string): Promise<Response>;
+  intimationFileDownload(r: Request, intimationId: string): Promise<Response>;
   passwordStatus(r: Request): Promise<Response>;
   passwordForgot(r: Request): Promise<Response>;
   passwordReset(r: Request): Promise<Response>;

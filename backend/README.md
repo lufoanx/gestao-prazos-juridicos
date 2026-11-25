@@ -246,4 +246,8 @@ Copie `.env.example` para `.env` (em desenvolvimento nenhum segredo é obrigató
   (Issue #2). Não contempla recesso forense, feriados estaduais/municipais nem
   calendários de tribunais — ver `docs/backend/05-calculo-de-prazos.md`.
 - Swagger/OpenAPI em `/docs` e `/openapi.json` apenas em development/test (nunca em homologação ou produção).
-- Disponibilidade: `GET /api/v1/health` (processo de pé) e `GET /api/v1/health/ready` (banco e esquema; 503 sem detalhes).
+- Disponibilidade: `GET /api/v1/health` (processo de pé) e `GET /api/v1/health/ready` (banco, esquema e, com
+  `FILE_STORAGE=azure_blob`, container privado de PDFs; 503 sem detalhes).
+- PDF das intimações (doc 28): `PUT`/`GET /api/v1/intimations/{id}/file` e `GET /api/v1/deadlines/{id}/intimation`;
+  bytes no Azure Blob privado (Azurite nos testes), metadados no PostgreSQL (migration 0004). Sem OCR/IA:
+  o prazo é preenchido e confirmado manualmente. Comandos: `python -m app.files check|create-container|cleanup`.

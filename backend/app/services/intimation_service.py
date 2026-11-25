@@ -12,10 +12,13 @@ Ordem das verificações: leitura (404) → permissões e regras de atribuição
 """
 from __future__ import annotations
 
+import hashlib
+import unicodedata
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from datetime import timedelta
 from typing import Any
 
 from app.core.clock import Clock
@@ -33,6 +36,14 @@ from app.domain.intimations import (
     Suggestion,
 )
 from app.domain.org import Membership
+from app.files.pdf import PdfRejected, validate_pdf
+from app.files.storage import (
+    BlobDownload,
+    BlobStore,
+    FileStorageUnavailable,
+    StoredFileMissing,
+    new_blob_key,
+)
 from app.policies import deadlines as dl_policy
 from app.policies import intimations as policy
 from app.policies.org import NOT_FOUND
@@ -62,13 +73,35 @@ class ConfirmResult:
     created: bool
 
 
+def safe_file_name(raw: str | None) -> str:
+    """Nome só para EXIBIÇÃO e download (nunca caminho): sem diretórios, controles ou barras; ≤255; .pdf."""
+    name = unicodedata.normalize("NFC", raw or "")
+    name = name.replace("\\", "/").rsplit("/", 1)[-1]
+    name = "".join(ch for ch in name if unicodedata.category(ch)[0] != "C").strip().strip(".")
+    if not name:
+        name = "intimacao.pdf"
+    if not name.lower().endswith(".pdf"):
+        name = f"{name[:251]}.pdf"
+    return name[-255:] if len(name) > 255 else name
+
+
+_STORAGE_DOWN = ("file_storage_unavailable", "Armazenamento de arquivos indisponível. Tente novamente.")
+
+
 class IntimationService:
     def __init__(
-        self, *, unit_of_work: UnitOfWork, clock: Clock, processing: ProcessingPort | None = None
+        self, *, unit_of_work: UnitOfWork, clock: Clock, processing: ProcessingPort | None = None,
+        files: BlobStore | None = None, file_reservation_seconds: int = 3600,
     ) -> None:
         self._uow = unit_of_work
         self._clock = clock
         self._processing: ProcessingPort = processing or ProcessingNotAvailable()
+        self._files = files
+        self._reservation = timedelta(seconds=file_reservation_seconds)
+
+    @property
+    def files_available(self) -> bool:
+        return self._files is not None
 
     # ------------------------------------------------------------------ helpers
     @contextmanager
@@ -333,3 +366,104 @@ class IntimationService:
             tx.intimations.put(updated)
             self._event(tx, updated, SYSTEM_ACTOR, f"processing_{outcome}")
             return updated
+
+    # ------------------------------------------------------------------ arquivo PDF (doc 28)
+    def _require_files(self) -> BlobStore:
+        if self._files is None:
+            raise AppError(503, *_STORAGE_DOWN)
+        return self._files
+
+    @staticmethod
+    def _accepts_file(i: Intimation) -> None:
+        if i.file.storage == "stored":
+            raise AppError(409, "file_already_stored", "Esta intimação já tem um PDF (limite: 1 por intimação).")
+        if not i.pending:
+            raise AppError(409, "invalid_state", "Só intimações pendentes de revisão recebem PDF.")
+
+    def _authorize_write(
+        self, tx: UnitTransaction, actor_id: str, intimation_id: str
+    ) -> tuple[Intimation, Membership | None]:
+        i, m = self._readable(tx, actor_id, intimation_id)                       # 404
+        if (den := policy.check_write(actor_id, m, i, self.linked_responsible(tx, i))):
+            ops.raise_denial(den)                                               # 403
+        return i, m
+
+    def attach_file(self, actor_id: str, intimation_id: str, file_name: str | None, data: bytes) -> IntimationResult:
+        """Valida → reserva (transação) → grava o blob → publica e libera a reserva (transação).
+
+        Nunca há metadado `stored` sem blob: a publicação só ocorre depois do upload confirmado, na
+        mesma transação que consome a reserva. Falha depois do upload: o blob é apagado na melhor
+        tentativa e, de qualquer forma, a reserva vencida leva a limpeza a apagá-lo.
+        """
+        store = self._require_files()
+        try:
+            validate_pdf(data)                       # antes de tocar a intimação: não revela existência
+        except PdfRejected as exc:
+            raise AppError(exc.status, exc.code, exc.message) from None
+        key = new_blob_key()
+        sha256 = hashlib.sha256(data).hexdigest()
+        with self._unit() as tx:
+            i, _ = self._authorize_write(tx, actor_id, intimation_id)
+            self._accepts_file(i)
+            tx.intimations.reserve_file(key, tx.now + self._reservation)
+        try:
+            store.put(key, data)
+        except FileStorageUnavailable:
+            self._discard_blob(store, key)
+            logger.warning("intimation_file_store_failed intimation_id=%s", intimation_id)
+            raise AppError(503, *_STORAGE_DOWN) from None
+        try:
+            with self._unit() as tx:
+                i, m = self._authorize_write(tx, actor_id, intimation_id)
+                self._accepts_file(i)
+                if not tx.intimations.release_file_reservation(key):
+                    raise AppError(503, *_STORAGE_DOWN)
+                updated = replace(
+                    i, version=i.version + 1, updated_at=tx.now,
+                    file=FileMeta(safe_file_name(file_name), len(data), "application/pdf", "stored",
+                                  blob_key=key, sha256=sha256, stored_at=tx.now),
+                )
+                tx.intimations.put(updated)
+                self._event(tx, updated, actor_id, "file_stored", sizeBytes=len(data), sha256=sha256)
+                result = self._result(tx, actor_id, m, updated)
+        except BaseException:
+            self._discard_blob(store, key)
+            raise
+        logger.info("intimation_file_stored intimation_id=%s size=%s", intimation_id, len(data))
+        return result
+
+    @staticmethod
+    def _discard_blob(store: BlobStore, key: str) -> None:
+        try:
+            store.delete(key)
+        except Exception:  # noqa: BLE001 - a reserva vencida garante a limpeza posterior
+            logger.warning("intimation_file_discard_deferred")
+
+    def open_file(self, actor_id: str, intimation_id: str) -> tuple[FileMeta, BlobDownload]:
+        store = self._require_files()
+        with self._read() as tx:
+            i, _ = self._readable(tx, actor_id, intimation_id)                   # mesmas regras de leitura
+        if i.file.storage != "stored" or not i.file.blob_key:
+            raise AppError(404, "file_not_found", "Esta intimação não tem PDF armazenado.")
+        try:
+            download = store.open(i.file.blob_key)
+        except StoredFileMissing:
+            logger.error("intimation_file_missing intimation_id=%s", intimation_id)
+            raise AppError(502, "file_unavailable", "O arquivo não pôde ser recuperado.") from None
+        except FileStorageUnavailable:
+            raise AppError(503, *_STORAGE_DOWN) from None
+        if download.size != i.file.size_bytes:
+            logger.error("intimation_file_size_mismatch intimation_id=%s", intimation_id)
+            raise AppError(502, "file_unavailable", "O arquivo não pôde ser recuperado.")
+        return i.file, download
+
+    def linked_to_deadline(self, actor_id: str, deadline_id: str) -> IntimationResult:
+        """Intimação vinculada ao prazo, se o solicitante puder ler AMBOS (senão 404)."""
+        with self._read() as tx:
+            m = tx.org.membership_of_user(actor_id)
+            if ops.visible_ref(tx, actor_id, m, "deadline", deadline_id) is None:
+                ops.raise_denial(NOT_FOUND)
+            i = tx.intimations.by_deadline(deadline_id)
+            if i is None or not policy.can_read(actor_id, m, i, self.linked_responsible(tx, i)):
+                raise AppError(404, "not_found", "Nenhuma intimação vinculada visível.")
+            return self._result(tx, actor_id, m, i)

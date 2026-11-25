@@ -10,6 +10,7 @@ export interface BffConfig {
   };
   timeoutMs: number;
   maxBodyBytes: number;
+  files: { maxBytes: number; timeoutMs: number };
   proxySecret: string;
   clientIpHeader: string;
   sessionStore: { kind: "memory" | "postgres"; target: string | null; poolMax: number };

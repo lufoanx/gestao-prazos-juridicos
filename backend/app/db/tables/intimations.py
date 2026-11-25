@@ -1,4 +1,4 @@
-"""Intimações (somente metadados declarados) e eventos: intimations, intimation_events."""
+"""Intimações (metadados; PDF opcional no Azure Blob — migration 0004), eventos e fila de limpeza de arquivos."""
 from __future__ import annotations
 
 from sqlalchemy import (
@@ -20,7 +20,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.db.config import SCHEMA
 from app.db.metadata import metadata
-from app.db.tables._types import SCOPE_SHAPE_SQL, instant, scope_columns, uuid_fk, uuid_pk
+from app.db.tables._types import SCOPE_SHAPE_SQL, UtcInstant, instant, scope_columns, uuid_fk, uuid_pk
 
 PENDING_SQL = "status IN ('processing', 'awaiting_review', 'failed')"
 
@@ -32,6 +32,9 @@ intimations = Table(
     Column("file_size_bytes", Integer, nullable=False),
     Column("file_content_type", Text, nullable=False),
     Column("file_storage", Text, nullable=False, server_default=text("'not_stored'")),
+    Column("file_blob_key", Text, nullable=True),                        # 0004: chave gerada no servidor
+    Column("file_sha256", Text, nullable=True),
+    instant("file_stored_at", nullable=True),
     Column("received_at", Date, nullable=False),                         # data CIVIL
     Column("status", Text, nullable=False),
     Column("processing_status", Text, nullable=False, server_default=text("'not_available'")),
@@ -61,7 +64,13 @@ intimations = Table(
     CheckConstraint("char_length(file_name) BETWEEN 1 AND 255", name="file_name_length"),
     CheckConstraint("file_size_bytes BETWEEN 1 AND 10485760", name="file_size_range"),
     CheckConstraint("file_content_type = 'application/pdf'", name="file_content_type_pdf"),
-    CheckConstraint("file_storage = 'not_stored'", name="file_not_stored"),
+    CheckConstraint("file_storage IN ('not_stored', 'stored')", name="file_storage_valid"),
+    CheckConstraint("(file_storage = 'stored') = (file_blob_key IS NOT NULL AND file_sha256 IS NOT NULL "
+                    "AND file_stored_at IS NOT NULL)", name="file_stored_complete"),
+    CheckConstraint("file_blob_key IS NULL OR file_blob_key ~ '^intimations/[0-9a-f]{32}[.]pdf$'",
+                    name="file_blob_key_shape"),
+    CheckConstraint("file_sha256 IS NULL OR file_sha256 ~ '^[0-9a-f]{64}$'", name="file_sha256_shape"),
+    UniqueConstraint("file_blob_key", name="uq_intimations_file_blob_key"),
     CheckConstraint("status IN ('processing', 'awaiting_review', 'failed', 'reviewed', 'discarded')",
                     name="status_valid"),
     CheckConstraint("processing_status IN ('not_available', 'pending', 'completed', 'failed')",
@@ -111,3 +120,16 @@ intimation_events = Table(
 )
 Index("ix_intimation_events_intimation_id_at", intimation_events.c.intimation_id, intimation_events.c.at,
       intimation_events.c.id)
+
+
+# 0004: blobs a remover (reserva de upload não concluída ou intimação apagada — gatilho no banco).
+file_cleanup = Table(
+    "file_cleanup", metadata,
+    Column("blob_key", Text, primary_key=True),
+    Column("reason", Text, nullable=False),
+    instant("not_before"),
+    Column("created_at", UtcInstant(), nullable=False, server_default=text("now()")),
+    CheckConstraint("reason IN ('upload_pending', 'intimation_deleted')", name="reason_valid"),
+    CheckConstraint("blob_key ~ '^intimations/[0-9a-f]{32}[.]pdf$'", name="blob_key_shape"),
+)
+Index("ix_file_cleanup_not_before", file_cleanup.c.not_before)

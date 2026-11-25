@@ -1,10 +1,12 @@
 """Intimações (somente metadados), rascunhos, eventos e vínculo com prazo (implementa `IntimationTransaction`)."""
 from __future__ import annotations
 
-from sqlalchemy import insert, select
+from datetime import datetime
+
+from sqlalchemy import delete, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.db.tables import intimation_events, intimations
+from app.db.tables import file_cleanup, intimation_events, intimations
 from app.domain.deadlines import Scope
 from app.domain.intimations import Intimation, IntimationEvent
 from app.repositories.sql.domain.mapping import (
@@ -77,3 +79,16 @@ class SqlIntimationTransaction:
             id=U(event.id), intimation_id=U(event.intimation_id), actor_id=actor_in(event.actor_id),
             action=event.action, at=event.at, details=json_details(event.details)))
         self._c.touched_intimations.add(U(event.intimation_id))
+
+    # ------------------------------------------------------------------ arquivos (0004)
+    def reserve_file(self, blob_key: str, not_before: datetime) -> None:
+        self._c.require_write()
+        self._c.conn.execute(insert(file_cleanup).values(blob_key=blob_key, reason="upload_pending",
+                                                          not_before=not_before))
+
+    def release_file_reservation(self, blob_key: str) -> bool:
+        """Remove a reserva (mesma transação que publica o arquivo). False: a limpeza já a consumiu."""
+        self._c.require_write()
+        r = self._c.conn.execute(delete(file_cleanup).where(file_cleanup.c.blob_key == blob_key,
+                                                             file_cleanup.c.reason == "upload_pending"))
+        return r.rowcount == 1

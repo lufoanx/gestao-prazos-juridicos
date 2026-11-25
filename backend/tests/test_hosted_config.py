@@ -28,6 +28,7 @@ SMTP_PASSWORD = "senha-smtp-ficticia-" + secrets.token_hex(8)
 JWT = secrets.token_urlsafe(48)
 PROXY = secrets.token_urlsafe(48)
 DB_PASSWORD = "senha-db-ficticia-" + secrets.token_hex(8)
+AZ_KEY = "chave-azure-ficticia-" + secrets.token_hex(8)
 
 
 def hosted_env(environment: str = "production", **over: str | None) -> dict[str, str]:
@@ -47,6 +48,11 @@ def hosted_env(environment: str = "production", **over: str | None) -> dict[str,
         "SMTP_USERNAME": "usuario-smtp",
         "SMTP_PASSWORD": SMTP_PASSWORD,
         "LOG_LEVEL": "INFO",
+        # Doc 28: PDFs no Azure Blob privado (conta FICTÍCIA; nada é contatado nos testes sem banco).
+        "FILE_STORAGE": "azure_blob",
+        "AZURE_STORAGE_CONNECTION_STRING": "DefaultEndpointsProtocol=https;AccountName=contaficticia;"
+                                           f"AccountKey={AZ_KEY};EndpointSuffix=core.windows.net",
+        "AZURE_STORAGE_CONTAINER": "prazoai-intimacoes",
     }
     for k, v in over.items():
         if v is None:
@@ -71,8 +77,10 @@ def test_configuracao_completa_ficticia_passa(environment):
 
 
 CASES = [
-    ({"STORAGE": "memory"}, "STORAGE deve ser postgres"),
-    ({"STORAGE": None}, "STORAGE deve ser postgres"),
+    # Isolado do requisito de arquivos (que, sozinho, já exige STORAGE=postgres nas Settings):
+    ({"STORAGE": "memory", "FILE_STORAGE": "disabled"}, "STORAGE deve ser postgres"),
+    ({"STORAGE": None, "FILE_STORAGE": "disabled"}, "STORAGE deve ser postgres"),
+    ({"STORAGE": "memory"}, "exige STORAGE=postgres"),
     ({"AUTH_ENABLED": "false", "OFFICES_ENABLED": "false"}, "AUTH_ENABLED deve ser true"),
     ({"OFFICES_ENABLED": "false"}, "OFFICES_ENABLED"),
     ({"DATABASE_URL": None}, "DATABASE_URL é obrigatória"),
@@ -91,6 +99,14 @@ CASES = [
     ({"SMTP_HOST": "127.0.0.1"}, "SMTP_HOST não pode ser loopback"),
     ({"SMTP_HOST": "localhost"}, "SMTP_HOST não pode ser loopback"),
     ({"LOG_LEVEL": "DEBUG"}, "LOG_LEVEL"),
+    ({"FILE_STORAGE": "disabled"}, "FILE_STORAGE deve ser azure_blob"),
+    ({"FILE_STORAGE": None, "AZURE_STORAGE_CONNECTION_STRING": None}, "FILE_STORAGE deve ser azure_blob"),
+    ({"AZURE_STORAGE_CONNECTION_STRING": "DefaultEndpointsProtocol=http;AccountName=contaficticia;"
+                                         f"AccountKey={AZ_KEY};EndpointSuffix=core.windows.net"}, "https"),
+    ({"AZURE_STORAGE_CONNECTION_STRING": "UseDevelopmentStorage=true"}, "não o emulador"),
+    ({"AZURE_STORAGE_CONNECTION_STRING": "DefaultEndpointsProtocol=https;AccountName=devstoreaccount1;"
+                                         f"AccountKey={AZ_KEY};BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1"},
+     "não o emulador"),
     ({"AUTH_STORAGE": "memory"}, "AUTH_STORAGE"),
 ]
 
@@ -113,7 +129,7 @@ def test_requisito_ausente_ou_inseguro_e_recusado(environment, over, fragment):
         with pytest.raises(HostedConfigError) as hosted:
             ensure_hosted_requirements(settings, env={})
         text = str(hosted.value)
-    for secret in (SMTP_PASSWORD, JWT, PROXY, DB_PASSWORD):
+    for secret in (SMTP_PASSWORD, JWT, PROXY, DB_PASSWORD, AZ_KEY):
         assert secret not in text
 
 
@@ -194,6 +210,13 @@ def hosted_db():
     return HOSTED_DB
 
 
+class PrivateContainerStub:
+    """Dublê do Azure Blob (só `check`): os testes de arquivos reais usam o Azurite (test_intimation_files)."""
+
+    def check(self):
+        return None
+
+
 def _app(monkeypatch, environment, db_url, **over):
     from app.main import create_app
 
@@ -202,7 +225,8 @@ def _app(monkeypatch, environment, db_url, **over):
     monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
     get_settings.cache_clear()
     try:
-        return create_app()
+        # O armazenamento de arquivos real (Azure) não é contatado: dublê que confirma container privado.
+        return create_app(file_store=PrivateContainerStub())
     finally:
         get_settings.cache_clear()
 
@@ -219,7 +243,7 @@ def test_app_hospedada_real(monkeypatch, hosted_db, environment):
             assert client.get(path).status_code == 404, path
         assert client.get("/api/v1/health").json()["durable"] is True
         ready = client.get("/api/v1/health/ready")
-        assert ready.status_code == 200 and ready.json()["checks"] == {"database": "ok", "schema": "ok"}
+        assert ready.status_code == 200 and ready.json()["checks"] == {"database": "ok", "schema": "ok", "files": "ok"}
         # IP do cliente: só pelo intermediário com segredo; X-Forwarded-For e segredo errado são ignorados.
         pw = "Senha-forte-hospedada-123"
         body = lambda n: {"name": "Pessoa Ficticia", "email": f"p{n}-{environment}@exemplo.com", "password": pw}  # noqa: E731
@@ -261,5 +285,5 @@ def test_readiness_indisponivel_sem_detalhes(monkeypatch, hosted_db):
                                                          "checks": {"database": "ok", "schema": "fail"}}
         finally:
             with engine.begin() as conn:
-                conn.execute(text("UPDATE prazoai.alembic_version SET version_num = '0003'"))
+                conn.execute(text("UPDATE prazoai.alembic_version SET version_num = '0004'"))
             engine.dispose()

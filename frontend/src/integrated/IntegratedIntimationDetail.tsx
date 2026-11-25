@@ -14,7 +14,7 @@ import type { Intimation, IntimationEventPage } from "@/lib/integration/dto.d.mt
 import { DeadlineFields, draftToInput, validateDraft, type DeadlineDraft } from "./DeadlineFields";
 import { useResource } from "./useResource";
 import { ScopeGate, ScopeMismatchNotice, useInvalidateDeadlines } from "./deadlineShared";
-import { IntimationStatusBadge, MetadataOnlyNotice, announceNotificationsChanged, formatBytes, useIntimationContext } from "./intimationShared";
+import { DownloadPdfButton, IntimationStatusBadge, ManualReviewNotice, announceNotificationsChanged, formatBytes, localPdfProblem, useIntimationContext } from "./intimationShared";
 import { Card, Notice, PageHead, ResourceState, fmtDate, useMutation } from "./ui";
 import { useOrg } from "./OrgProvider";
 import { cacheKey } from "@/lib/integration/query-cache.mjs";
@@ -62,13 +62,18 @@ function DetailView({ intimationId }: { intimationId: string }) {
               {result.text}{link.href ? <> <Link href={link.href}>Abrir o prazo</Link></> : null}
             </p>
           ) : null}
-          <MetadataOnlyNotice />
-          <Card title="Metadados declarados">
+          <ManualReviewNotice />
+          <Card title="Documento e metadados">
             <div style={{ marginBottom: 8 }}><IntimationStatusBadge status={i.status} /></div>
             <dl style={{ display: "grid", gridTemplateColumns: "max-content 1fr", gap: "4px 16px", margin: 0 }}>
               <dt>Arquivo</dt><dd>{i.file.name} · {formatBytes(i.file.sizeBytes)} · {i.file.contentType}</dd>
-              <dt>Armazenamento</dt><dd data-testid="storage">{i.file.storage === "not_stored" ? "Não armazenado (somente metadados)" : i.file.storage}</dd>
-              <dt>Processamento</dt><dd data-testid="processing">{i.processing.status === "not_available" ? "Indisponível nesta fase (sem OCR/IA)" : i.processing.status}</dd>
+              <dt>PDF</dt>
+              <dd data-testid="storage">
+                {i.file.storage === "stored"
+                  ? <>Armazenado em local privado <DownloadPdfButton intimationId={i.id} /></>
+                  : "PDF não enviado"}
+              </dd>
+              <dt>Leitura automática</dt><dd data-testid="processing">{i.processing.status === "not_available" ? "Ainda não disponível (sem OCR/IA): preencha os dados manualmente" : i.processing.status}</dd>
               <dt>Recebida em</dt><dd>{formatCivilDate(i.receivedAt)}</dd>
               <dt>Registrada por</dt><dd>{nameOf(i.createdBy)} em {fmtDate(i.createdAt)}</dd>
               <dt>Responsável sugerido</dt><dd data-testid="suggested">{i.suggestedResponsibleId ? nameOf(i.suggestedResponsibleId) : "Nenhum"}</dd>
@@ -80,6 +85,7 @@ function DetailView({ intimationId }: { intimationId: string }) {
               </dd>
             </dl>
           </Card>
+          {caps.canEditDraft && i.file.storage !== "stored" ? <UploadSection i={i} reload={res.reload} /> : null}
           {caps.canEditDraft ? <DraftSection i={i} reload={res.reload} /> : null}
           {caps.canConfirm ? <ConfirmSection i={i} reload={res.reload} onResult={setResult} /> : null}
           {caps.canDiscard ? <DiscardSection i={i} reload={res.reload} /> : null}
@@ -275,6 +281,34 @@ function HistorySection({ i }: { i: Intimation }) {
           <Pagination page={data.page} pageCount={Math.max(1, Math.ceil(data.total / data.perPage))} onPage={setPage} />
         </>
       )}</ResourceState>
+    </Card>
+  );
+}
+
+/** Envio do PDF quando a intimação ainda não tem arquivo (1 por intimação; validação real no servidor). */
+function UploadSection({ i, reload }: { i: Intimation; reload: () => void }) {
+  const { intimations } = useIntimationContext();
+  const [file, setFile] = useState<File | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const m = useMutation();
+  async function send(e: React.FormEvent) {
+    e.preventDefault();
+    if (!file) { setProblem("Selecione o PDF."); return; }
+    const local = localPdfProblem(file);
+    setProblem(local);
+    if (local) return;
+    const r = await m.run(() => intimations.uploadFile(i.id, file));
+    if (r.ok) reload();
+  }
+  return (
+    <Card title="Enviar o PDF">
+      <form onSubmit={send} aria-label="Enviar PDF da intimação">
+        <label className="field__label" htmlFor="pdf-later">Arquivo PDF (até 10 MiB)</label>
+        <input id="pdf-later" type="file" accept="application/pdf,.pdf" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setProblem(null); }} />
+        {problem ? <p className="field__error" role="alert">{problem}</p> : null}
+        {m.error ? <Notice kind="error">{m.error}</Notice> : null}
+        <Button type="submit" disabled={m.busy}>{m.busy ? "Enviando…" : "Enviar PDF"}</Button>
+      </form>
     </Card>
   );
 }

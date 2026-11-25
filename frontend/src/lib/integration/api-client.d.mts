@@ -10,6 +10,8 @@ export class ApiError extends Error {
 export class StaleResponseError extends Error {}
 export interface ApiClient {
   request<T = unknown>(method: string, path: string, body?: unknown): Promise<T>;
+  upload<T = unknown>(method: string, path: string, body: Blob, headers: Record<string, string>): Promise<T>;
+  download(path: string): Promise<{ blob: Blob; fileName: string; contentType: string }>;
   readonly epoch: number;
   bumpEpoch(): void;
 }

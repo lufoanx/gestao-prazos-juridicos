@@ -140,6 +140,11 @@ export function loadBffConfig(env = process.env) {
     }),
     timeoutMs: int(env, "PRAZOAI_BFF_TIMEOUT_MS", 10000, 100, 60000),
     maxBodyBytes: int(env, "PRAZOAI_BFF_MAX_BODY_BYTES", 64 * 1024, 1024, 1024 * 1024),
+    // Doc 28: SÓ as rotas de arquivo de intimação aceitam corpo maior (PDF ≤ 10 MiB, igual ao backend).
+    files: Object.freeze({
+      maxBytes: 10 * 1024 * 1024,
+      timeoutMs: int(env, "PRAZOAI_BFF_FILE_TIMEOUT_MS", 60000, 1000, 300000),
+    }),
     proxySecret,
     clientIpHeader,
     sessionStore: Object.freeze({
