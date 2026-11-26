@@ -80,6 +80,23 @@ export function loadBffConfig(env = process.env) {
   if (["x-forwarded-for", "forwarded"].includes(clientIpHeader)) {
     throw new Error("Use um cabeçalho sobrescrito pela infraestrutura, não X-Forwarded-For/Forwarded.");
   }
+  // Fonte do IP do cliente (doc 27, §9):
+  //   header (padrão)               → cabeçalho dedicado que a borda SOBRESCREVE (PRAZOAI_TRUSTED_CLIENT_IP_HEADER);
+  //   x-forwarded-for-rightmost     → SÓ o último item de X-Forwarded-For, para bordas que ACRESCENTAM o IP
+  //                                   real ao fim da lista (ex.: Azure Container Apps). Itens anteriores
+  //                                   podem ter sido forjados pelo visitante e são ignorados.
+  const clientIpSourceRaw = (env.PRAZOAI_TRUSTED_CLIENT_IP_SOURCE || "header").trim().toLowerCase();
+  if (!["header", "x-forwarded-for-rightmost"].includes(clientIpSourceRaw)) {
+    throw new Error("PRAZOAI_TRUSTED_CLIENT_IP_SOURCE inválido (header|x-forwarded-for-rightmost).");
+  }
+  const xffRightmost = clientIpSourceRaw === "x-forwarded-for-rightmost";
+  if (xffRightmost && clientIpHeader) {
+    throw new Error("PRAZOAI_TRUSTED_CLIENT_IP_SOURCE=x-forwarded-for-rightmost não usa PRAZOAI_TRUSTED_CLIENT_IP_HEADER: remova-o.");
+  }
+  if (xffRightmost && !proxySecret) {
+    throw new Error("PRAZOAI_TRUSTED_CLIENT_IP_SOURCE=x-forwarded-for-rightmost exige PRAZOAI_PROXY_SECRET.");
+  }
+  const clientIpSource = xffRightmost ? "x-forwarded-for-rightmost" : (clientIpHeader ? "header" : "none");
 
   // ---- requisitos de ambiente HOSPEDADO (homologação e produção): falha ao iniciar se faltar algo ----
   const privateBackend = env.PRAZOAI_BACKEND_PRIVATE_NETWORK === "true";
@@ -88,8 +105,9 @@ export function loadBffConfig(env = process.env) {
   }
   if (hosted) {
     if (isLoopback) throw new Error(`PRAZOAI_APP_ORIGIN não pode ser loopback em PRAZOAI_APP_ENV=${appEnv}.`);
-    if (!proxySecret || !clientIpHeader) {
+    if (!proxySecret || clientIpSource === "none") {
       throw new Error("Ambiente hospedado exige PRAZOAI_PROXY_SECRET e PRAZOAI_TRUSTED_CLIENT_IP_HEADER "
+        + "(ou PRAZOAI_TRUSTED_CLIENT_IP_SOURCE=x-forwarded-for-rightmost) "
         + "(sem eles os limites por IP do backend ficam compartilhados entre todos os visitantes).");
     }
     if (backend.protocol !== "https:" && !privateBackend) {
@@ -147,6 +165,7 @@ export function loadBffConfig(env = process.env) {
     }),
     proxySecret,
     clientIpHeader,
+    clientIpSource,
     sessionStore: Object.freeze({
       kind: storeKind,
       target: storeTarget,                         // host:porta/banco, sem credenciais
