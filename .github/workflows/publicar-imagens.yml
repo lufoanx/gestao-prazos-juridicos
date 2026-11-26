@@ -1,0 +1,79 @@
+# Publica as imagens Docker de produção no GitHub Container Registry (GHCR) — doc 27.
+#
+# Quando: depois que o workflow "CI" termina COM SUCESSO num push para main (ou manualmente).
+# O quê:  ghcr.io/<dono>/prazoai-backend   (backend/Dockerfile, sem alterações)
+#         ghcr.io/<dono>/prazoai-frontend  (frontend/Dockerfile com NEXT_PUBLIC_PRAZOAI_MODE=integrated)
+# Tags:   o SHA completo do commit (imutável, usado na implantação) e "latest".
+#
+# Nenhum segredo entra nas imagens: tudo é configurado em execução no Azure Container Apps.
+# A implantação no Azure é feita por comando explícito (az containerapp update --image ...:<sha>),
+# porque a conta institucional não permite credenciais do Azure para o GitHub Actions.
+name: Publicar imagens
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publicar-imagens
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    # Automático só quando o CI passou num push para main; manual sempre (a partir do main).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do commit aprovado pelo CI
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Nomes das imagens
+        id: nomes
+        run: |
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          sha="$(git rev-parse HEAD)"
+          echo "backend=ghcr.io/${owner}/prazoai-backend" >> "$GITHUB_OUTPUT"
+          echo "frontend=ghcr.io/${owner}/prazoai-frontend" >> "$GITHUB_OUTPUT"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Backend — build e push
+        run: |
+          docker build -t "${{ steps.nomes.outputs.backend }}:${{ steps.nomes.outputs.sha }}" \
+                       -t "${{ steps.nomes.outputs.backend }}:latest" backend
+          docker push "${{ steps.nomes.outputs.backend }}:${{ steps.nomes.outputs.sha }}"
+          docker push "${{ steps.nomes.outputs.backend }}:latest"
+
+      - name: Frontend (integrado) — build e push
+        run: |
+          docker build --build-arg NEXT_PUBLIC_PRAZOAI_MODE=integrated \
+                       -t "${{ steps.nomes.outputs.frontend }}:${{ steps.nomes.outputs.sha }}" \
+                       -t "${{ steps.nomes.outputs.frontend }}:latest" frontend
+          docker push "${{ steps.nomes.outputs.frontend }}:${{ steps.nomes.outputs.sha }}"
+          docker push "${{ steps.nomes.outputs.frontend }}:latest"
+
+      - name: Resumo
+        run: |
+          {
+            echo "### Imagens publicadas"
+            echo ""
+            echo "- \`${{ steps.nomes.outputs.backend }}:${{ steps.nomes.outputs.sha }}\`"
+            echo "- \`${{ steps.nomes.outputs.frontend }}:${{ steps.nomes.outputs.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
