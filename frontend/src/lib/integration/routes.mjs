@@ -2,9 +2,9 @@
 // Integrado: autenticação, sessão, perfil. Os demais módulos mostram "ainda não integrado"
 // (sem dados demonstrativos). Recursos inexistentes mostram "indisponível nesta fase".
 // 6.1: conta/sessão/perfil. 6.2: escritório, equipe, onboarding, convite (#TOKEN) e solicitação.
-// 6.3: prazos (lista, cadastro, detalhe, edição) e calendário.
+// 6.3: prazos (lista, cadastro, detalhe, edição) e calendário. Dashboard: totais do servidor.
 export const INTEGRATED_APP_ROUTES = Object.freeze([
-  "/app", "/app/perfil", "/app/escritorio", "/app/escritorio/equipe", "/app/prazos", "/app/prazos/novo", "/app/calendario",
+  "/app", "/app/dashboard", "/app/perfil", "/app/escritorio", "/app/escritorio/equipe", "/app/prazos", "/app/prazos/novo", "/app/calendario",
   // 6.4: intimações e notificações.
   "/app/intimacoes", "/app/intimacoes/upload", "/app/notificacoes",
 ]);
