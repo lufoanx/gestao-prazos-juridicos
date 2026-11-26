@@ -438,3 +438,49 @@ test("auditoria 6.3: detalhe aberto, perda de deadline.read e resposta antiga pa
   await ana.context.close();
   await bia.context.close();
 });
+
+test("dashboard: totais, urgentes e agenda vêm do servidor, no ambiente selecionado", async ({ browser }) => {
+  const ana = await personIn(browser, "Ana Painel");
+  await ana.page.getByRole("button", { name: "Usar ambiente pessoal" }).click();
+  const ref: string = await ana.page.evaluate(async () =>
+    (await (await fetch("/bff/api/deadlines?scope=personal&perPage=1", { headers: { "x-prazoai-csrf": "1" } })).json()).referenceDate);
+  const shift = (n: number) => {                       // data civil + n dias (sem fuso)
+    const [y, m, dd] = ref.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, dd + n)).toISOString().slice(0, 10);
+  };
+  const start = shift(-40);
+  await seedDeadlines(ana.email, 1, { title: "Painel vencido", startDate: start, dueDate: shift(-2) });
+  await seedDeadlines(ana.email, 1, { title: "Painel hoje", startDate: start, dueDate: ref, agendaTime: "09:30" });
+  await seedDeadlines(ana.email, 1, { title: "Painel próximo", startDate: start, dueDate: shift(2) });
+  await seedDeadlines(ana.email, 1, { title: "Painel futuro", startDate: start, dueDate: shift(30) });
+
+  await ana.page.goto("/app/dashboard");
+  await expect(ana.page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect(ana.page.getByTestId("stat-overdue")).toHaveText("1");
+  await expect(ana.page.getByTestId("stat-today")).toHaveText("1");
+  await expect(ana.page.getByTestId("stat-soon")).toHaveText("1");
+  await expect(ana.page.getByTestId("stat-open")).toHaveText("4");
+  await expect(ana.page.getByTestId("stat-totals")).toHaveText("0 concluído(s) · 4 no total");
+  const urgent = ana.page.getByTestId("urgent-list");
+  await expect(urgent.getByText("Painel vencido")).toBeVisible();
+  await expect(urgent.getByText("Painel hoje")).toBeVisible();
+  await expect(urgent.getByText("Painel próximo")).toBeVisible();
+  await expect(urgent.getByText("Painel futuro")).toHaveCount(0);
+  const agenda = ana.page.getByTestId("agenda-list");
+  await expect(agenda.getByText("09:30")).toBeVisible();
+  await expect(agenda.getByText("Painel hoje")).toBeVisible();
+  await expect(ana.page.getByTestId("review-list").getByText("Nada para revisar")).toBeVisible();
+  for (const t of DEMO_TEXTS) await expect(ana.page.getByText(t)).toHaveCount(0);
+
+  // Concluir um prazo pela tela reflete no painel (cache invalidado após a mutação).
+  await urgent.getByText("Painel vencido").click();
+  await expect(ana.page.getByRole("heading", { name: "Painel vencido" })).toBeVisible();
+  await ana.page.getByRole("button", { name: "Concluir" }).click();
+  await ana.page.getByRole("button", { name: "Concluir", exact: true }).last().click();
+  await expect(ana.page.getByText("Status: Concluído.")).toBeVisible();
+  await ana.page.getByRole("link", { name: "Dashboard", exact: true }).click();
+  await expect(ana.page.getByTestId("stat-overdue")).toHaveText("0");
+  await expect(ana.page.getByTestId("stat-open")).toHaveText("3");
+  await expect(ana.page.getByTestId("stat-totals")).toHaveText("1 concluído(s) · 4 no total");
+  await ana.context.close();
+});
