@@ -139,6 +139,7 @@ Opcionais relevantes: `SMTP_CA_FILE`, `SMTP_TIMEOUT_SECONDS`, `SMTP_SEND_DEADLIN
 | `PRAZOAI_BACKEND_URL` | execução | HTTPS do backend, ou URL interna + `PRAZOAI_BACKEND_PRIVATE_NETWORK=true` |
 | `PRAZOAI_PROXY_SECRET` | execução | = `TRUSTED_PROXY_SECRET` |
 | `PRAZOAI_TRUSTED_CLIENT_IP_HEADER` | execução | cabeçalho que a **borda sobrescreve** com o IP do cliente (nunca `X-Forwarded-For`/`Forwarded`) |
+| `PRAZOAI_TRUSTED_CLIENT_IP_SOURCE` | execução | `header` (padrão: usa o cabeçalho acima) ou `x-forwarded-for-rightmost` — só para bordas que **acrescentam** o IP real ao **fim** do `X-Forwarded-For` (ex.: Azure Container Apps); lê **apenas o último item** e dispensa `PRAZOAI_TRUSTED_CLIENT_IP_HEADER` |
 | `PRAZOAI_BFF_SESSION_STORE` | execução | `postgres` |
 | `PRAZOAI_BFF_DATABASE_URL` | execução | `postgresql://prazoai_bff_app:<senha>@<host>:<porta>/<banco>?sslmode=verify-full` |
 | `PRAZOAI_BFF_SESSION_KEY` | execução | 32 bytes aleatórios em base64url (`node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`) |
@@ -247,6 +248,10 @@ repetição automática (doc 22, §12.5).
   plataforma/CDN — escolha um que o visitante não consiga injetar). O BFF repassa esse valor ao backend
   com `X-PrazoAI-Proxy-Secret`; o backend ignora `X-Forwarded-For` e roda com `--no-proxy-headers`.
   **Validar na homologação** (§14, H5): um cabeçalho forjado pelo navegador não pode alterar o IP visto.
+  Em plataformas **sem** cabeçalho sobrescrito, mas que acrescentam o IP real ao fim do `X-Forwarded-For`
+  (Azure Container Apps: só o item mais à direita é fornecido pela plataforma), use
+  `PRAZOAI_TRUSTED_CLIENT_IP_SOURCE=x-forwarded-for-rightmost`: o BFF lê **só o último item** e ignora os
+  anteriores (forjáveis); se o último não for um IP válido, nada é repassado. A mesma validação H5 se aplica.
 - **Limitadores de taxa** (cadastro, login, recuperação, redefinição, convites) ficam **em memória no
   backend**. Com a topologia proposta (uma instância, um worker, IP real via BFF) eles são globais e
   por cliente. Limitações aceitas e documentadas: (1) reinício do backend zera os contadores;

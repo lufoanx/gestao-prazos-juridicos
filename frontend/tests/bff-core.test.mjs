@@ -114,6 +114,26 @@ test("config: IP do cliente só por cabeçalho de infraestrutura explícito e co
   assert.throws(() => loadBffConfig({ ...ENV, PRAZOAI_PROXY_SECRET: "curto" }));
   const ok = loadBffConfig({ ...ENV, PRAZOAI_PROXY_SECRET: "s".repeat(40), PRAZOAI_TRUSTED_CLIENT_IP_HEADER: "x-real-ip" });
   assert.equal(ok.clientIpHeader, "x-real-ip");
+  assert.equal(ok.clientIpSource, "header");
+  assert.equal(loadBffConfig(ENV).clientIpSource, "none");
+});
+
+test("config: modo x-forwarded-for-rightmost (borda que acrescenta o IP, ex.: Azure Container Apps)", () => {
+  const XFF = { PRAZOAI_TRUSTED_CLIENT_IP_SOURCE: "x-forwarded-for-rightmost" };
+  const ok = loadBffConfig({ ...ENV, ...XFF, PRAZOAI_PROXY_SECRET: "s".repeat(40) });
+  assert.equal(ok.clientIpSource, "x-forwarded-for-rightmost");
+  assert.equal(ok.clientIpHeader, "");
+  assert.throws(() => loadBffConfig({ ...ENV, ...XFF }));                                         // sem segredo
+  assert.throws(() => loadBffConfig({ ...ENV, ...XFF, PRAZOAI_PROXY_SECRET: "s".repeat(40),
+    PRAZOAI_TRUSTED_CLIENT_IP_HEADER: "x-real-ip" }));                                             // ambíguo
+  assert.throws(() => loadBffConfig({ ...ENV, PRAZOAI_TRUSTED_CLIENT_IP_SOURCE: "x-forwarded-for",
+    PRAZOAI_PROXY_SECRET: "s".repeat(40) }));                                                      // valor inválido
+  // Hospedado: o modo substitui o cabeçalho dedicado; sem nenhum dos dois continua recusado.
+  for (const appEnv of ["staging", "production"]) {
+    const hosted = loadBffConfig({ ...HOSTED, PRAZOAI_APP_ENV: appEnv, PRAZOAI_TRUSTED_CLIENT_IP_HEADER: undefined, ...XFF });
+    assert.equal(hosted.clientIpSource, "x-forwarded-for-rightmost");
+    assert.throws(() => loadBffConfig({ ...HOSTED, PRAZOAI_APP_ENV: appEnv, PRAZOAI_TRUSTED_CLIENT_IP_HEADER: undefined }));
+  }
 });
 
 // ---------------------------------------------------------------- armazenamento
@@ -404,6 +424,28 @@ test("IP do cliente: sem configuração nada é encaminhado; com infraestrutura 
   assert.equal(env.backend.calls.at(-1).headers["x-prazoai-proxy-secret"], "s".repeat(40));
   await env.bff.login(req("POST", "/bff/auth/login", { body: { email: "a@b.com", password: "x" }, headers: { "x-real-ip": "1.2.3.4, 5.6.7.8" } }));
   assert.equal(env.backend.calls.at(-1).headers["x-prazoai-client-ip"], undefined);
+  // Modo padrão (cabeçalho dedicado): X-Forwarded-For nunca é lido.
+  await env.bff.login(req("POST", "/bff/auth/login", { body: { email: "a@b.com", password: "x" }, headers: { "x-forwarded-for": "203.0.113.9" } }));
+  assert.equal(env.backend.calls.at(-1).headers["x-prazoai-client-ip"], undefined);
+});
+
+test("IP do cliente (x-forwarded-for-rightmost): só o último item, que a borda acrescenta; forjados ignorados", async () => {
+  const env = setup({ PRAZOAI_PROXY_SECRET: "s".repeat(40), PRAZOAI_TRUSTED_CLIENT_IP_SOURCE: "x-forwarded-for-rightmost" });
+  const sent = async (headers) => {
+    await env.bff.login(req("POST", "/bff/auth/login", { body: { email: "a@b.com", password: "x" }, headers }));
+    return env.backend.calls.at(-1).headers["x-prazoai-client-ip"];
+  };
+  assert.equal(await sent({ "x-forwarded-for": "203.0.113.5" }), "203.0.113.5");
+  assert.equal(env.backend.calls.at(-1).headers["x-prazoai-proxy-secret"], "s".repeat(40));
+  // Visitante forja um valor; a borda acrescenta o IP real no fim: vale só o último.
+  assert.equal(await sent({ "x-forwarded-for": "6.6.6.6, 203.0.113.5" }), "203.0.113.5");
+  assert.equal(await sent({ "x-forwarded-for": "6.6.6.6,7.7.7.7,  2001:db8::1 " }), "2001:db8::1");
+  // Último item inválido ou ausente: nada é encaminhado (nunca cai para um item anterior).
+  assert.equal(await sent({ "x-forwarded-for": "203.0.113.5, nao-e-ip" }), undefined);
+  assert.equal(await sent({ "x-forwarded-for": "203.0.113.5," }), undefined);
+  assert.equal(await sent({}), undefined);
+  // Outros cabeçalhos de IP não têm efeito neste modo.
+  assert.equal(await sent({ "x-real-ip": "6.6.6.6" }), undefined);
 });
 
 test("capacidade do BFF: novo login recusado com 503 e tokens revogados no backend", async () => {

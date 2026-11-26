@@ -55,8 +55,15 @@ export function createBff({
   const log = (event, fields = {}) => logger.info?.(`bff_${event}`, fields); // nunca tokens ou ids de sessão
 
   function clientIp(request) {
-    if (!config.clientIpHeader) return undefined;
-    const value = (request.headers.get(config.clientIpHeader) || "").trim();
+    let value;
+    if (config.clientIpSource === "x-forwarded-for-rightmost") {
+      // Só o ÚLTIMO item: é o que a borda acrescentou. Os anteriores podem vir do visitante.
+      const list = request.headers.get("x-forwarded-for") || "";
+      value = list.split(",").at(-1);
+    } else if (config.clientIpHeader) {
+      value = request.headers.get(config.clientIpHeader);
+    }
+    value = (value || "").trim();
     return isIP(value) ? value : undefined;
   }
 
