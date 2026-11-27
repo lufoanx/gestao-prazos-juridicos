@@ -52,7 +52,7 @@ export function DeadlineForm({ initial, candidates, submitLabel, onCancel, onSub
       responsibleId: f.responsibleId || undefined, priority: f.priority as "normal" | "high",
       startDate: f.startDate || today, dueDate: f.dueDate,
       countingMode: f.countingMode as "business" | "calendar",
-      duration: Math.max(0, parseInt(f.duration || "0", 10) || 0),
+      duration: Math.max(0, Number.parseInt(f.duration || "0", 10) || 0),
       agendaTime: f.agendaTime || undefined,
     });
   }

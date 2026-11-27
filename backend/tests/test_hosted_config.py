@@ -201,7 +201,9 @@ def hosted_db():
         conn.execute(text("DROP SCHEMA IF EXISTS prazoai CASCADE"))
     engine.dispose()
     target = f"{url.host}:{url.port or 5432}/{url.database}"
-    env = {"PATH": "/usr/bin:/bin", **hosted_env("staging", DATABASE_URL=HOSTED_DB)}
+    # PGPASSWORD (se houver) é a senha do banco DESCARTÁVEL do CI, entregue fora da URL (libpq a lê).
+    pg_env = {k: os.environ[k] for k in ("PGPASSWORD",) if k in os.environ}
+    env = {"PATH": "/usr/bin:/bin", **pg_env, **hosted_env("staging", DATABASE_URL=HOSTED_DB)}
     out = subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=BACKEND,
                          env={**env, "PRAZOAI_CONFIRM_MIGRATION_TARGET": target}, capture_output=True, text=True,
                          timeout=120)

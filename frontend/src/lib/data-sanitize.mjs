@@ -36,7 +36,7 @@ const isIntimation = (i) => !!i && isStr(i.id) && isValidScope(i.scope) && isStr
   && INTIMATION_STATUS.has(i.status) && isStr(i.receivedAt);
 
 function keepValid(list, pred) {
-  return isArr(list) ? list.filter(pred) : [];
+  return isArr(list) ? list.filter((item) => pred(item)) : [];
 }
 
 /**

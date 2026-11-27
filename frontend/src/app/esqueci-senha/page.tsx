@@ -4,8 +4,7 @@ import Link from "next/link";
 import { Info, MailCheck } from "lucide-react";
 import { AuthShell } from "@/components/public/AuthShell";
 import { Input, Button } from "@/components/ui";
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import { EMAIL_RE } from "@/lib/email-format";
 
 export default function EsqueciSenhaPage() {
   const [email, setEmail] = useState("");

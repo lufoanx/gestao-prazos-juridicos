@@ -60,7 +60,7 @@ export function paginate(list, page = 1, perPage = 8) {
 }
 
 export function distinctAreas(list) {
-  return [...new Set(list.map((d) => d.practiceArea).filter(Boolean))].sort();
+  return [...new Set(list.map((d) => d.practiceArea).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR"));
 }
 
 /** Matriz do mês (6 semanas × 7 dias, domingo→sábado) de datas civis. */

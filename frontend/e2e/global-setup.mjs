@@ -73,7 +73,7 @@ export default async function globalSetup() {
   const held = [];
   const proxy = createServer((req, res) => {
     if (req.url?.startsWith("/__e2e/")) {
-      const url = new URL(req.url, "http://x");
+      const url = new URL(req.url, "http://localhost");
       if (url.pathname === "/__e2e/hold") holds.add(url.searchParams.get("path"));
       if (url.pathname === "/__e2e/release") { holds.clear(); held.splice(0).forEach((go) => go()); }
       res.writeHead(200, { "content-type": "application/json" });

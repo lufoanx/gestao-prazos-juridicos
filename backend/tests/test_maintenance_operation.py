@@ -189,7 +189,8 @@ def test_sql_notificacoes_lidas_removidas_apos_retencao_sem_recriar(pg_app, pg_s
 
 # ---------------------------------------------------------------- comando real
 def _cmd(env_extra: dict, *args: str) -> tuple[int, dict, str]:
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "ENVIRONMENT": "test", **env_extra}
+    pg_env = {k: os.environ[k] for k in ("PGPASSWORD",) if k in os.environ}   # senha do banco descartável do CI
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "ENVIRONMENT": "test", **pg_env, **env_extra}
     out = subprocess.run([sys.executable, "-m", "app.maintenance", "purge", *args], cwd=BACKEND,
                          capture_output=True, text=True, timeout=120, env=env)
     payload = json.loads(out.stdout.strip().splitlines()[-1]) if out.stdout.strip() else {}
@@ -216,7 +217,9 @@ def test_comando_real_codigos_de_saida_e_contagens(pg_schema, pg_url):
     code, out, err = _cmd(pg, "--batch-size", "2")
     assert code == 0 and out["status"] == "ok" and out["complete"] is True
     assert out["removed"] == {"notifications_read": 2, "join_requests": 1}  # o restante do parcial anterior
-    assert out["total"] == 3 and out["interrupted"] is False and pg_url.password not in (err + json.dumps(out))
+    db_secret = pg_url.password or os.environ.get("PGPASSWORD")         # na URL ou fora dela (CI)
+    assert out["total"] == 3 and out["interrupted"] is False
+    assert not db_secret or db_secret not in (err + json.dumps(out))
     assert count(pg_schema, "notifications") == 0
     code, out, _ = _cmd({"STORAGE": "memory"})
     assert code == 3 and out["status"] == "memory_storage"

@@ -1,5 +1,7 @@
 # PrazoAI — Gestão de prazos jurídicos
 
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=lufoanx_gestao-prazos-juridicos&metric=alert_status)](https://sonarcloud.io/summary/overall?id=lufoanx_gestao-prazos-juridicos)
+
 O PrazoAI ajuda profissionais autônomos e equipes de advocacia a cadastrar, priorizar e acompanhar prazos em um só lugar. É um projeto acadêmico de Engenharia de Software da Católica SC (Joinville).
 
 **Site oficial (Azure): [prazoai.online](https://prazoai.online)** — crie uma conta com e-mail e senha ou entre com Google.
@@ -34,7 +36,7 @@ O calendário organiza vencimentos informados pelo usuário. Os indicadores de u
 | `backend/` | Python e FastAPI. Expõe a API versionada, aplica regras de negócio e verifica permissões. |
 | Banco | PostgreSQL com migrações Alembic (esquema `prazoai`) e sessões do BFF cifradas (esquema `prazoai_bff`), com um usuário de banco por função (privilégios mínimos). |
 | Arquivos | Azure Blob Storage privado para os PDFs das intimações. |
-| `.github/` | GitHub Actions: `ci.yml` (testes de backend, frontend, integração, E2E e Docker) e `publicar-imagens.yml` (imagens no GHCR após o CI no `main`). |
+| `.github/` | GitHub Actions: `ci.yml` (testes de backend, frontend, integração, E2E e Docker) e `publicar-imagens.yml` (imagens no GHCR, chamado pelo último job do CI num push para o `main`). |
 | `docs/` | Proposta, requisitos, diagramas e documentação técnica. |
 
 [Diagrama de contexto](docs/diagramas/contexto-c4.png) · [Diagrama de contêineres](docs/diagramas/containers-c4.png)
@@ -82,7 +84,7 @@ Antes de receber dados reais de clientes: rotina de backup e restauração testa
 - [Frontend](frontend/README.md) e [backend](backend/README.md)
 - [Recuperação de senha: operação e demonstração local](docs/backend/22-operacao-recuperacao-senha.md)
 - [Ambientes pessoal e escritório](docs/backend/26-fluxos-pessoal-escritorio.md)
-- [Implantação: homologação e produção](docs/backend/27-implantacao-homologacao-producao.md) · [PDF das intimações](docs/backend/28-pdf-intimacoes.md) · [Implantação no Azure](docs/backend/29-implantacao-azure.md) · [Entrar com Google](docs/backend/30-login-google.md)
+- [Implantação: homologação e produção](docs/backend/27-implantacao-homologacao-producao.md) · [PDF das intimações](docs/backend/28-pdf-intimacoes.md) · [Implantação no Azure](docs/backend/29-implantacao-azure.md) · [Entrar com Google](docs/backend/30-login-google.md) · [Qualidade (SonarQube)](docs/backend/31-qualidade-sonar.md)
 
 ## Autor
 

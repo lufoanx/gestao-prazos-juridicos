@@ -16,3 +16,4 @@ htmlcov/
 # Ambiente
 .env
 !.env.example
+*.lock.tmp
