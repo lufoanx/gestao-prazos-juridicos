@@ -287,3 +287,14 @@ def test_readiness_indisponivel_sem_detalhes(monkeypatch, hosted_db):
             with engine.begin() as conn:
                 conn.execute(text("UPDATE prazoai.alembic_version SET version_num = '0004'"))
             engine.dispose()
+
+
+# ------------------------------------------------------------------ Entrar com Google (doc 30)
+def test_google_client_id_e_aceito_em_producao():
+    assert problems_for(hosted_env(GOOGLE_CLIENT_ID="123-abc.apps.googleusercontent.com")) == []
+
+
+@pytest.mark.parametrize("var", ["GOOGLE_JWKS_URL", "GOOGLE_ISSUER"])
+def test_enderecos_de_teste_do_google_recusados_em_producao(var):
+    found = problems_for(hosted_env(GOOGLE_CLIENT_ID="123-abc.apps.googleusercontent.com", **{var: "http://127.0.0.1:1/x"}))
+    assert any("GOOGLE_JWKS_URL/GOOGLE_ISSUER" in p for p in found)

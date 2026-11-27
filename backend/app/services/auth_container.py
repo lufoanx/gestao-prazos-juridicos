@@ -147,5 +147,13 @@ def build_auth_container(
         reset_limiter=limiter(settings.auth_reset_max_requests, settings.auth_reset_window_seconds),
         refresh_ttl_seconds=settings.auth_refresh_token_ttl_seconds,
     )
+    if settings.google_client_id:
+        from app.security.google_id_token import GOOGLE_ISSUERS, GOOGLE_JWKS_URL, GoogleIdTokenVerifier
+
+        service.attach_google(GoogleIdTokenVerifier(
+            settings.google_client_id,
+            jwks_url=settings.google_jwks_url or GOOGLE_JWKS_URL,
+            issuers=(settings.google_issuer,) if settings.google_issuer else GOOGLE_ISSUERS,
+        ))
     return AuthContainer(service=service, store=store, clock=clock, ephemeral_secret=ephemeral, users=users,
                          resets=resets, storage=settings.storage, engine=engine)

@@ -15,3 +15,5 @@ alembic==1.20.1
 psycopg[binary]==3.3.8
 # Arquivos de intimação (doc 28): Azure Blob Storage (Azurite nos testes)
 azure-storage-blob==12.31.1
+# Entrar com Google (doc 30): assinatura RS256 do ID token (PyJWT usa esta biblioteca; já vinha pelo azure-storage-blob)
+cryptography==50.0.2

@@ -117,7 +117,8 @@ test("módulos não integrados não exibem dados demonstrativos; recursos inexis
   await page.goto("/app");
   await logout(page);
   await page.goto("/login");
-  await expect(page.getByRole("button", { name: /Entrar com Google — indisponível/ })).toBeDisabled();
+  // Entrar com Google agora é real (coberto em auth-google.spec.ts).
+  await expect(page.getByTestId("google-login")).toBeVisible();
 });
 
 test("credenciais inválidas e validações de senha", async ({ page }) => {

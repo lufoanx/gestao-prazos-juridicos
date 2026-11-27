@@ -2,7 +2,7 @@
 
 O PrazoAI ajuda profissionais autônomos e equipes de advocacia a cadastrar, priorizar e acompanhar prazos em um só lugar. É um projeto acadêmico de Engenharia de Software da Católica SC (Joinville).
 
-**Site oficial (Azure): [prazoai.online](https://prazoai.online)** — crie uma conta com e-mail e senha.
+**Site oficial (Azure): [prazoai.online](https://prazoai.online)** — crie uma conta com e-mail e senha ou entre com Google.
 
 **[Demonstração sem login (Vercel)](https://prazoai-homolog.vercel.app/)** → clique em **Ver o dashboard** para explorar com dados fictícios.
 
@@ -14,9 +14,9 @@ Use apenas dados fictícios. Não envie documentos de clientes, dados de process
 | --- | --- |
 | Demo pública na Vercel | Dashboard, prazos, calendário e navegação com dados fictícios. Não usa a API, o banco ou o e-mail do ambiente integrado. |
 | Modo integrado local | O mesmo código da produção, para desenvolvimento e testes, com PostgreSQL, Mailpit e Azurite locais. |
-| Produção integrada (Azure) | Publicada em [prazoai.online](https://prazoai.online): cadastro, login, recuperação de senha por e-mail real (Resend, SPF/DKIM/DMARC), dashboard com totais do servidor, prazos, calendário, escritórios e equipe, intimações com PDF privado (Azure Blob, até 10 MiB), notificações. Detalhes em [docs/backend/29-implantacao-azure.md](docs/backend/29-implantacao-azure.md). |
+| Produção integrada (Azure) | Publicada em [prazoai.online](https://prazoai.online): cadastro, login (e-mail e senha ou Google), recuperação de senha por e-mail real (Resend, SPF/DKIM/DMARC), dashboard com totais do servidor, prazos, calendário, escritórios e equipe, intimações com PDF privado (Azure Blob, até 10 MiB), notificações. Detalhes em [docs/backend/29-implantacao-azure.md](docs/backend/29-implantacao-azure.md). |
 
-O calendário organiza vencimentos informados pelo usuário. Os indicadores de urgência **não são cálculo processual oficial**. O PDF da intimação é guardado de forma privada, mas **não é lido automaticamente**: os dados do prazo são revisados e preenchidos por uma pessoa. Leitura por IA/OCR, cálculo processual automático e login com Google não fazem parte desta entrega.
+O calendário organiza vencimentos informados pelo usuário. Os indicadores de urgência **não são cálculo processual oficial**. O PDF da intimação é guardado de forma privada, mas **não é lido automaticamente**: os dados do prazo são revisados e preenchidos por uma pessoa. Leitura por IA/OCR e cálculo processual automático não fazem parte desta entrega.
 
 ## Fluxos principais
 
@@ -82,7 +82,7 @@ Antes de receber dados reais de clientes: rotina de backup e restauração testa
 - [Frontend](frontend/README.md) e [backend](backend/README.md)
 - [Recuperação de senha: operação e demonstração local](docs/backend/22-operacao-recuperacao-senha.md)
 - [Ambientes pessoal e escritório](docs/backend/26-fluxos-pessoal-escritorio.md)
-- [Implantação: homologação e produção](docs/backend/27-implantacao-homologacao-producao.md) · [PDF das intimações](docs/backend/28-pdf-intimacoes.md) · [Implantação no Azure](docs/backend/29-implantacao-azure.md)
+- [Implantação: homologação e produção](docs/backend/27-implantacao-homologacao-producao.md) · [PDF das intimações](docs/backend/28-pdf-intimacoes.md) · [Implantação no Azure](docs/backend/29-implantacao-azure.md) · [Entrar com Google](docs/backend/30-login-google.md)
 
 ## Autor
 

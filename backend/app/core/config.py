@@ -68,6 +68,9 @@ def hosted_config_problems(settings: Settings, env: Mapping[str, str] | None = N
         problems.append("AUTH_ENABLED deve ser true")
     if not settings.offices_active:
         problems.append("OFFICES_ENABLED não pode ser false")
+    # Entrar com Google: em ambiente hospedado só o provedor real (sem JWKS/emissor substituídos).
+    if settings.google_jwks_url or settings.google_issuer:
+        problems.append("GOOGLE_JWKS_URL/GOOGLE_ISSUER são só para testes; remova-os")
     # Persistência.
     if settings.storage != "postgres":
         problems.append("STORAGE deve ser postgres (memória perde contas ao reiniciar)")
@@ -251,6 +254,13 @@ class Settings(BaseSettings):
     auth_rate_limit_max_keys: int = Field(default=10_000, alias="AUTH_RATE_LIMIT_MAX_KEYS", ge=10, le=1_000_000)
     # Sessões simultâneas por usuário; ao exceder, as mais antigas são removidas.
     auth_max_sessions_per_user: int = Field(default=10, alias="AUTH_MAX_SESSIONS_PER_USER", ge=1, le=100)
+
+    # --- Entrar com Google (opcional; vazio = desligado) ---
+    # O backend verifica o ID token (assinatura, emissor, público, validade, nonce, e-mail verificado).
+    google_client_id: str | None = Field(default=None, alias="GOOGLE_CLIENT_ID", max_length=256)
+    # Só para testes (provedor simulado): recusados em ambiente hospedado.
+    google_jwks_url: str | None = Field(default=None, alias="GOOGLE_JWKS_URL", max_length=2048)
+    google_issuer: str | None = Field(default=None, alias="GOOGLE_ISSUER", max_length=2048)
     # Rotações de refresh por sessão. Padrão 1000 > ~672 rotações de uma sessão de 7 dias
     # renovada a cada 15 min. Ao atingir o teto, o próximo refresh encerra a sessão.
     auth_max_refresh_rotations_per_session: int = Field(

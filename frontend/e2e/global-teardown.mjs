@@ -7,4 +7,5 @@ export default async function globalTeardown() {
   try { rmSync(file); } catch { /* ok */ }
   await new Promise((r) => (globalThis.__prazoaiE2EProxy ? globalThis.__prazoaiE2EProxy.close(r) : r()));
   await globalThis.__prazoaiE2EEdge?.close();
+  await new Promise((r) => (globalThis.__prazoaiE2EGoogle ? globalThis.__prazoaiE2EGoogle.close(r) : r()));
 }

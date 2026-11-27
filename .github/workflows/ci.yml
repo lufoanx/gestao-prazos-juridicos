@@ -153,7 +153,7 @@ jobs:
         run: >-
           pytest -p no:cacheprovider -rs
           tests/test_auth_cost_protection.py tests/test_auth_password_reset.py tests/test_auth_refresh.py
-          tests/test_auth_register_login.py tests/test_auth_tokens.py tests/test_users_me.py
+          tests/test_auth_register_login.py tests/test_auth_tokens.py tests/test_users_me.py tests/test_auth_google.py
           tests/test_org_*.py tests/test_deadline*.py tests/test_intimation*.py tests/test_notification*.py
           tests/test_storage_effective.py
         env:

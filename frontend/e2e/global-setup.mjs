@@ -8,6 +8,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { startEdgeProxy } from "./edge-proxy.mjs";
+import { startGoogleMock } from "./google-mock.mjs";
 import pg from "pg";
 import { mailpitFromEnv } from "../tests/helpers/mailpit.mjs";
 import { migrate } from "../src/server/bff/session-schema.mjs";
@@ -49,13 +50,20 @@ export default async function globalSetup() {
   const created = spawnSync(python, ["-m", "app.files", "create-container"], { cwd: backendDir,
     env: { ...process.env, ENVIRONMENT: "test", ...filesEnv }, encoding: "utf8" });
   if (created.status !== 0) throw new Error("não foi possível criar o container privado no Azurite");
+  // Entrar com Google: provedor OIDC de teste (porta do backend + 2); o backend confere as assinaturas
+  // com a JWKS dele — exceção GOOGLE_JWKS_URL/GOOGLE_ISSUER só aceita fora de produção.
+  const google = await startGoogleMock({ port: port + 2, clientId: process.env.PRAZOAI_E2E_GOOGLE_CLIENT_ID,
+    clientSecret: process.env.PRAZOAI_E2E_GOOGLE_CLIENT_SECRET });
+  globalThis.__prazoaiE2EGoogle = google.server;
+  const googleEnv = { GOOGLE_CLIENT_ID: process.env.PRAZOAI_E2E_GOOGLE_CLIENT_ID, GOOGLE_JWKS_URL: `${google.issuer}/jwks`,
+    GOOGLE_ISSUER: google.issuer };
   const proc = spawn(python, ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(port), "--no-proxy-headers"], {
     cwd: fileURLToPath(new URL("../../backend", import.meta.url)),
     env: { ...process.env, ENVIRONMENT: "test", AUTH_JWT_SECRET: randomBytes(32).toString("hex"),
       AUTH_ACCESS_TOKEN_TTL_SECONDS: "60", AUTH_REGISTER_MAX_REQUESTS: "200", LOG_LEVEL: "WARNING",
       // Confiança no IP encaminhado pelo BFF, SOMENTE no E2E (segredo gerado por execução).
       // Limites de convite (ORG_INVITE_ACCEPT_MAX/LOOKUP_MAX) NÃO são alterados.
-      TRUSTED_PROXY_SECRET: process.env.PRAZOAI_E2E_PROXY_SECRET, ...recoveryEnv, ...filesEnv },
+      TRUSTED_PROXY_SECRET: process.env.PRAZOAI_E2E_PROXY_SECRET, ...recoveryEnv, ...filesEnv, ...googleEnv },
     stdio: "ignore",
   });
   writeFileSync(fileURLToPath(new URL("./.backend.pid", import.meta.url)), String(proc.pid));
