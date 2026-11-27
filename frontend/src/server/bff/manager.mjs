@@ -19,6 +19,7 @@ import {
 } from "./security.mjs";
 import { SessionStoreUnavailableError, newTicket } from "./session-store.mjs";
 import { createPublicRecovery } from "./public-recovery.mjs";
+import { createGoogleLogin } from "./google-login.mjs";
 
 const PASS_HEADERS = ["retry-after", "x-current-version"];
 
@@ -301,23 +302,33 @@ export function createBff({
     if (denied) return err(denied.status, denied.code, denied.message);
     const body = await readJson(request);
     if (body.error) return body.error;
+    const done = await performLogin(request, { path: "/auth/login", body: body.value ?? {} });
+    if (done.response) return done.response;
+    return json(200, { user: done.user }, { "set-cookie": done.cookies });
+  }
+
+  /**
+   * Núcleo comum do login (senha e Google): coordenação com a sessão atual, chamada ao backend e
+   * publicação atômica da nova sessão. Devolve `{ response }` (erro pronto) ou `{ user, cookies }`.
+   */
+  async function performLogin(request, backendRequest) {
     const { current, olderLive, dead } = await resolveCookies(request);
     const knownBrowser = readBrowserId(request.headers.get("cookie"), config);
     const browserId = knownBrowser ?? newBrowserId();
     const clearDead = dead.map((c) => clearCookie(config, c.name));
     if (!current && dead.length > 0) {
-      return err(409, "session_resync_required",
-        "A sessão anterior deste navegador terminou. Atualize e entre novamente.", { "set-cookie": clearDead });
+      return { response: err(409, "session_resync_required",
+        "A sessão anterior deste navegador terminou. Atualize e entre novamente.", { "set-cookie": clearDead }) };
     }
     const ticket = newTicket();
     const attached = current ? await store.attachPendingLogin(current.value, ticket) : false;
     try {
-      const r = await callBackend(ctx, { method: "POST", path: "/auth/login", body: body.value ?? {}, clientIp: clientIp(request) });
-      if (r.kind === "unreachable") return err(503, "backend_unavailable", "Serviço indisponível. Tente novamente.");
-      if (r.kind === "uncertain") return err(504, "upstream_timeout", "Sem confirmação do servidor. Tente entrar novamente.");
-      if (r.status !== 200) return passthrough(r);
+      const r = await callBackend(ctx, { method: "POST", path: backendRequest.path, body: backendRequest.body, clientIp: clientIp(request) });
+      if (r.kind === "unreachable") return { response: err(503, "backend_unavailable", "Serviço indisponível. Tente novamente.") };
+      if (r.kind === "uncertain") return { response: err(504, "upstream_timeout", "Sem confirmação do servidor. Tente entrar novamente.") };
+      if (r.status !== 200) return { response: passthrough(r), status: r.status, code: r.json?.error?.code };
       const user = r.json?.user;
-      if (!validTokenPair(r.json) || !user?.id) return err(502, "upstream_error", "Resposta inválida do servidor.");
+      if (!validTokenPair(r.json) || !user?.id) return { response: err(502, "upstream_error", "Resposta inválida do servidor.") };
       const { accessToken, refreshToken, expiresIn } = r.json;
 
       // ---- seção crítica: UMA operação atômica do armazenamento valida e publica ----
@@ -340,14 +351,14 @@ export function createBff({
       if (published.status !== "ok") {
         await revoke([accessToken], "login_tokens_revoked");          // a tentativa perdeu: revoga o par novo
         if (published.status === "capacity") {
-          return err(503, "session_capacity_reached", "Muitas sessões ativas no momento. Tente novamente mais tarde.");
+          return { response: err(503, "session_capacity_reached", "Muitas sessões ativas no momento. Tente novamente mais tarde.") };
         }
         log("login_cancelled");
         // Apaga só cookies que esta requisição trouxe e que agora estão mortos (nunca o de outra tentativa).
         const currentDead = current && !(await store.isLive(current.value, current.name));
         const nowDead = [...dead, ...(currentDead ? [current] : [])];
-        return err(409, "login_cancelled", "A sessão foi encerrada em outra aba durante o login. Entre novamente.",
-          { "set-cookie": nowDead.map((c) => clearCookie(config, c.name)) });
+        return { response: err(409, "login_cancelled", "A sessão foi encerrada em outra aba durante o login. Entre novamente.",
+          { "set-cookie": nowDead.map((c) => clearCookie(config, c.name)) }) };
       }
       const { id, previousTokens } = published;
       await revoke(previousTokens, "logout_backend");                 // troca de usuário: revoga a anterior
@@ -356,17 +367,19 @@ export function createBff({
       if (!(await store.isLive(id, cookieName))) {
         // Um logout deste navegador encerrou a sessão nova durante a revogação: não instala cookie.
         log("login_cancelled");
-        return err(409, "login_cancelled", "A sessão foi encerrada em outra aba durante o login. Entre novamente.",
-          { "set-cookie": consumed });
+        return { response: err(409, "login_cancelled", "A sessão foi encerrada em outra aba durante o login. Entre novamente.",
+          { "set-cookie": consumed }) };
       }
       log("login_ok");
       const cookies = [sessionCookie(config, cookieName, id, config.session.maxAgeSeconds), ...consumed];
       if (!knownBrowser) cookies.push(browserCookie(config, browserId));
-      return json(200, { user }, { "set-cookie": cookies });
+      return { user, cookies };
     } finally {
       if (attached) await store.detachPendingLogin(current.value, ticket).catch(() => {});
     }
   }
+
+  const google = createGoogleLogin({ config, fetchImpl, now, log, performLogin });
 
   /**
    * Logout: encerra numa operação ATÔMICA do armazenamento todas as sessões vivas que a requisição
@@ -586,5 +599,6 @@ export function createBff({
     intimationFileUpload, intimationFileDownload,
     passwordStatus: recovery.passwordStatus, passwordForgot: recovery.passwordForgot,
     passwordReset: recovery.passwordReset,
+    googleStatus: google.status, googleStart: google.start, googleCallback: google.callback,
   };
 }

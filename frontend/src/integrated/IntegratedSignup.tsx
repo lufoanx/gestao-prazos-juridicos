@@ -9,6 +9,7 @@ import { ApiError } from "@/lib/integration/api-client.mjs";
 import { useAuth } from "./AuthProvider";
 import { errorMessage } from "./messages";
 import { UnavailableNote } from "./Unavailable";
+import { GoogleButton } from "./GoogleButton";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Mesma política do backend: 8 a 128 caracteres, sem ser só espaços (o servidor é a autoridade).
@@ -64,7 +65,9 @@ export function IntegratedSignup({ embedded = false, onSuccess }: { embedded?: b
         <Button type="submit" variant="primary" block disabled={loading}>{loading ? "Criando…" : "Criar conta"}</Button>
       </form>
       <div className="divider">ou</div>
-      <UnavailableNote feature="Criar conta com Google" reason="O cadastro com Google ainda não está disponível nesta fase." />
+      {embedded
+        ? <UnavailableNote feature="Criar conta com Google" reason="Para aceitar o convite, crie a conta com e-mail e senha nesta tela." />
+        : <GoogleButton label="Criar conta com Google" />}
       <p className="auth__alt">Já tem conta? <Link href="/login">Entrar</Link></p>
     </Frame>
   );

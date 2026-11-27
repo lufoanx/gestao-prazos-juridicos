@@ -76,6 +76,13 @@ class RegisterRequest(_Input):
     password: NewPassword
 
 
+class GoogleLoginRequest(_Input):
+    """Enviado SÓ pelo BFF: o ID token recebido do Google na troca do código e o nonce da tentativa."""
+
+    id_token: Annotated[str, Field(min_length=16, max_length=8192)]
+    nonce: Annotated[str, Field(min_length=16, max_length=256)]
+
+
 class LoginRequest(_Input):
     email: Email
     password: LoginPassword

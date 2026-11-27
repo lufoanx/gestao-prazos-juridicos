@@ -9,6 +9,7 @@ import { ApiError, StaleResponseError } from "@/lib/integration/api-client.mjs";
 import { useAuth } from "./AuthProvider";
 import { errorMessage } from "./messages";
 import { UnavailableNote } from "./Unavailable";
+import { GoogleButton } from "./GoogleButton";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -68,7 +69,9 @@ export function IntegratedLogin({ embedded = false, onSuccess }: { embedded?: bo
         <Button type="submit" variant="primary" block disabled={loading}>{loading ? "Entrando…" : "Entrar"}</Button>
       </form>
       <div className="divider">ou</div>
-      <UnavailableNote feature="Entrar com Google" reason="O login com Google ainda não está disponível nesta fase." />
+      {embedded
+        ? <UnavailableNote feature="Entrar com Google" reason="Para aceitar o convite, entre com e-mail e senha nesta tela." />
+        : <GoogleButton />}
       <p className="auth__alt">Não tem conta? <Link href="/cadastro">Criar conta</Link></p>
     </Frame>
   );

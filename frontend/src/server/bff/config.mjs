@@ -116,6 +116,31 @@ export function loadBffConfig(env = process.env) {
     }
   }
 
+  // ---- Entrar com Google (opcional: id E segredo, ou nenhum) ----
+  const googleId = (env.PRAZOAI_GOOGLE_CLIENT_ID || "").trim();
+  const googleSecret = (env.PRAZOAI_GOOGLE_CLIENT_SECRET || "").trim();
+  if (Boolean(googleId) !== Boolean(googleSecret)) {
+    throw new Error("PRAZOAI_GOOGLE_CLIENT_ID e PRAZOAI_GOOGLE_CLIENT_SECRET devem ser definidos juntos.");
+  }
+  if (googleId && !/^[A-Za-z0-9._-]{8,256}$/.test(googleId)) throw new Error("PRAZOAI_GOOGLE_CLIENT_ID inválido.");
+  if (googleSecret && (googleSecret.length < 8 || googleSecret.length > 512)) {
+    throw new Error("PRAZOAI_GOOGLE_CLIENT_SECRET inválido.");
+  }
+  // Endereços do provedor: só substituíveis fora de homologação/produção (provedor simulado nos testes).
+  const googleOverrides = ["PRAZOAI_GOOGLE_AUTHORIZE_URL", "PRAZOAI_GOOGLE_TOKEN_URL"].filter((k) => env[k]);
+  if (hosted && googleOverrides.length) throw new Error(`${googleOverrides.join(", ")} são só para testes.`);
+  const googleUrl = (name, fallback) => {
+    const u = new URL(env[name] || fallback);
+    if (!["https:", "http:"].includes(u.protocol)) throw new Error(`${name} inválida.`);
+    return u.toString();
+  };
+  const google = googleId ? Object.freeze({
+    clientId: googleId,
+    authorizeUrl: googleUrl("PRAZOAI_GOOGLE_AUTHORIZE_URL", "https://accounts.google.com/o/oauth2/v2/auth"),
+    tokenUrl: googleUrl("PRAZOAI_GOOGLE_TOKEN_URL", "https://oauth2.googleapis.com/token"),
+    redirectUri: `${origin.origin}/bff/auth/google/callback`,
+  }) : null;
+
   // ---- armazenamento das sessões ----
   const storeKind = (env.PRAZOAI_BFF_SESSION_STORE || (hosted ? "" : "memory")).trim();
   if (!STORES.has(storeKind)) {
@@ -164,6 +189,7 @@ export function loadBffConfig(env = process.env) {
       timeoutMs: int(env, "PRAZOAI_BFF_FILE_TIMEOUT_MS", 60000, 1000, 300000),
     }),
     proxySecret,
+    google,
     clientIpHeader,
     clientIpSource,
     sessionStore: Object.freeze({
@@ -174,5 +200,6 @@ export function loadBffConfig(env = process.env) {
   };
   // Segredos do armazenamento: propriedade NÃO enumerável (não aparece em JSON.stringify nem em logs).
   Object.defineProperty(config, "sessionStoreSecrets", { value: storeSecrets, enumerable: false });
+  Object.defineProperty(config, "googleClientSecret", { value: googleSecret || null, enumerable: false });
   return Object.freeze(config);
 }

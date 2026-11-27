@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request, Response, status
 from app.api.deps import AuthServiceDep, CurrentUser, client_ip
 from app.schemas.auth import (
     ForgotPasswordRequest,
+    GoogleLoginRequest,
     LoginRequest,
     LoginResponse,
     MeResponse,
@@ -31,6 +32,18 @@ def register(body: RegisterRequest, request: Request, service: AuthServiceDep) -
 @router.post("/login", response_model=LoginResponse, response_model_by_alias=True)
 def login(body: LoginRequest, request: Request, service: AuthServiceDep) -> LoginResponse:
     pair, user = service.login(body.email, body.password, client_ip(request))
+    return LoginResponse(
+        access_token=pair.access_token,
+        refresh_token=pair.refresh_token,
+        expires_in=pair.expires_in,
+        user=PublicUser.from_user(user),
+    )
+
+
+@router.post("/google", response_model=LoginResponse, response_model_by_alias=True)
+def login_google(body: GoogleLoginRequest, request: Request, service: AuthServiceDep) -> LoginResponse:
+    """Entrar com Google: o backend verifica o ID token (assinatura, emissor, público, nonce, e-mail)."""
+    pair, user, _created = service.login_with_google(body.id_token, body.nonce, client_ip(request))
     return LoginResponse(
         access_token=pair.access_token,
         refresh_token=pair.refresh_token,

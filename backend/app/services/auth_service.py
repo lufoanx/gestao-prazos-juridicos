@@ -39,6 +39,11 @@ from app.repositories.auth import (
     SessionRepository,
     UserRepository,
 )
+from app.security.google_id_token import (
+    GoogleIdTokenVerifier,
+    GoogleKeysUnavailableError,
+    InvalidGoogleTokenError,
+)
 from app.security.passwords import PasswordHasher
 from app.security.rate_limit import RateLimiter
 from app.security.tokens import (
@@ -76,6 +81,14 @@ class RecoveryAdmission(Protocol):
     def available(self) -> bool: ...
 
     def submit(self, email: str) -> object: ...
+
+
+def _google_unavailable() -> AppError:
+    return AppError(503, "google_login_unavailable", "Entrar com Google indisponível no momento.")
+
+
+def _google_rejected() -> AppError:
+    return _unauthorized("invalid_google_token", "Não foi possível confirmar o login com o Google.")
 
 
 def _invalid_reset_token() -> AppError:
@@ -119,6 +132,7 @@ class AuthService:
         self._tokens = tokens
         self._clock = clock
         self._recovery: RecoveryAdmission | None = None   # ligado pela composição (E2); None = desabilitada
+        self._google: GoogleIdTokenVerifier | None = None  # ligado pela composição; None = desligado
         self._login_limiter = login_limiter
         self._forgot_limiter = forgot_limiter
         self._forgot_ip_limiter = forgot_ip_limiter
@@ -176,6 +190,69 @@ class AuthService:
             self._users.update_password_hash_if_version(user.id, new_hash, user.credential_version)
         logger.info("auth_login_succeeded user_id=%s", user.id)
         return pair, user
+
+    # --- Entrar com Google -------------------------------------------------------
+    def attach_google(self, verifier: GoogleIdTokenVerifier | None) -> None:
+        self._google = verifier
+
+    @property
+    def google_available(self) -> bool:
+        return self._google is not None
+
+    def login_with_google(self, id_token: str, nonce: str, client_ip: str) -> tuple[TokenPair, User, bool]:
+        """Login (ou cadastro) a partir do ID token do Google, verificado AQUI.
+
+        Vínculo pelo e-mail verificado pelo Google: quem controla o e-mail já controla a conta (a
+        recuperação de senha também é por e-mail). Conta nova recebe uma senha aleatória descartada
+        (inutilizável); se quiser senha, a pessoa usa "Esqueci minha senha".
+        """
+        if self._google is None:
+            raise _google_unavailable()
+        key = f"{client_ip}|google"
+        retry = self._login_limiter.check_and_hit(key)            # antes de rede e de Argon2
+        if retry is not None:
+            raise _rate_limited(retry)
+        try:
+            identity = self._google.verify(id_token, nonce)
+        except GoogleKeysUnavailableError:
+            logger.warning("auth_google_keys_unavailable")
+            raise _google_unavailable() from None
+        except InvalidGoogleTokenError as exc:
+            logger.info("auth_google_rejected reason=%s", exc)     # só o motivo técnico, nunca dados
+            raise _google_rejected() from None
+        from app.schemas.auth import normalize_email, validate_name
+
+        try:
+            email = normalize_email(identity.email)
+        except ValueError:
+            raise _google_rejected() from None
+        created = False
+        user = self._users.get_by_email(email)
+        if user is None:
+            try:
+                name = validate_name(identity.name or email.split("@", 1)[0])
+            except ValueError:
+                name = validate_name(email.split("@", 1)[0])
+            candidate = User(
+                id=uuid.uuid4().hex,
+                name=name,
+                email=email,
+                password_hash=self._hasher.hash(new_opaque_token()),   # aleatória e descartada
+                created_at=self._clock.now(),
+            )
+            try:
+                self._users.add(candidate)
+                user, created = candidate, True
+            except EmailAlreadyRegisteredError:                       # corrida: outro cadastro venceu
+                user = self._users.get_by_email(email)
+                if user is None:
+                    raise _google_rejected() from None
+        pair = self._start_session(user)
+        if pair is None:                                              # credencial trocada no meio
+            raise _google_rejected()
+        self._login_limiter.reset(key)
+        logger.info("auth_google_login user_id=%s created=%s", user.id, str(created).lower())
+        return pair, user, created
 
     def _start_session(self, user: User) -> TokenPair | None:
         now = self._clock.now()

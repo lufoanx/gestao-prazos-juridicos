@@ -31,8 +31,14 @@ if (!process.env.PRAZOAI_E2E_BFF_DATABASE_URL && process.env.PRAZOAI_REQUIRE_BFF
 }
 const BACKEND_PORT = Number(process.env.PRAZOAI_E2E_BACKEND_PORT || 18900);
 // O BFF fala com o proxy de TESTE (porta do backend + 1), que repassa ao FastAPI real.
+// Entrar com Google no E2E: provedor OIDC de TESTE (e2e/google-mock.mjs) na porta do backend + 2,
+// com ID e segredo do cliente gerados por execução (nunca valores reais).
+process.env.PRAZOAI_E2E_GOOGLE_CLIENT_ID ??= `e2e-${randomBytes(6).toString("hex")}.apps.googleusercontent.com`;
+process.env.PRAZOAI_E2E_GOOGLE_CLIENT_SECRET ??= randomBytes(24).toString("base64url");
+const GOOGLE_MOCK = `http://127.0.0.1:${BACKEND_PORT + 2}`;
 export const E2E = {
   origin: `http://localhost:${PORT}`,
+  google: GOOGLE_MOCK,
   backend: `http://127.0.0.1:${BACKEND_PORT + 1}`,
   control: `http://127.0.0.1:${BACKEND_PORT + 1}/__e2e`,
 };
@@ -50,6 +56,10 @@ const appEnv = {
   PRAZOAI_PROXY_SECRET: process.env.PRAZOAI_E2E_PROXY_SECRET,
   PRAZOAI_TRUSTED_CLIENT_IP_HEADER: "x-prazoai-e2e-client-ip",
   NEXT_TELEMETRY_DISABLED: "1",
+  PRAZOAI_GOOGLE_CLIENT_ID: process.env.PRAZOAI_E2E_GOOGLE_CLIENT_ID,
+  PRAZOAI_GOOGLE_CLIENT_SECRET: process.env.PRAZOAI_E2E_GOOGLE_CLIENT_SECRET,
+  PRAZOAI_GOOGLE_AUTHORIZE_URL: `${GOOGLE_MOCK}/authorize`,
+  PRAZOAI_GOOGLE_TOKEN_URL: `${GOOGLE_MOCK}/token`,
   ...sharedSessions,
 };
 

@@ -14,6 +14,8 @@ export interface BffConfig {
   proxySecret: string;
   clientIpHeader: string;
   clientIpSource: "none" | "header" | "x-forwarded-for-rightmost";
+  google: { clientId: string; authorizeUrl: string; tokenUrl: string; redirectUri: string } | null;
+  googleClientSecret: string | null;
   sessionStore: { kind: "memory" | "postgres"; target: string | null; poolMax: number };
 }
 export class BffConfigError extends Error {}
