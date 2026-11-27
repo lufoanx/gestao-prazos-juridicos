@@ -30,6 +30,20 @@ jobs:
     defaults:
       run:
         working-directory: frontend
+    # Doc 27: PostgreSQL descartável para o armazenamento COMPARTILHADO das sessões do BFF (contrato,
+    # repouso cifrado, reinício e várias instâncias). Senha só deste serviço.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: prazoai
+          POSTGRES_PASSWORD: prazoai-ci-only
+          POSTGRES_DB: prazoai_bff_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U prazoai -d prazoai_bff_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,6 +53,20 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm test
+        env:
+          PRAZOAI_TEST_BFF_DATABASE_URL: postgresql://prazoai:prazoai-ci-only@localhost:5432/prazoai_bff_test
+          PRAZOAI_REQUIRE_BFF_PG_TESTS: "1"
+      - name: Esquema das sessões do BFF pela linha de comando (check → migrate com confirmação → check)
+        env:
+          PRAZOAI_BFF_DATABASE_URL: postgresql://prazoai:prazoai-ci-only@localhost:5432/prazoai_bff_test
+        run: |
+          psql "postgresql://prazoai:prazoai-ci-only@localhost:5432/prazoai_bff_test" -c "DROP SCHEMA IF EXISTS prazoai_bff CASCADE"
+          set +e; npm run --silent bff:sessions -- check; code=$?; set -e
+          test "$code" = "4"                                   # ausente
+          set +e; npm run --silent bff:sessions -- migrate; code=$?; set -e
+          test "$code" = "2"                                   # sem confirmação do destino
+          PRAZOAI_BFF_CONFIRM_TARGET=localhost:5432/prazoai_bff_test npm run --silent bff:sessions -- migrate
+          npm run --silent bff:sessions -- check
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run build
@@ -82,9 +110,39 @@ jobs:
           cache-dependency-path: backend/requirements-dev.txt
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements-dev.txt
+      # Doc 27: PostgreSQL DESCARTÁVEL com TLS (certificado autoassinado gerado aqui) para os testes que
+      # sobem a aplicação real em staging/production (exigem sslmode). Nenhum dado real; só loopback.
+      - name: PostgreSQL com TLS para os testes de ambiente hospedado
+        run: |
+          mkdir -p /tmp/pgtls && cd /tmp/pgtls
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout server.key -out server.crt -days 2 -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+          sudo chown 999:999 server.key server.crt && sudo chmod 600 server.key
+          docker run -d --name pgtls -p 127.0.0.1:5433:5432 -v /tmp/pgtls:/tls:ro \
+            -e POSTGRES_USER=prazoai -e POSTGRES_PASSWORD=prazoai-ci-only -e POSTGRES_DB=prazoai_test_hosted \
+            postgres:16 -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key
+          for i in $(seq 1 60); do docker exec pgtls pg_isready -U prazoai -d prazoai_test_hosted && break; sleep 1; done
+      # Doc 28: Azure Blob LOCAL (Azurite, pacote oficial com versão FIXADA) só em 127.0.0.1. Sem conta real.
+      # --skipApiVersionCheck: o SDK fixado usa uma versão de API mais nova que a do emulador.
+      - name: Azure Blob local (Azurite 3.37.0 em 127.0.0.1)
+        run: |
+          npm install --no-save --no-audit --no-fund --prefix /tmp/azurite azurite@3.37.0
+          nohup /tmp/azurite/node_modules/.bin/azurite-blob --blobHost 127.0.0.1 --blobPort 10000 \
+            --location /tmp/azurite-data --skipApiVersionCheck --silent > /tmp/azurite.log 2>&1 &
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:10000/devstoreaccount1?comp=list' || true)
+            [ "$code" = "403" ] && echo "Azurite pronto" && break
+            sleep 0.5
+          done
+          [ "$code" = "403" ]
       - name: pytest (inclui PostgreSQL real e a E3 contra o capturador; falha se algum não estiver configurado)
         run: pytest
         env:
+          PRAZOAI_TEST_HOSTED_DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@127.0.0.1:5433/prazoai_test_hosted?sslmode=require
+          PRAZOAI_REQUIRE_HOSTED_TESTS: "1"
+          # Chave PÚBLICA e documentada do emulador Azurite (não é segredo; conta devstoreaccount1).
+          PRAZOAI_TEST_AZURITE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+          PRAZOAI_REQUIRE_AZURITE_TESTS: "1"
           ENVIRONMENT: test
           TEST_DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_test
           PRAZOAI_REQUIRE_POSTGRES_TESTS: "1"
@@ -103,7 +161,9 @@ jobs:
           TEST_DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_test
           PRAZOAI_REQUIRE_POSTGRES_TESTS: "1"
           PRAZOAI_TEST_STORAGE: postgres
-      - name: Migrations pela linha de comando (vazio → head; 0003 → 0002 → 0001 → 0003; base → head; banco separado)
+          PRAZOAI_TEST_AZURITE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+          PRAZOAI_REQUIRE_AZURITE_TESTS: "1"
+      - name: Migrations pela linha de comando (vazio → head; 0004 → 0003 → 0002 → 0001 → head; base → head; banco separado)
         env:
           PGPASSWORD: prazoai-ci-only
           DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@localhost:5432/prazoai_ci_migrations
@@ -111,7 +171,9 @@ jobs:
           psql -h localhost -U prazoai -d prazoai_test -c "CREATE DATABASE prazoai_ci_migrations"
           python -m app.db check
           alembic upgrade head
-          test "$(alembic current 2>/dev/null)" = "0003 (head)"
+          test "$(alembic current 2>/dev/null)" = "0004 (head)"
+          alembic downgrade 0003
+          test "$(alembic current 2>/dev/null)" = "0003"
           alembic downgrade 0002
           test "$(alembic current 2>/dev/null)" = "0002"
           alembic downgrade 0001
@@ -120,7 +182,7 @@ jobs:
           alembic downgrade base
           test -z "$(alembic current 2>/dev/null)"
           alembic upgrade head
-          test "$(alembic current 2>/dev/null)" = "0003 (head)"
+          test "$(alembic current 2>/dev/null)" = "0004 (head)"
       - name: Prova do comando de manutenção (banco descartável do CI; nunca banco real)
         env:
           ENVIRONMENT: test
@@ -147,6 +209,40 @@ jobs:
       - run: ruff check app tests migrations
       - run: mypy --no-incremental app
       - run: python -m compileall app migrations
+
+  # Doc 27: as imagens são CONSTRUÍDAS e exercitadas localmente no runner; nada é publicado (sem login
+  # em registro, sem push). Backend: sobe em development, recusa production incompleta, usuário não-root.
+  # Frontend: build demo (padrão) e integrado; a demo serve páginas sem BFF.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build da imagem do backend
+        run: docker build -t prazoai-backend:ci backend
+      - name: Imagem do backend — execução, recusa de produção incompleta e usuário
+        run: |
+          test "$(docker run --rm prazoai-backend:ci id -u)" != "0"
+          docker run -d --name api -p 127.0.0.1:18000:8000 -e ENVIRONMENT=development prazoai-backend:ci
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:18000/api/v1/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:18000/api/v1/health/ready
+          docker rm -f api
+          set +e
+          docker run --rm -e ENVIRONMENT=production prazoai-backend:ci > prod.log 2>&1; code=$?
+          set -e
+          test "$code" != "0"
+          grep -q "HostedConfigError" prod.log
+      - name: Build da imagem do frontend (demo, padrão)
+        run: docker build -t prazoai-frontend:demo frontend
+      - name: Imagem do frontend (demo) — páginas servidas e BFF desligado
+        run: |
+          test "$(docker run --rm prazoai-frontend:demo id -u)" != "0"
+          docker run -d --name web -p 127.0.0.1:13000:3000 prazoai-frontend:demo
+          for i in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:13000/ && break; sleep 1; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:13000/login)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:13000/bff/health)" = "404"
+          docker rm -f web
+      - name: Build da imagem do frontend (integrado)
+        run: docker build --build-arg NEXT_PUBLIC_PRAZOAI_MODE=integrated -t prazoai-frontend:integrated frontend
 
   # Etapa 6.1: integração REAL BFF ↔ FastAPI e E2E no navegador (Next em modo integrado).
   integration:
@@ -187,10 +283,13 @@ jobs:
           import os, psycopg
           with psycopg.connect(os.environ["ADMIN_URL"], autocommit=True) as conn:
               conn.execute("CREATE DATABASE prazoai_e2e")
+              conn.execute("CREATE DATABASE prazoai_bff_test")      # sessões do BFF (integração; doc 27)
+              conn.execute("CREATE DATABASE prazoai_bff_e2e_test")  # sessões do BFF (E2E; doc 27)
+              conn.execute("CREATE DATABASE prazoai_files_integ_test")  # PDF das intimações (integração; doc 28)
           PY
           for db in prazoai_integ prazoai_e2e; do
             DATABASE_URL="postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/$db" alembic upgrade head
-            test "$(DATABASE_URL="postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/$db" alembic current 2>/dev/null)" = "0003 (head)"
+            test "$(DATABASE_URL="postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/$db" alembic current 2>/dev/null)" = "0004 (head)"
           done
       - uses: actions/setup-node@v4
         with:
@@ -230,11 +329,36 @@ jobs:
           else:
               raise SystemExit("capturador não respondeu")
           PY
+      # Doc 28: Azurite em LOOPBACK dentro deste job (o contêiner do Playwright só alcançaria um serviço por
+      # nome de host). Versão FIXADA do pacote oficial; só o serviço blob; dados em diretório temporário.
+      - name: Azure Blob local (Azurite 3.37.0 em 127.0.0.1)
+        run: |
+          npm install --no-save --no-audit --no-fund --prefix /tmp/azurite azurite@3.37.0
+          nohup /tmp/azurite/node_modules/.bin/azurite-blob --blobHost 127.0.0.1 --blobPort 10000 \
+            --location /tmp/azurite-data --skipApiVersionCheck --silent > /tmp/azurite.log 2>&1 &
+          for i in $(seq 1 60); do
+            code=$(python -c "import urllib.request,urllib.error
+          try: urllib.request.urlopen('http://127.0.0.1:10000/devstoreaccount1?comp=list', timeout=2)
+          except urllib.error.HTTPError as e: print(e.code)
+          except OSError: print(0)")
+            [ "$code" = "403" ] && echo "Azurite pronto" && break
+            sleep 0.5
+          done
+          [ "$code" = "403" ]
       - name: Integração real (BFF + FastAPI, STORAGE=memory)
         run: npm run test:integration
         working-directory: frontend
         env:
           PRAZOAI_TEST_PYTHON: python
+          PRAZOAI_TEST_BFF_DATABASE_URL: postgresql://prazoai:prazoai-ci-only@postgres:5432/prazoai_bff_test
+          PRAZOAI_REQUIRE_BFF_PG_TESTS: "1"
+          # Doc 27, §6: papéis separados com privilégios mínimos (banco e papéis temporários criados e removidos).
+          PRAZOAI_TEST_PG_ADMIN_URL: postgresql://prazoai:prazoai-ci-only@postgres:5432/postgres
+          PRAZOAI_REQUIRE_PRIVILEGE_TESTS: "1"
+          # Doc 28: PDF das intimações (FastAPI em PostgreSQL próprio + Azurite local)
+          PRAZOAI_TEST_FILES_DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/prazoai_files_integ_test
+          PRAZOAI_TEST_AZURITE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+          PRAZOAI_REQUIRE_FILES_TESTS: "1"
           PRAZOAI_TEST_MAILPIT_SMTP: 127.0.0.1:1025
           PRAZOAI_TEST_MAILPIT_API: http://127.0.0.1:8025
           PRAZOAI_REQUIRE_MAILPIT_TESTS: "1"
@@ -267,6 +391,15 @@ jobs:
         working-directory: frontend
         env:
           PRAZOAI_TEST_PYTHON: python
+          PRAZOAI_TEST_BFF_DATABASE_URL: postgresql://prazoai:prazoai-ci-only@postgres:5432/prazoai_bff_test
+          PRAZOAI_REQUIRE_BFF_PG_TESTS: "1"
+          # Doc 27, §6: papéis separados com privilégios mínimos (banco e papéis temporários criados e removidos).
+          PRAZOAI_TEST_PG_ADMIN_URL: postgresql://prazoai:prazoai-ci-only@postgres:5432/postgres
+          PRAZOAI_REQUIRE_PRIVILEGE_TESTS: "1"
+          # Doc 28: PDF das intimações (FastAPI em PostgreSQL próprio + Azurite local)
+          PRAZOAI_TEST_FILES_DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/prazoai_files_integ_test
+          PRAZOAI_TEST_AZURITE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+          PRAZOAI_REQUIRE_FILES_TESTS: "1"
           STORAGE: postgres
           DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/prazoai_integ
           PRAZOAI_TEST_MAILPIT_SMTP: 127.0.0.1:1025
@@ -300,6 +433,11 @@ jobs:
         working-directory: frontend
         env:
           PRAZOAI_TEST_PYTHON: python
+          # Doc 27: sessões do BFF no PostgreSQL (esquema recriado pelo global-setup; banco descartável).
+          PRAZOAI_E2E_BFF_DATABASE_URL: postgresql://prazoai:prazoai-ci-only@postgres:5432/prazoai_bff_e2e_test
+          # Doc 28: PDF das intimações no Azurite local (container próprio criado pelo global-setup).
+          PRAZOAI_E2E_AZURITE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+          PRAZOAI_REQUIRE_BFF_PG_TESTS: "1"
           STORAGE: postgres
           DATABASE_URL: postgresql+psycopg://prazoai:prazoai-ci-only@postgres:5432/prazoai_e2e
           # E5: recuperação de senha real no navegador; o capturador do passo anterior (só loopback).

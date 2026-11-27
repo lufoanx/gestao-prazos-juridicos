@@ -138,8 +138,9 @@ test("rotas: modo integrado reescreve módulos não integrados e recursos indisp
   assert.deepEqual(routeDecision("/app/prazos/123/editar", "integrated"), { action: "allow" });
   assert.deepEqual(routeDecision("/app/prazos/a.b", "integrated"), { action: "rewrite", to: "/app/nao-integrado" });
   assert.deepEqual(routeDecision("/app/calendario", "integrated"), { action: "allow" });
-  assert.deepEqual(routeDecision("/app/dashboard", "integrated"), { action: "rewrite", to: "/app/nao-integrado" });
-  // 6.4: intimações e notificações integradas; o dashboard segue fora.
+  assert.deepEqual(routeDecision("/app/dashboard", "integrated"), { action: "allow" });
+  assert.deepEqual(routeDecision("/app/dashboard/x", "integrated"), { action: "rewrite", to: "/app/nao-integrado" });
+  // 6.4: intimações e notificações integradas; o dashboard usa os totais do servidor.
   assert.deepEqual(routeDecision("/app/intimacoes", "integrated"), { action: "allow" });
   assert.deepEqual(routeDecision("/app/intimacoes/upload", "integrated"), { action: "allow" });
   assert.deepEqual(routeDecision("/app/intimacoes/abc123", "integrated"), { action: "allow" });

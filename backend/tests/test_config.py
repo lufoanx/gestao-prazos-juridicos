@@ -19,17 +19,15 @@ def test_environment_invalido_rejeitado(monkeypatch):
     get_settings.cache_clear()
 
 
-def test_production_e_recusada_antes_de_criar_a_aplicacao(monkeypatch):
-    # Antes da P1 este teste criava a app em production (sem autenticação) para conferir que o Swagger
-    # ficava desligado. O projeto aprovado (doc 15, §5.6) bloqueia production incondicionalmente, então
-    # a app nem chega a ser criada; a regra "docs só fora de produção" segue no código para a entrega
-    # de prontidão.
-    from app.core.config import ProductionNotReleasedError
+def test_production_incompleta_e_recusada_antes_de_criar_a_aplicacao(monkeypatch):
+    # Doc 27: production só inicia com todos os requisitos; a documentação interativa fica desligada em
+    # staging/production (conferido com a app real em tests/test_hosted_config.py).
+    from app.core.config import HostedConfigError
 
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("AUTH_ENABLED", "false")
     get_settings.cache_clear()
-    with pytest.raises(ProductionNotReleasedError):
+    with pytest.raises(HostedConfigError):
         create_app()
     get_settings.cache_clear()
 

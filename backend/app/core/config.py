@@ -1,33 +1,154 @@
 """Configuração da aplicação e validação de variáveis de ambiente.
 
 Nenhum segredo fica no código. Valores vêm do ambiente (.env em desenvolvimento,
-variáveis do provedor em produção). Persistência: P1 (fundação) — a aplicação continua usando só
-memória (`STORAGE=memory`); o banco é usado apenas por comandos explícitos (migrations, verificação)
-e pelos testes de fundação.
+variáveis do provedor em produção). Ambientes:
+- development/test: memória (padrão) ou PostgreSQL; nunca para contas reais;
+- staging (homologação) e production: só iniciam com TODOS os requisitos de implantação
+  (`ensure_hosted_requirements`): PostgreSQL com TLS, segredos, origem pública, proxy confiável e
+  recuperação de senha por SMTP autenticado. Ver docs/backend/27-implantacao-homologacao-producao.md.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import lru_cache
 from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+#: Ambientes HOSPEDADOS: homologação (staging) e produção. Mesmas exigências; contas reais só em production.
+HOSTED_ENVIRONMENTS = frozenset({"staging", "production"})
+#: Modos TLS aceitos para o PostgreSQL em ambiente hospedado.
+HOSTED_DB_SSLMODES = frozenset({"require", "verify-ca", "verify-full"})
+_LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1"})
 
-class ProductionNotReleasedError(RuntimeError):
-    """ENVIRONMENT=production ainda não está liberado (doc 15, §5.6): bloqueio por CÓDIGO.
 
-    Vale para qualquer combinação de AUTH_ENABLED, OFFICES_ENABLED e STORAGE. Configurar um banco
-    não libera produção; isso exige uma entrega própria e aprovada de prontidão.
+class HostedConfigError(RuntimeError):
+    """Ambiente hospedado (staging/production) com requisito ausente ou inseguro.
+
+    Substitui o antigo bloqueio incondicional de produção (doc 15, §5.6): em vez de recusar sempre,
+    a aplicação recusa iniciar enquanto QUALQUER requisito de implantação faltar. A mensagem lista
+    todos os problemas de uma vez e NUNCA inclui valores (segredos, URLs com credenciais).
     """
 
-
-def ensure_not_production(settings: "Settings") -> None:
-    if settings.is_production:
-        raise ProductionNotReleasedError(
-            "ENVIRONMENT=production ainda não está liberado: a aplicação recusa iniciar em produção "
-            "(independentemente de AUTH_ENABLED, OFFICES_ENABLED e STORAGE) até a entrega de prontidão."
+    def __init__(self, environment: str, problems: list[str]) -> None:
+        self.problems = tuple(problems)
+        super().__init__(
+            f"ENVIRONMENT={environment} recusado: {len(problems)} requisito(s) de implantação ausente(s) ou "
+            "inseguro(s): " + " | ".join(problems)
         )
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    import ipaddress
+
+    if not host:
+        return False
+    if host.lower() in _LOOPBACK:
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def hosted_config_problems(settings: Settings, env: Mapping[str, str] | None = None) -> list[str]:
+    """Requisitos de homologação/produção não atendidos (lista vazia = pronto para iniciar).
+
+    Só a FORMA da configuração é verificada aqui; conectividade (banco, SMTP) é conferida no startup
+    (esquema do banco) e nas verificações de disponibilidade.
+    """
+    import os
+    from urllib.parse import urlsplit
+
+    environ = os.environ if env is None else env
+    problems: list[str] = []
+    # Módulos do produto: contas, escritórios e domínio precisam estar ligados.
+    if not settings.auth_enabled:
+        problems.append("AUTH_ENABLED deve ser true")
+    if not settings.offices_active:
+        problems.append("OFFICES_ENABLED não pode ser false")
+    # Persistência.
+    if settings.storage != "postgres":
+        problems.append("STORAGE deve ser postgres (memória perde contas ao reiniciar)")
+    if settings.auth_storage_explicit:
+        problems.append("remova AUTH_STORAGE (configuração antiga)")
+    if settings.database_url is None:
+        problems.append("DATABASE_URL é obrigatória")
+    else:
+        from sqlalchemy.engine import make_url
+
+        try:
+            sslmode = make_url(settings.database_url.get_secret_value().strip()).query.get("sslmode")
+        except Exception:  # noqa: BLE001 - a mensagem não pode conter o valor
+            sslmode = None
+            problems.append("DATABASE_URL inválida")
+        else:
+            if sslmode not in HOSTED_DB_SSLMODES:
+                problems.append("DATABASE_URL deve definir sslmode=require|verify-ca|verify-full")
+    # Segredos.
+    if settings.auth_jwt_secret is None:
+        problems.append("AUTH_JWT_SECRET é obrigatório")
+    if settings.trusted_proxy_secret is None:
+        problems.append("TRUSTED_PROXY_SECRET é obrigatório (IP real do cliente nos limites de taxa)")
+    # Origem pública e CORS.
+    origin = (settings.public_app_origin or "").strip()
+    parts = urlsplit(origin) if origin else None
+    if parts is None:
+        problems.append("PUBLIC_APP_ORIGIN é obrigatória")
+    elif parts.scheme != "https" or not parts.hostname or _is_loopback_host(parts.hostname) \
+            or parts.path not in ("", "/") or parts.query or parts.fragment or parts.username:
+        problems.append("PUBLIC_APP_ORIGIN deve ser uma origem https pública (só esquema, host e porta)")
+    if settings.cors_has_wildcard:
+        problems.append("CORS_ORIGINS não pode conter '*'")
+    normalized_origin = origin.rstrip("/")
+    for item in settings.cors_origin_list:
+        if item.rstrip("/") != normalized_origin:
+            problems.append(
+                "CORS_ORIGINS só pode conter PUBLIC_APP_ORIGIN (ou ficar vazia: o navegador fala só com o BFF)"
+            )
+            break
+    # Recuperação de senha por e-mail transacional.
+    if settings.email_transport != "smtp":
+        problems.append("EMAIL_TRANSPORT deve ser smtp (recuperação de senha obrigatória)")
+    else:
+        if (settings.smtp_security or "").strip().lower() not in {"tls", "starttls"}:
+            problems.append("SMTP_SECURITY deve ser tls ou starttls")
+        if not settings.smtp_username or settings.smtp_password is None:
+            problems.append("SMTP_USERNAME e SMTP_PASSWORD são obrigatórios (provedor transacional autenticado)")
+        if settings.smtp_allow_insecure_local:
+            problems.append("SMTP_ALLOW_INSECURE_LOCAL deve ser false")
+        if _is_loopback_host((settings.smtp_host or "").strip()):
+            problems.append("SMTP_HOST não pode ser loopback (capturador local)")
+    # Arquivos de intimação: Azure Blob privado, por HTTPS, nunca o emulador local.
+    if settings.file_storage != "azure_blob":
+        problems.append("FILE_STORAGE deve ser azure_blob (PDFs das intimações)")
+    elif settings.azure_storage_connection_string is not None:
+        conn = settings.azure_storage_connection_string.get_secret_value()
+        azure = {k.strip().lower(): v.strip() for k, _, v in (p.partition("=") for p in conn.split(";") if p.strip())}
+        if azure.get("defaultendpointsprotocol", "").lower() != "https" or "usedevelopmentstorage" in azure \
+                or azure.get("accountname", "").lower() == "devstoreaccount1" \
+                or any(k.endswith("endpoint") and not azure[k].lower().startswith("https://") for k in azure):
+            problems.append("AZURE_STORAGE_CONNECTION_STRING deve usar https e uma conta real (não o emulador)")
+    # Operação.
+    if settings.log_level.strip().upper() in {"DEBUG", "NOTSET"}:
+        problems.append("LOG_LEVEL não pode ser DEBUG")
+    workers = (environ.get("WEB_CONCURRENCY") or "1").strip()
+    if workers != "1":
+        problems.append(
+            "WEB_CONCURRENCY deve ser 1: limites de taxa e fila de e-mail são por processo "
+            "(escale o BFF, não o backend)"
+        )
+    return problems
+
+
+def ensure_hosted_requirements(settings: Settings, env: Mapping[str, str] | None = None) -> None:
+    """Recusa iniciar em staging/production se faltar requisito. Sem efeito em development/test."""
+    if not settings.is_hosted:
+        return
+    problems = hosted_config_problems(settings, env)
+    if problems:
+        raise HostedConfigError(settings.environment, problems)
 
 
 class Settings(BaseSettings):
@@ -74,7 +195,7 @@ class Settings(BaseSettings):
     # --- Persistência (P1 fundação, P2 esquema, P3 autenticação) ---
     # STORAGE (doc 15, §5.6; modos FINAIS desde a P4):
     #   "memory" (padrão) — tudo em memória (testes rápidos e desenvolvimento);
-    #   "postgres" — autenticação E domínio no PostgreSQL (development/test; production segue bloqueada).
+    #   "postgres" — autenticação E domínio no PostgreSQL (obrigatório em staging/production).
     # O modo intermediário "auth-postgres" e ALLOW_VOLATILE_DOMAIN (P3) foram REMOVIDOS na P4.
     storage: str = Field(default="memory", alias="STORAGE")
     # URL de conexão (segredo). NÃO é validada aqui de propósito: erros do pydantic incluem o valor
@@ -222,6 +343,46 @@ class Settings(BaseSettings):
         default=3000, alias="RECOVERY_DB_STATEMENT_TIMEOUT_MS", ge=500, le=60_000
     )
 
+    # --- Arquivos de intimação (PDF) ---
+    # disabled (padrão): upload/download respondem 503 `file_storage_unavailable` (registro só de metadados).
+    # azure_blob: bytes no Azure Blob Storage (container PRIVADO); metadados e vínculo no PostgreSQL
+    # (exige STORAGE=postgres). Obrigatório em staging/production. Ver docs/backend/28-pdf-intimacoes.md.
+    file_storage: str = Field(default="disabled", alias="FILE_STORAGE")
+    # Segredo (somente servidor). Em ambiente hospedado: DefaultEndpointsProtocol=https; nunca o emulador.
+    azure_storage_connection_string: SecretStr | None = Field(default=None, alias="AZURE_STORAGE_CONNECTION_STRING")
+    azure_storage_container: str = Field(default="prazoai-intimacoes", alias="AZURE_STORAGE_CONTAINER")
+    file_storage_timeout_seconds: int = Field(default=20, alias="FILE_STORAGE_TIMEOUT_SECONDS", ge=2, le=120)
+    # Uma reserva de upload não concluída vira limpeza (apaga o blob, se existir) depois deste prazo.
+    file_upload_reservation_seconds: int = Field(
+        default=3600, alias="FILE_UPLOAD_RESERVATION_SECONDS", ge=60, le=24 * 3600
+    )
+
+    @field_validator("azure_storage_container")
+    @classmethod
+    def _valid_container(cls, v: str) -> str:
+        import re
+
+        value = (v or "").strip()
+        if not re.fullmatch(r"[a-z0-9](?!.*--)[a-z0-9-]{1,61}[a-z0-9]", value):
+            raise ValueError("AZURE_STORAGE_CONTAINER inválido (3–63: minúsculas, dígitos e hífen).")
+        return value
+
+    @field_validator("azure_storage_connection_string", mode="before")
+    @classmethod
+    def _empty_azure(cls, v: object) -> object:
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @model_validator(mode="after")
+    def _consistent_files(self) -> Settings:
+        if self.file_storage not in {"disabled", "azure_blob"}:
+            raise ValueError("FILE_STORAGE inválido: use 'disabled' ou 'azure_blob'.")
+        if self.file_storage == "azure_blob":
+            if self.storage != "postgres":
+                raise ValueError("FILE_STORAGE=azure_blob exige STORAGE=postgres (metadados e vínculo no banco).")
+            if self.azure_storage_connection_string is None:
+                raise ValueError("FILE_STORAGE=azure_blob exige AZURE_STORAGE_CONNECTION_STRING.")
+        return self
+
     # --- Manutenção (P5): expurgo global de retenção no PostgreSQL ---
     # Lotes pequenos com FOR UPDATE SKIP LOCKED, transações próprias e curtas (doc 20).
     maintenance_batch_size: int = Field(default=200, alias="MAINTENANCE_BATCH_SIZE", ge=1, le=1_000)
@@ -337,8 +498,6 @@ class Settings(BaseSettings):
                     "AUTH_STORAGE (configuração antiga, só 'memory') conflita com STORAGE='postgres': "
                     "remova AUTH_STORAGE."
                 )
-            if self.environment not in {"development", "test"}:
-                raise ValueError("STORAGE='postgres' só é aceito em ENVIRONMENT=development ou test nesta fase.")
         return self
 
     @property
@@ -388,6 +547,11 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def is_hosted(self) -> bool:
+        """Homologação ou produção: exigências de implantação, sem documentação interativa."""
+        return self.environment in HOSTED_ENVIRONMENTS
 
     @property
     def api_base(self) -> str:

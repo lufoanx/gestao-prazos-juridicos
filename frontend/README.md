@@ -132,5 +132,8 @@ Recuperação de senha (E4 + E5, doc 21 §20 e §22; operação e demonstração
   tokens ou senhas).
 - `npm run test:e2e` — navegador (Playwright) + Next integrado + FastAPI real, numa única execução;
   cada contexto de navegador simula um cliente com IP próprio (ver `docs/backend/13-ambiente-e2e-identidade-de-rede.md`).
-- Sessões do BFF ficam em memória: um processo Node, perdidas ao reiniciar; não publicar em
-  ambiente distribuído/serverless (ex.: Vercel) nesta fase.
+- Sessões do BFF: em memória por padrão (development/test, um processo). Em homologação/produção
+  (`PRAZOAI_APP_ENV=staging|production`) são obrigatórias no PostgreSQL (`PRAZOAI_BFF_SESSION_STORE=postgres`,
+  esquema próprio `prazoai_bff`, tokens cifrados), o que permite várias instâncias e reinícios.
+  Esquema: `npm run bff:sessions -- check|migrate`. Disponibilidade: `GET /bff/health`.
+  Guia: `docs/backend/27-implantacao-homologacao-producao.md`. O modo demo (padrão) não usa o BFF.

@@ -11,7 +11,7 @@ import { formatCivilDate } from "@/lib/integration/civil-date.mjs";
 import type { Intimation, IntimationPage } from "@/lib/integration/dto.d.mts";
 import { useResource } from "./useResource";
 import { ScopeGate } from "./deadlineShared";
-import { IntimationStatusBadge, MetadataOnlyNotice, useIntimationContext } from "./intimationShared";
+import { IntimationStatusBadge, ManualReviewNotice, useIntimationContext } from "./intimationShared";
 import { ResourceState } from "./ui";
 
 export function IntegratedIntimationList() {
@@ -54,7 +54,7 @@ function ListView() {
           </div>
         ) : null}
       </div>
-      <MetadataOnlyNotice />
+      <ManualReviewNotice />
       <Filters>
         <div className="toolbar__search">
           <SearchField label="Buscar" value={qInput} onChange={setQInput} placeholder="Nome do arquivo, título, processo…" />

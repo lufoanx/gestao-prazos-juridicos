@@ -1,7 +1,7 @@
 "use client";
 // Detalhe integrado do prazo (6.3): dados, edição com versão, status, transferência,
 // comentários e histórico paginados. Nenhuma mutação é repetida automaticamente.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Badge, Button, ConfirmDialog, EmptyState, Modal, Pagination, Select, Textarea } from "@/components/ui";
 import { resourceCaps, scopeMatches, selectableResponsibles, type DeadlineCaps } from "@/lib/integration/deadline-caps.mjs";
@@ -12,6 +12,8 @@ import { DeadlineFields, draftToInput, validateDraft, type DeadlineDraft } from 
 import { useResource } from "./useResource";
 import { STATUS_LABEL, STATUS_TONE, ScopeGate, ScopeMismatchNotice, UrgencyBadge, useDeadlineContext, useInvalidateDeadlines } from "./deadlineShared";
 import { Card, Notice, PageHead, ResourceState, fmtDate, useMutation } from "./ui";
+import { DownloadPdfButton, useIntimationContext } from "./intimationShared";
+import type { Intimation } from "@/lib/integration/dto.d.mts";
 
 const DEADLINE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -69,6 +71,7 @@ function DetailView({ deadlineId, startEditing }: { deadlineId: string; startEdi
             <dt>Criado por</dt><dd>{nameOf(d.createdBy)} em {fmtDate(d.createdAt)}</dd>
           </dl>
         </Card>
+        <LinkedIntimationCard deadlineId={d.id} />
         <EditSection d={d} caps={caps} editing={editing} setEditing={setEditing} reload={res.reload} />
         <StatusSection d={d} caps={caps} reload={res.reload} />
         <TransferSection d={d} caps={caps} reload={res.reload} onTransferred={setTransferNotice} />
@@ -306,6 +309,28 @@ function HistorySection({ d }: { d: Deadline }) {
           <Pagination page={data.page} pageCount={Math.max(1, Math.ceil(data.total / data.perPage))} onPage={setPage} />
         </>
       )}</ResourceState>
+    </Card>
+  );
+}
+
+/** Doc 28: intimação de origem do prazo (se existir e for visível) e o PDF dela.
+ * 404 é o caso normal (prazo criado sem intimação, ou intimação sem permissão de leitura): nada aparece. */
+function LinkedIntimationCard({ deadlineId }: { deadlineId: string }) {
+  const { intimations } = useIntimationContext();
+  const [linked, setLinked] = useState<Intimation | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setLinked(null);
+    intimations.linkedToDeadline(deadlineId).then((i) => { if (alive) setLinked(i); }, () => { /* sem vínculo visível */ });
+    return () => { alive = false; };
+  }, [deadlineId, intimations]);
+  if (!linked) return null;
+  return (
+    <Card title="Intimação de origem">
+      <p data-testid="linked-intimation">
+        <Link href={`/app/intimacoes/${linked.id}`}>Abrir a intimação</Link>{" · "}{linked.file.name}{" "}
+        {linked.file.storage === "stored" ? <DownloadPdfButton intimationId={linked.id} /> : <span className="text-muted">(PDF não enviado)</span>}
+      </p>
     </Card>
   );
 }

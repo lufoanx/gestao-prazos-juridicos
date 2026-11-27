@@ -2,7 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.config import ProductionNotReleasedError
+from app.core.config import HostedConfigError
 from tests.org_utils import ALL, API
 
 
@@ -119,8 +119,8 @@ def test_entrar_em_escritorio_nao_altera_dados_pessoais(org):
 
 
 def test_production_bloqueia_escritorios_mesmo_com_auth_desligada(make_app):
-    # P1: recusa incondicional antes de compor módulos (antes: InMemoryOrgBlockedError, mantido como defesa).
-    with pytest.raises(ProductionNotReleasedError):
+    # Doc 27: recusa por requisitos explícitos antes de compor módulos (InMemoryOrgBlockedError segue como defesa).
+    with pytest.raises(HostedConfigError):
         make_app(ENVIRONMENT="production", AUTH_ENABLED="false", OFFICES_ENABLED="true")
 
 
@@ -131,9 +131,8 @@ def test_production_bloqueia_escritorios_mesmo_com_auth_desligada(make_app):
     {"AUTH_JWT_SECRET": "s" * 48, "OFFICES_ENABLED": "true"},               # módulos ligados
 ])
 def test_production_recusada_em_qualquer_combinacao(make_app, env):
-    # Antes da P1, production com AUTH_ENABLED=false subia sem rotas de escritório. O projeto aprovado
-    # (doc 15, §5.6) exige recusa incondicional até a entrega de prontidão: mudança intencional.
-    with pytest.raises(ProductionNotReleasedError):
+    # Doc 27: production incompleta (memória, módulos desligados, sem segredos/e-mail) continua recusada.
+    with pytest.raises(HostedConfigError):
         make_app(ENVIRONMENT="production", **env)
 
 
@@ -145,7 +144,7 @@ def test_bloqueio_de_production_acontece_antes_de_compor_modulos(make_app, monke
 
     for name in ("build_auth_container", "build_org_container", "ensure_offices_allowed", "configure_logging"):
         monkeypatch.setattr(main_module, name, must_not_run)
-    with pytest.raises(ProductionNotReleasedError):
+    with pytest.raises(HostedConfigError):
         make_app(ENVIRONMENT="production", AUTH_ENABLED="false", OFFICES_ENABLED="false")
 
 

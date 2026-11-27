@@ -14,6 +14,7 @@ from fastapi import APIRouter
 
 from app.api.auth import router as auth_router
 from app.api.deadlines import router as deadlines_router
+from app.api.health import ready_router
 from app.api.health import router as health_router
 from app.api.intimations import router as intimations_router
 from app.api.invitations import router as invitations_router
@@ -24,6 +25,7 @@ from app.api.users import router as users_router
 def build_api_v1_router(*, auth_enabled: bool, offices_enabled: bool = False) -> APIRouter:
     router = APIRouter()
     router.include_router(health_router)
+    router.include_router(ready_router)
     if auth_enabled:
         router.include_router(auth_router)
         router.include_router(users_router)

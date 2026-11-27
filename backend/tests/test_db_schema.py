@@ -452,7 +452,11 @@ EXPECTED_CONSTRAINTS = {
     "intimations": {"pk_intimations", "fk_intimations_owner_id_users", "fk_intimations_office_id_offices",
                     "fk_intimations_suggested_responsible_id_users", "fk_intimations_created_by_users",
                     "ck_intimations_scope_shape", "ck_intimations_file_name_length", "ck_intimations_file_size_range",
-                    "ck_intimations_file_content_type_pdf", "ck_intimations_file_not_stored",
+                    "ck_intimations_file_content_type_pdf",
+                    # doc 28 (0004): `file_not_stored` → arquivo armazenado opcional e completo
+                    "ck_intimations_file_storage_valid", "ck_intimations_file_stored_complete",
+                    "ck_intimations_file_blob_key_shape", "ck_intimations_file_sha256_shape",
+                    "uq_intimations_file_blob_key",
                     "ck_intimations_status_valid", "ck_intimations_processing_status_valid",
                     "ck_intimations_draft_counting_mode_valid", "ck_intimations_draft_duration_range",
                     "ck_intimations_draft_priority_valid", "ck_intimations_version_positive",
@@ -461,6 +465,7 @@ EXPECTED_CONSTRAINTS = {
                     "fk_intimations_deadline_same_scope", "fk_intimations_suggested_active"},
     "intimation_events": {"pk_intimation_events", "fk_intimation_events_intimation_id_intimations",
                           "fk_intimation_events_actor_id_users", "uq_intimation_events_intimation_id_seq"},  # P4
+    "file_cleanup": {"pk_file_cleanup", "ck_file_cleanup_reason_valid", "ck_file_cleanup_blob_key_shape"},
     "notifications": {"pk_notifications", "fk_notifications_recipient_id_users", "fk_notifications_owner_id_users",
                       "fk_notifications_office_id_offices", "fk_notifications_deadline_id_deadlines",
                       "fk_notifications_intimation_id_intimations", "ck_notifications_scope_shape",
@@ -477,6 +482,7 @@ EXPECTED_INDEXES = {
     "ix_intimations_office_list", "ix_intimations_personal_list", "ix_intimations_discarded_purge",
     "ix_intimation_events_intimation_id_at", "ix_notifications_inbox", "ix_notifications_unread",
     "ix_notifications_read_purge",
+    "ix_file_cleanup_not_before",                                                            # doc 28 (0004)
 }
 
 

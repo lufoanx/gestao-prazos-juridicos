@@ -11,13 +11,13 @@
 //   Retry-After), resultado incerto da renovação (sessão local invalidada, novo login);
 // - mutações nunca são repetidas automaticamente; após 401 do backend não há nova tentativa.
 import { isIP } from "node:net";
-import { callBackend } from "./backend-client.mjs";
+import { callBackend, fetchBackendFile } from "./backend-client.mjs";
 import { buildQuery, findRoute, matchAllowlist } from "./allowlist.mjs";
 import {
   CSRF_HEADER, NO_STORE, browserCookie, checkCsrf, clearCookie, newBrowserId, newCookieName, readBrowserId,
   readSessionCookies, sessionCookie,
 } from "./security.mjs";
-import { SessionCapacityError } from "./session-store.mjs";
+import { SessionStoreUnavailableError, newTicket } from "./session-store.mjs";
 import { createPublicRecovery } from "./public-recovery.mjs";
 
 const PASS_HEADERS = ["retry-after", "x-current-version"];
@@ -44,13 +44,26 @@ const err = (status, code, message, extra) => json(status, { error: { code, mess
 
 export function createBff({
   config, store, fetchImpl = fetch, logger = console, now = () => Date.now(), maxResponseBytes,
+  refreshPollMs = 50,
 }) {
   const ctx = { config, fetchImpl, maxResponseBytes };
+  // Renovação: lease no armazenamento (vale entre instâncias) com duração maior que o prazo total de
+  // uma chamada ao backend; dentro do processo, chamadas concorrentes compartilham a mesma promessa.
+  const refreshLeaseMs = config.timeoutMs + 5000;
+  /** @type {Map<string, Promise<any>>} */
+  const inflight = new Map();
   const log = (event, fields = {}) => logger.info?.(`bff_${event}`, fields); // nunca tokens ou ids de sessão
 
   function clientIp(request) {
-    if (!config.clientIpHeader) return undefined;
-    const value = (request.headers.get(config.clientIpHeader) || "").trim();
+    let value;
+    if (config.clientIpSource === "x-forwarded-for-rightmost") {
+      // Só o ÚLTIMO item: é o que a borda acrescentou. Os anteriores podem vir do visitante.
+      const list = request.headers.get("x-forwarded-for") || "";
+      value = list.split(",").at(-1);
+    } else if (config.clientIpHeader) {
+      value = request.headers.get(config.clientIpHeader);
+    }
+    value = (value || "").trim();
     return isIP(value) ? value : undefined;
   }
 
@@ -105,26 +118,25 @@ export function createBff({
    * vivas são antigas (serão encerradas); cookies sem sessão viva correspondente são "mortos"
    * e NUNCA voltam a ser aceitos.
    */
-  function resolveCookies(request) {
+  async function resolveCookies(request) {
     const live = [];
     const dead = [];
     for (const c of readSessionCookies(request.headers.get("cookie"), config)) {
-      if (c.wellFormed && store.isLive(c.value, c.name)) live.push({ ...c, createdAt: store.get(c.value).createdAt });
+      const info = c.wellFormed ? await store.liveInfo(c.value, c.name) : null;
+      if (info) live.push({ ...c, createdAt: info.createdAt });
       else dead.push(c);
     }
     live.sort((a, b) => b.createdAt - a.createdAt || (a.name < b.name ? 1 : -1));
     return { current: live[0] ?? null, olderLive: live.slice(1), dead };
   }
 
-  /** Encerra sessões SINCRONAMENTE (sem espera de rede); devolve os access tokens a revogar. */
-  function endNow(entries, { cancelLogins = true } = {}) {
-    const tokens = [];
-    for (const e of entries) {
-      if (cancelLogins) store.cancelPendingLogin(e.value);
-      const snap = store.delete(e.value);
-      if (snap?.accessToken) tokens.push(snap.accessToken);
-    }
-    return tokens;
+  /**
+   * Encerra sessões numa ÚNICA operação atômica do armazenamento (sem espera de rede do backend
+   * entre a decisão e a publicação); logins pendentes nelas ficam cancelados. Devolve os access
+   * tokens a revogar.
+   */
+  function endNow(entries, browserId = null) {
+    return store.endSessions(entries.map((e) => ({ value: e.value, name: e.name })), browserId);
   }
 
   /** Revogação no backend (depois da decisão já publicada; falhas não reabrem nada). */
@@ -140,57 +152,107 @@ export function createBff({
   }
 
   // ------------------------------------------------------------------ renovação
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /**
+   * Renova o par de tokens da sessão se o access token estiver perto de expirar.
+   * - Dentro do processo: chamadas concorrentes da mesma sessão aguardam a MESMA promessa.
+   * - Entre instâncias: só quem obtém o lease da geração atual chama /auth/refresh; as demais
+   *   aguardam a troca de geração e releem a sessão. O refresh token de uma geração nunca é enviado
+   *   duas vezes por este BFF:
+   *   - o lease só é LIBERADO quando a falha é comprovadamente anterior ao envio (conexão recusada) ou
+   *     quando o backend respondeu sem girar o par (5xx/429);
+   *   - lease VENCIDO com tentativa em aberto (instância caiu, travou ou falhou ao persistir) NÃO prova
+   *     que o backend deixou de processar: a sessão é encerrada (novo login), sem reenviar o refresh;
+   *   - o dono só publica o par novo com o lease ainda válido; publicação tardia é recusada, e o par
+   *     recém-emitido é revogado no backend.
+   */
   async function ensureFresh(sessionId) {
-    let s = store.get(sessionId);
+    const s = await store.get(sessionId);
     if (!s) return { state: "invalid", code: "session_expired" };
     const skewMs = config.session.refreshSkewSeconds * 1000;
     if (s.accessExpiresAt - skewMs > now()) return { state: "ok", session: s };
-    if (s.refreshing) {
-      const outcome = await s.refreshing;
-      if (outcome.state !== "ok") return outcome;
-      s = store.get(sessionId);
-      return s ? { state: "ok", session: s } : { state: "invalid", code: "session_expired" };
+    let promise = inflight.get(sessionId);
+    if (!promise) {
+      promise = refreshShared(sessionId, s.generation, s.refreshToken)
+        .finally(() => { if (inflight.get(sessionId) === promise) inflight.delete(sessionId); });
+      inflight.set(sessionId, promise);
     }
-    const generation = s.generation;
-    const refreshToken = s.refreshToken;
-    const promise = (async () => {
-      const r = await callBackend(ctx, { method: "POST", path: "/auth/refresh", body: { refreshToken } });
-      if (r.kind === "unreachable") return { state: "unavailable" };
-      if (r.kind === "uncertain") {
-        // Pode ter havido rotação: o refresh antigo NÃO é repetido; exige novo login.
-        store.delete(sessionId);
-        log("refresh_uncertain", { reason: r.reason });
-        return { state: "invalid", code: "session_refresh_uncertain" };
+    const outcome = await promise;
+    if (outcome.state !== "ok") return outcome;
+    const fresh = await store.get(sessionId);
+    return fresh ? { state: "ok", session: fresh } : { state: "invalid", code: "session_expired" };
+  }
+
+  async function refreshShared(sessionId, generation, refreshToken) {
+    const owner = newTicket();
+    const deadline = Date.now() + refreshLeaseMs + 2000;
+    for (;;) {
+      if (await store.acquireRefresh(sessionId, generation, owner, refreshLeaseMs)) {
+        return refreshWithLease(sessionId, generation, refreshToken, owner);
       }
-      if (r.status === 200 && !validTokenPair(r.json)) {
-        // 200 com par incompleto/inválido: a rotação pode ter ocorrido → incerto (não reenviar).
-        store.delete(sessionId);
-        log("refresh_uncertain", { reason: "invalid_token_pair" });
-        return { state: "invalid", code: "session_refresh_uncertain" };
+      // Outra instância renova esta geração (ou ela já mudou / a sessão terminou).
+      const p = await store.peek(sessionId);
+      if (!p) return { state: "invalid", code: "session_expired" };
+      if (p.generation !== generation) { log("refresh_joined"); return { state: "ok" }; }
+      if (p.abandoned) {
+        // Resultado desconhecido: o refresh guardado pode já ter sido consumido. Encerra, sem reenviar.
+        const snap = await store.abandonRefresh(sessionId, generation);
+        if (snap) {
+          log("refresh_abandoned");
+          await revoke(snap.accessToken ? [snap.accessToken] : [], "refresh_abandoned_revoked");  // melhor tentativa
+          return { state: "invalid", code: "session_refresh_uncertain" };
+        }
+        continue;                                                // outra instância já decidiu: relê
       }
-      if (r.status === 200) {
-        const ok = store.updateTokens(sessionId, generation, {
+      if (Date.now() > deadline) return { state: "unavailable" };
+      if (p.refreshing) await sleep(refreshPollMs);
+      // Lease liberado (falha comprovadamente anterior ao envio, ou backend sem rotação): tenta obter.
+    }
+  }
+
+  async function refreshWithLease(sessionId, generation, refreshToken, owner) {
+    const r = await callBackend(ctx, { method: "POST", path: "/auth/refresh", body: { refreshToken } });
+    if (r.kind === "unreachable") { await store.releaseRefresh(sessionId, owner); return { state: "unavailable" }; }
+    if (r.kind === "uncertain") {
+      // Pode ter havido rotação: o refresh antigo NÃO é repetido; exige novo login.
+      await store.delete(sessionId);
+      log("refresh_uncertain", { reason: r.reason });
+      return { state: "invalid", code: "session_refresh_uncertain" };
+    }
+    if (r.status === 200 && !validTokenPair(r.json)) {
+      // 200 com par incompleto/inválido: a rotação pode ter ocorrido → incerto (não reenviar).
+      await store.delete(sessionId);
+      log("refresh_uncertain", { reason: "invalid_token_pair" });
+      return { state: "invalid", code: "session_refresh_uncertain" };
+    }
+    if (r.status === 200) {
+      let ok;
+      try {
+        ok = await store.updateTokens(sessionId, generation, {
           accessToken: r.json.accessToken,
           refreshToken: r.json.refreshToken,
           accessExpiresAt: now() + r.json.expiresIn * 1000,
-        });
-        if (!ok) { log("refresh_discarded"); return { state: "invalid", code: "session_expired" }; }
-        log("refresh_ok");
-        return { state: "ok" };
+        }, owner);
+      } catch (e) {
+        // O backend girou o par mas não foi possível persistir: o refresh guardado está consumido.
+        await revoke([r.json.accessToken], "refresh_tokens_revoked");
+        throw e;                                                          // 503; o lease vence → sessão encerrada
       }
-      if (r.status === 401) { store.delete(sessionId); log("refresh_rejected"); return { state: "invalid", code: "session_expired" }; }
-      // 5xx/429: o backend respondeu sem confirmar a rotação (transação revertida) → mantém a sessão.
-      return { state: "unavailable" };
-    })();
-    s.refreshing = promise;
-    try {
-      const outcome = await promise;
-      if (outcome.state !== "ok") return outcome;
-      const fresh = store.get(sessionId);
-      return fresh ? { state: "ok", session: fresh } : { state: "invalid", code: "session_expired" };
-    } finally {
-      if (s.refreshing === promise) s.refreshing = null;
+      if (!ok) {
+        // Sem autoridade (lease vencido, sessão encerrada/abandonada): descarta, encerra e revoga o par novo.
+        log("refresh_discarded");
+        await store.delete(sessionId);
+        await revoke([r.json.accessToken], "refresh_tokens_revoked");
+        return { state: "invalid", code: "session_refresh_uncertain" };
+      }
+      log("refresh_ok");
+      return { state: "ok" };
     }
+    if (r.status === 401) { await store.delete(sessionId); log("refresh_rejected"); return { state: "invalid", code: "session_expired" }; }
+    // 5xx/429: o backend respondeu sem confirmar a rotação (transação revertida) → mantém a sessão.
+    await store.releaseRefresh(sessionId, owner);
+    return { state: "unavailable" };
   }
 
   function freshFailure(outcome, cookieName) {
@@ -239,7 +301,7 @@ export function createBff({
     if (denied) return err(denied.status, denied.code, denied.message);
     const body = await readJson(request);
     if (body.error) return body.error;
-    const { current, olderLive, dead } = resolveCookies(request);
+    const { current, olderLive, dead } = await resolveCookies(request);
     const knownBrowser = readBrowserId(request.headers.get("cookie"), config);
     const browserId = knownBrowser ?? newBrowserId();
     const clearDead = dead.map((c) => clearCookie(config, c.name));
@@ -247,8 +309,8 @@ export function createBff({
       return err(409, "session_resync_required",
         "A sessão anterior deste navegador terminou. Atualize e entre novamente.", { "set-cookie": clearDead });
     }
-    const ticket = { cancelled: false };
-    const attached = current ? store.attachPendingLogin(current.value, ticket) : false;
+    const ticket = newTicket();
+    const attached = current ? await store.attachPendingLogin(current.value, ticket) : false;
     try {
       const r = await callBackend(ctx, { method: "POST", path: "/auth/login", body: body.value ?? {}, clientIp: clientIp(request) });
       if (r.kind === "unreachable") return err(503, "backend_unavailable", "Serviço indisponível. Tente novamente.");
@@ -258,38 +320,40 @@ export function createBff({
       if (!validTokenPair(r.json) || !user?.id) return err(502, "upstream_error", "Resposta inválida do servidor.");
       const { accessToken, refreshToken, expiresIn } = r.json;
 
-      // ---- seção crítica SÍNCRONA: validar e publicar sem espera de rede entre os passos ----
-      const stillValid = !ticket.cancelled && (!current || store.isLive(current.value, current.name));
-      let id = null;
-      let cookieName = null;
-      let previousTokens = [];
-      let capacity = false;
-      if (stillValid) {
-        cookieName = newCookieName(config);
-        try {
-          id = store.create({ userId: user.id, accessToken, refreshToken, cookieName, browserId,
-            accessExpiresAt: now() + expiresIn * 1000 });
-          previousTokens = endNow([...(current ? [current] : []), ...olderLive], { cancelLogins: true });
-        } catch (e) {
-          if (!(e instanceof SessionCapacityError)) throw e;
-          capacity = true;
-        }
+      // ---- seção crítica: UMA operação atômica do armazenamento valida e publica ----
+      const cookieName = newCookieName(config);
+      let published;
+      try {
+        published = await store.publishLogin({
+          current: current ? { value: current.value, name: current.name } : null,
+          ticket,
+          olderLive: olderLive.map((c) => ({ value: c.value, name: c.name })),
+          session: { userId: user.id, accessToken, refreshToken, cookieName, browserId,
+            accessExpiresAt: now() + expiresIn * 1000 },
+        });
+      } catch (e) {
+        await revoke([accessToken], "login_tokens_revoked");          // nada publicado: não deixa par órfão
+        throw e;
       }
       // ---- fim da seção crítica ----
 
-      if (!stillValid || capacity) {
+      if (published.status !== "ok") {
         await revoke([accessToken], "login_tokens_revoked");          // a tentativa perdeu: revoga o par novo
-        if (capacity) return err(503, "session_capacity_reached", "Muitas sessões ativas no momento. Tente novamente mais tarde.");
+        if (published.status === "capacity") {
+          return err(503, "session_capacity_reached", "Muitas sessões ativas no momento. Tente novamente mais tarde.");
+        }
         log("login_cancelled");
         // Apaga só cookies que esta requisição trouxe e que agora estão mortos (nunca o de outra tentativa).
-        const nowDead = [...dead, ...(current && !store.isLive(current.value, current.name) ? [current] : [])];
+        const currentDead = current && !(await store.isLive(current.value, current.name));
+        const nowDead = [...dead, ...(currentDead ? [current] : [])];
         return err(409, "login_cancelled", "A sessão foi encerrada em outra aba durante o login. Entre novamente.",
           { "set-cookie": nowDead.map((c) => clearCookie(config, c.name)) });
       }
+      const { id, previousTokens } = published;
       await revoke(previousTokens, "logout_backend");                 // troca de usuário: revoga a anterior
       const consumed = [...clearDead, ...(current ? [clearCookie(config, current.name)] : []),
         ...olderLive.map((c) => clearCookie(config, c.name))];
-      if (!store.isLive(id, cookieName)) {
+      if (!(await store.isLive(id, cookieName))) {
         // Um logout deste navegador encerrou a sessão nova durante a revogação: não instala cookie.
         log("login_cancelled");
         return err(409, "login_cancelled", "A sessão foi encerrada em outra aba durante o login. Entre novamente.",
@@ -300,27 +364,37 @@ export function createBff({
       if (!knownBrowser) cookies.push(browserCookie(config, browserId));
       return json(200, { user }, { "set-cookie": cookies });
     } finally {
-      if (attached) store.detachPendingLogin(current.value, ticket);
+      if (attached) await store.detachPendingLogin(current.value, ticket).catch(() => {});
     }
   }
 
   /**
-   * Logout: encerra SINCRONAMENTE todas as sessões vivas que a requisição trouxe (cancelando
-   * logins pendentes associados), apaga apenas os cookies observados e depois revoga no backend.
+   * Logout: encerra numa operação ATÔMICA do armazenamento todas as sessões vivas que a requisição
+   * trouxe e as do mesmo navegador (cancelando logins pendentes associados), apaga apenas os cookies
+   * observados e depois revoga no backend. Armazenamento indisponível → 503 (sem fingir sucesso).
    * Um logout atrasado nunca apaga o cookie de uma sessão mais nova (nome diferente).
    */
   async function logout(request) {
     const denied = guard(request);
     if (denied) return err(denied.status, denied.code, denied.message);
-    const { current, olderLive, dead } = resolveCookies(request);
-    const live = [...(current ? [current] : []), ...olderLive];
-    // Também as sessões vivas deste navegador que a requisição não conhecia (login concorrente
-    // já publicado): o logout concluído vence. Não apaga cookies que não observou.
-    const seen = new Set(live.map((e) => e.value));
-    const sameBrowser = store.liveOfBrowser(readBrowserId(request.headers.get("cookie"), config))
-      .filter((e) => !seen.has(e.value));
-    const tokens = endNow([...live, ...sameBrowser]);
-    const cookies = [...live, ...dead].map((c) => clearCookie(config, c.name));
+    const observed = readSessionCookies(request.headers.get("cookie"), config);
+    let tokens;
+    try {
+      const { current, olderLive } = await resolveCookies(request);
+      const live = [...(current ? [current] : []), ...olderLive];
+      // Também as sessões vivas deste navegador que a requisição não conhecia (login concorrente
+      // já publicado): o logout concluído vence — na MESMA operação atômica. Não apaga cookies que
+      // não observou.
+      tokens = await endNow(live, readBrowserId(request.headers.get("cookie"), config));
+    } catch (e) {
+      if (!(e instanceof SessionStoreUnavailableError)) throw e;
+      // Sem confirmação do encerramento: o navegador esquece os cookies observados, mas a resposta
+      // NÃO finge sucesso (o cliente informa e pode tentar de novo).
+      log("logout_unconfirmed");
+      return err(503, "session_store_unavailable", "Não foi possível confirmar a saída. Tente novamente.",
+        { "set-cookie": observed.map((c) => clearCookie(config, c.name)) });
+    }
+    const cookies = observed.map((c) => clearCookie(config, c.name));
     await revoke(tokens, "logout_backend");
     return json(204, null, cookies.length ? { "set-cookie": cookies } : {});
   }
@@ -328,18 +402,18 @@ export function createBff({
   async function session(request) {
     const denied = guard(request);
     if (denied) return err(denied.status, denied.code, denied.message);
-    const { current, olderLive, dead } = resolveCookies(request);
+    const { current, olderLive, dead } = await resolveCookies(request);
     // Ressincronização: apaga cookies mortos e encerra sessões antigas que este navegador ainda carrega.
     const stale = [...dead, ...olderLive];
     const extra = stale.length ? { "set-cookie": stale.map((c) => clearCookie(config, c.name)) } : {};
-    const staleTokens = endNow(olderLive);
+    const staleTokens = olderLive.length ? await endNow(olderLive) : [];
     if (staleTokens.length) void revoke(staleTokens, "logout_backend");
     if (!current) return json(200, { authenticated: false }, extra);
     const outcome = await ensureFresh(current.value);
     if (outcome.state !== "ok") return freshFailure(outcome, current.name);
     const r = await callBackend(ctx, { method: "GET", path: "/auth/me", token: outcome.session.accessToken });
     if (r.kind !== "response") return err(503, "backend_unavailable", "Serviço indisponível. Tente novamente.");
-    if (r.status === 401) { store.delete(current.value); return ended("session_expired", "Sessão encerrada. Entre novamente.", current.name); }
+    if (r.status === 401) { await store.delete(current.value); return ended("session_expired", "Sessão encerrada. Entre novamente.", current.name); }
     if (r.status !== 200) return passthrough(r);
     return json(200, { authenticated: true, user: r.json.user }, extra);
   }
@@ -353,7 +427,7 @@ export function createBff({
     if (denied) return err(denied.status, denied.code, denied.message);
     const built = buildQuery(findRoute(method, path), new URL(request.url).searchParams);
     if (!built.ok) return err(422, "validation_error", built.message);
-    const { current } = resolveCookies(request);                 // respostas comuns não mexem em cookies
+    const { current } = await resolveCookies(request);           // respostas comuns não mexem em cookies
     if (!current) return err(401, "not_authenticated", "Não autenticado.");
     let body;
     if (method !== "GET") {
@@ -375,7 +449,7 @@ export function createBff({
     }
     if (r.status === 401) {
       // Sessão revogada no backend (logout em outro lugar, redefinição de senha...). Sem nova tentativa.
-      store.delete(current.value);
+      await store.delete(current.value);
       return ended("session_expired", "Sessão encerrada. Entre novamente.", current.name);
     }
     return passthrough(r);
@@ -402,6 +476,105 @@ export function createBff({
     return passthrough(r);
   }
 
+  // ------------------------------------------------------------------ arquivo PDF da intimação (doc 28)
+  const FILE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+  const DISPOSITION_RE = /^attachment; filename="[^"\\\r\n]{1,255}"; filename\*=UTF-8''[A-Za-z0-9%._~!*'()-]{1,2048}$/;
+
+  /** Lê o corpo binário com teto aplicado DURANTE a leitura (só nesta rota). */
+  async function readBytes(request, max) {
+    const declared = request.headers.get("content-length");
+    if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > max)) return { tooLarge: true };
+    if (!request.body) return { bytes: new Uint8Array(0) };
+    const reader = request.body.getReader();
+    const chunks = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) { await reader.cancel().catch(() => {}); return { tooLarge: true }; }
+      chunks.push(value);
+    }
+    return { bytes: new Uint8Array(Buffer.concat(chunks)) };
+  }
+
+  async function authorizedSession(request) {
+    const { current } = await resolveCookies(request);
+    if (!current) return { error: err(401, "not_authenticated", "Não autenticado.") };
+    const outcome = await ensureFresh(current.value);
+    if (outcome.state !== "ok") return { error: freshFailure(outcome, current.name) };
+    return { current, session: outcome.session };
+  }
+
+  async function intimationFileUpload(request, intimationId) {
+    if (!FILE_ID_RE.test(intimationId || "")) return err(404, "not_found", "Recurso não encontrado.");
+    if (request.method !== "PUT") return err(405, "method_not_allowed", "Método não permitido.");
+    const denied = guard(request);                                         // Origin + cabeçalho próprio
+    if (denied) return err(denied.status, denied.code, denied.message);
+    if ((request.headers.get("content-type") || "").split(";")[0].trim().toLowerCase() !== "application/pdf") {
+      return err(415, "file_not_pdf", "Envie um arquivo PDF.");
+    }
+    const name = request.headers.get("x-prazoai-file-name") || "";
+    if (name.length > 2048 || !/^[A-Za-z0-9%._~!*'()-]*$/.test(name)) return err(422, "validation_error", "Nome de arquivo inválido.");
+    const auth = await authorizedSession(request);                        // sessão ANTES de ler o corpo
+    if (auth.error) return auth.error;
+    const body = await readBytes(request, config.files.maxBytes);
+    if (body.tooLarge) return err(413, "file_too_large", "O arquivo excede 10 MiB.");
+    const r = await callBackend(ctx, {
+      method: "PUT", path: `/intimations/${intimationId}/file`, token: auth.session.accessToken, clientIp: clientIp(request),
+      raw: { bytes: body.bytes, contentType: "application/pdf", headers: name ? { "x-prazoai-file-name": name } : {} },
+      timeoutMs: config.files.timeoutMs,
+    });
+    if (r.kind === "unreachable") return err(503, "backend_unavailable", "Serviço indisponível. Tente novamente.");
+    if (r.kind === "uncertain") {
+      return json(504, { error: { code: "upstream_timeout", message: "Sem confirmação do envio; confira a intimação antes de repetir." }, outcome: "unknown" });
+    }
+    if (r.status === 401) {
+      await store.delete(auth.current.value);
+      return ended("session_expired", "Sessão encerrada. Entre novamente.", auth.current.name);
+    }
+    log("intimation_file_upload", { result: r.status });                  // nunca nome, conteúdo ou ids de sessão
+    return passthrough(r);
+  }
+
+  async function intimationFileDownload(request, intimationId) {
+    if (!FILE_ID_RE.test(intimationId || "")) return err(404, "not_found", "Recurso não encontrado.");
+    if (request.method !== "GET") return err(405, "method_not_allowed", "Método não permitido.");
+    const denied = guard(request);                                         // exige o cabeçalho próprio (não é link simples)
+    if (denied) return err(denied.status, denied.code, denied.message);
+    const auth = await authorizedSession(request);
+    if (auth.error) return auth.error;
+    const r = await fetchBackendFile(ctx, {
+      path: `/intimations/${intimationId}/file`, token: auth.session.accessToken, clientIp: clientIp(request),
+      timeoutMs: config.files.timeoutMs, maxBytes: config.files.maxBytes,
+    });
+    if (r.kind === "unreachable" || r.kind === "uncertain") return err(503, "backend_unavailable", "Serviço indisponível. Tente novamente.");
+    if (r.kind === "response") {
+      if (r.status === 401) {
+        await store.delete(auth.current.value);
+        return ended("session_expired", "Sessão encerrada. Entre novamente.", auth.current.name);
+      }
+      return passthrough(r);
+    }
+    const disposition = r.headers.get("content-disposition") || "";
+    if (r.headers.get("content-type") !== "application/pdf" || !DISPOSITION_RE.test(disposition)) {
+      r.done();
+      await r.body.cancel().catch(() => {});
+      return err(502, "upstream_error", "Resposta inválida do servidor.");
+    }
+    return new Response(r.body, {
+      status: 200,
+      headers: {
+        ...NO_STORE,
+        "content-type": "application/pdf",
+        "content-disposition": disposition,
+        "content-length": r.headers.get("content-length"),
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; sandbox",
+      },
+    });
+  }
+
   // Recuperação de senha (E4): rotas públicas com as MESMAS proteções (guard, corpo limitado, cliente
   // do backend com destino fixo) e sem nenhum acesso a cookies ou ao armazenamento de sessões.
   const recovery = createPublicRecovery({
@@ -410,6 +583,7 @@ export function createBff({
 
   return {
     register, login, logout, session, proxy, publicInvitationLookup, ensureFresh, CSRF_HEADER,
+    intimationFileUpload, intimationFileDownload,
     passwordStatus: recovery.passwordStatus, passwordForgot: recovery.passwordForgot,
     passwordReset: recovery.passwordReset,
   };

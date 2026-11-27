@@ -107,10 +107,11 @@ def build_auth_container(
     password_hasher: PasswordHasher | None = None,
     sql_checkpoint: Callable[[str], None] | None = None,
 ) -> AuthContainer:
-    if settings.auth_storage == "memory" and settings.is_production:
+    if settings.storage == "memory" and settings.is_hosted:
+        # Defesa adicional (ensure_hosted_requirements já recusa antes): memória perde contas ao reiniciar.
         raise InMemoryAuthBlockedError(
-            "AUTH_STORAGE=memory é bloqueado em ENVIRONMENT=production: os dados se perdem ao reiniciar e "
-            "não funcionam com múltiplos workers. Use AUTH_ENABLED=false ou um armazenamento persistente."
+            f"STORAGE=memory é bloqueado em ENVIRONMENT={settings.environment}: os dados se perdem ao reiniciar e "
+            "não funcionam com múltiplos workers. Use STORAGE=postgres."
         )
     if settings.auth_jwt_secret is not None:
         secret, ephemeral = settings.auth_jwt_secret.get_secret_value(), False

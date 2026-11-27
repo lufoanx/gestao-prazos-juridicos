@@ -10,6 +10,9 @@ export interface IntimationsClient {
   confirm(id: string, version: number, data: Omit<D.DeadlineInput, "reviewed">): Promise<D.ConfirmResult>;
   discard(id: string, version: number): Promise<D.Intimation>;
   history(id: string, page?: number, perPage?: number): Promise<D.IntimationEventPage>;
+  uploadFile(id: string, file: Blob & { name?: string }): Promise<D.Intimation>;
+  downloadFile(id: string): Promise<{ blob: Blob; fileName: string; contentType: string }>;
+  linkedToDeadline(deadlineId: string): Promise<D.Intimation>;
 }
 export interface NotificationsClient {
   list(p: { scope: "personal" | "office"; unreadOnly?: boolean; page?: number; perPage?: number }): Promise<D.NotificationPage>;

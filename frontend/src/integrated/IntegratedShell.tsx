@@ -15,7 +15,7 @@ const NAV = [
   { href: "/app/escritorio", label: "Escritório", ready: true },
   { href: "/app/escritorio/equipe", label: "Equipe", ready: true, office: true },
   { href: "/app/perfil", label: "Perfil", ready: true },
-  { href: "/app/dashboard", label: "Dashboard", ready: false },
+  { href: "/app/dashboard", label: "Dashboard", ready: true },
   { href: "/app/prazos", label: "Prazos", ready: true },
   { href: "/app/calendario", label: "Calendário", ready: true },
   { href: "/app/intimacoes", label: "Intimações", ready: true },

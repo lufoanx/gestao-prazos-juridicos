@@ -41,12 +41,64 @@ async function login(env) {
 const hasToken = (text) => /\b[ar]\d+-x{24}/.test(text);
 
 // ---------------------------------------------------------------- configuração
+// Configuração hospedada COMPLETA e fictícia (nenhum valor real): base para os testes de rejeição.
+const HOSTED = Object.freeze({
+  PRAZOAI_APP_ENV: "production", PRAZOAI_APP_ORIGIN: "https://app.exemplo.com",
+  PRAZOAI_BACKEND_URL: "https://api.exemplo.com", PRAZOAI_PROXY_SECRET: "p".repeat(40),
+  PRAZOAI_TRUSTED_CLIENT_IP_HEADER: "x-real-ip", PRAZOAI_BFF_SESSION_STORE: "postgres",
+  PRAZOAI_BFF_DATABASE_URL: "postgresql://bff:SENHA-FICTICIA@db.exemplo.com:5432/prazoai?sslmode=verify-full",
+  PRAZOAI_BFF_SESSION_KEY: Buffer.from(Array.from({ length: 32 }, (_, i) => i * 7 + 1)).toString("base64url"),
+});
+
+test("config hospedada: staging e production exigem HTTPS, IP confiável, sessões compartilhadas e TLS no banco", () => {
+  for (const appEnv of ["staging", "production"]) {
+    const ok = loadBffConfig({ ...HOSTED, PRAZOAI_APP_ENV: appEnv });
+    assert.equal(ok.hosted, true);
+    assert.equal(ok.cookie.secure, true);
+    assert.equal(ok.sessionStore.kind, "postgres");
+    assert.equal(ok.sessionStore.target, "db.exemplo.com:5432/prazoai");
+    // Segredos fora de qualquer serialização da configuração.
+    const dump = JSON.stringify(ok) + Object.keys(ok).join(",");
+    assert.equal(dump.includes("SENHA-FICTICIA"), false);
+    assert.equal(dump.includes(HOSTED.PRAZOAI_BFF_SESSION_KEY), false);
+    const rejected = [
+      { PRAZOAI_BFF_SESSION_STORE: undefined },                                     // padrão não vale em hospedado
+      { PRAZOAI_BFF_SESSION_STORE: "memory" },
+      { PRAZOAI_BFF_DATABASE_URL: undefined },
+      { PRAZOAI_BFF_DATABASE_URL: "postgresql://bff:x@db.exemplo.com/prazoai" },     // sem TLS
+      { PRAZOAI_BFF_DATABASE_URL: "postgresql://bff:x@db.exemplo.com/prazoai?sslmode=disable" },
+      { PRAZOAI_BFF_DATABASE_URL: "postgresql://bff:x@db.exemplo.com/prazoai?sslmode=require&options=-c%20x" },
+      { PRAZOAI_BFF_SESSION_KEY: undefined },
+      { PRAZOAI_BFF_SESSION_KEY: "curta" },
+      { PRAZOAI_BFF_SESSION_KEY: Buffer.alloc(32).toString("base64url") },           // não aleatória
+      { PRAZOAI_PROXY_SECRET: undefined, PRAZOAI_TRUSTED_CLIENT_IP_HEADER: undefined },
+      { PRAZOAI_TRUSTED_CLIENT_IP_HEADER: undefined },
+      { PRAZOAI_BACKEND_URL: "http://api.exemplo.com" },                             // sem TLS nem rede privada
+      { PRAZOAI_BACKEND_URL: undefined },                                            // padrão local não vale
+      { PRAZOAI_APP_ORIGIN: "https://localhost:3000" },
+      { PRAZOAI_APP_ORIGIN: "http://app.exemplo.com", PRAZOAI_COOKIE_INSECURE_LOCAL: "true" },
+    ];
+    for (const over of rejected) {
+      let message = "";
+      assert.throws(() => loadBffConfig({ ...HOSTED, PRAZOAI_APP_ENV: appEnv, ...over }), (e) => { message = e.message; return true; },
+        `${appEnv} deveria recusar ${JSON.stringify(Object.keys(over))}`);
+      assert.equal(message.includes("SENHA-FICTICIA"), false);
+    }
+  }
+  const privateNet = loadBffConfig({ ...HOSTED, PRAZOAI_BACKEND_URL: "http://backend.interno:8000", PRAZOAI_BACKEND_PRIVATE_NETWORK: "true" });
+  assert.equal(privateNet.backendBase, "http://backend.interno:8000");
+  assert.throws(() => loadBffConfig({ ...HOSTED, PRAZOAI_BACKEND_PRIVATE_NETWORK: "sim" }));
+  // Local: memória continua o padrão; postgres opcional.
+  assert.equal(loadBffConfig(ENV).sessionStore.kind, "memory");
+  assert.throws(() => loadBffConfig({ ...ENV, PRAZOAI_BFF_SESSION_STORE: "redis" }));
+});
+
 test("config: segurança dos cookies independe de NODE_ENV e de cabeçalhos", () => {
   assert.throws(() => loadBffConfig({ ...ENV, PRAZOAI_COOKIE_INSECURE_LOCAL: undefined }));
   assert.throws(() => loadBffConfig({ ...ENV, PRAZOAI_APP_ENV: "production" }));
   assert.throws(() => loadBffConfig({ ...ENV, PRAZOAI_APP_ORIGIN: "http://app.exemplo.com" }));
   assert.throws(() => loadBffConfig({ ...ENV, PRAZOAI_APP_ORIGIN: "https://app.exemplo.com" })); // flag local + https
-  const prod = loadBffConfig({ PRAZOAI_APP_ENV: "production", PRAZOAI_APP_ORIGIN: "https://app.exemplo.com", NODE_ENV: "development" });
+  const prod = loadBffConfig({ ...HOSTED, NODE_ENV: "development" });
   assert.equal(prod.cookie.name, "__Host-prazoai_sid");
   assert.equal(prod.cookie.secure, true);
   const local = loadBffConfig({ ...ENV, NODE_ENV: "production" });            // next start em teste
@@ -62,36 +114,56 @@ test("config: IP do cliente só por cabeçalho de infraestrutura explícito e co
   assert.throws(() => loadBffConfig({ ...ENV, PRAZOAI_PROXY_SECRET: "curto" }));
   const ok = loadBffConfig({ ...ENV, PRAZOAI_PROXY_SECRET: "s".repeat(40), PRAZOAI_TRUSTED_CLIENT_IP_HEADER: "x-real-ip" });
   assert.equal(ok.clientIpHeader, "x-real-ip");
+  assert.equal(ok.clientIpSource, "header");
+  assert.equal(loadBffConfig(ENV).clientIpSource, "none");
+});
+
+test("config: modo x-forwarded-for-rightmost (borda que acrescenta o IP, ex.: Azure Container Apps)", () => {
+  const XFF = { PRAZOAI_TRUSTED_CLIENT_IP_SOURCE: "x-forwarded-for-rightmost" };
+  const ok = loadBffConfig({ ...ENV, ...XFF, PRAZOAI_PROXY_SECRET: "s".repeat(40) });
+  assert.equal(ok.clientIpSource, "x-forwarded-for-rightmost");
+  assert.equal(ok.clientIpHeader, "");
+  assert.throws(() => loadBffConfig({ ...ENV, ...XFF }));                                         // sem segredo
+  assert.throws(() => loadBffConfig({ ...ENV, ...XFF, PRAZOAI_PROXY_SECRET: "s".repeat(40),
+    PRAZOAI_TRUSTED_CLIENT_IP_HEADER: "x-real-ip" }));                                             // ambíguo
+  assert.throws(() => loadBffConfig({ ...ENV, PRAZOAI_TRUSTED_CLIENT_IP_SOURCE: "x-forwarded-for",
+    PRAZOAI_PROXY_SECRET: "s".repeat(40) }));                                                      // valor inválido
+  // Hospedado: o modo substitui o cabeçalho dedicado; sem nenhum dos dois continua recusado.
+  for (const appEnv of ["staging", "production"]) {
+    const hosted = loadBffConfig({ ...HOSTED, PRAZOAI_APP_ENV: appEnv, PRAZOAI_TRUSTED_CLIENT_IP_HEADER: undefined, ...XFF });
+    assert.equal(hosted.clientIpSource, "x-forwarded-for-rightmost");
+    assert.throws(() => loadBffConfig({ ...HOSTED, PRAZOAI_APP_ENV: appEnv, PRAZOAI_TRUSTED_CLIENT_IP_HEADER: undefined }));
+  }
 });
 
 // ---------------------------------------------------------------- armazenamento
-test("store: expiração por inatividade e idade, limpeza e capacidade sem derrubar sessões", () => {
+test("store: expiração por inatividade e idade, limpeza e capacidade sem derrubar sessões", async () => {
   let t = 0;
   const store = createMemorySessionStore({ maxSessions: 2, idleSeconds: 60, maxAgeSeconds: 300, sweepIntervalSeconds: 10 }, () => t);
-  const a = store.create({ userId: "u", accessToken: "a", refreshToken: "r", accessExpiresAt: 0 });
-  store.create({ userId: "u", accessToken: "a", refreshToken: "r", accessExpiresAt: 0 });
-  assert.throws(() => store.create({ userId: "u", accessToken: "a", refreshToken: "r", accessExpiresAt: 0 }), SessionCapacityError);
+  const a = await store.create({ userId: "u", accessToken: "a", refreshToken: "r", accessExpiresAt: 0 });
+  await store.create({ userId: "u", accessToken: "a", refreshToken: "r", accessExpiresAt: 0 });
+  await assert.rejects(store.create({ userId: "u", accessToken: "a", refreshToken: "r", accessExpiresAt: 0 }), SessionCapacityError);
   t += 59_000;
-  assert.ok(store.get(a));                                        // ativa renova a inatividade
+  assert.ok(await store.get(a));                                  // ativa renova a inatividade
   t += 59_000;
-  store.create({ userId: "u", accessToken: "a", refreshToken: "r", accessExpiresAt: 0 }); // a outra expirou → liberou
+  await store.create({ userId: "u", accessToken: "a", refreshToken: "r", accessExpiresAt: 0 }); // a outra expirou → liberou
   assert.equal(store.size, 2);
   t += 300_000;
-  assert.equal(store.get(a), null);                               // idade máxima
-  assert.equal(store.sweep(true) >= 0, true);
+  assert.equal(await store.get(a), null);                         // idade máxima
+  assert.equal(await store.sweep(true) >= 0, true);
   assert.equal(store.size, 0);
 });
 
-test("store: remoção apaga os tokens e troca condicional por geração", () => {
+test("store: remoção apaga os tokens e troca condicional por geração", async () => {
   const store = createMemorySessionStore({ maxSessions: 5, idleSeconds: 60, maxAgeSeconds: 300, sweepIntervalSeconds: 10 });
-  const id = store.create({ userId: "u", accessToken: "a1", refreshToken: "r1", accessExpiresAt: 0 });
-  const s = store.get(id);
-  assert.equal(store.updateTokens(id, s.generation + 1, { accessToken: "x", refreshToken: "y", accessExpiresAt: 0 }), false);
-  assert.equal(store.updateTokens(id, s.generation, { accessToken: "a2", refreshToken: "r2", accessExpiresAt: 0 }), true);
-  assert.deepEqual(store.delete(id), { accessToken: "a2" });
+  const id = await store.create({ userId: "u", accessToken: "a1", refreshToken: "r1", accessExpiresAt: 0 });
+  const s = await store.get(id);
+  assert.equal(await store.updateTokens(id, s.generation + 1, { accessToken: "x", refreshToken: "y", accessExpiresAt: 0 }), false);
+  assert.equal(await store.updateTokens(id, s.generation, { accessToken: "a2", refreshToken: "r2", accessExpiresAt: 0 }), true);
+  assert.deepEqual(await store.delete(id), { accessToken: "a2" });
   assert.equal(s.accessToken, "");
   assert.equal(s.refreshToken, "");
-  assert.equal(store.updateTokens(id, s.generation, { accessToken: "x", refreshToken: "y", accessExpiresAt: 0 }), false);
+  assert.equal(await store.updateTokens(id, s.generation, { accessToken: "x", refreshToken: "y", accessExpiresAt: 0 }), false);
   assert.match(id, /^[A-Za-z0-9_-]{43}$/);
 });
 
@@ -352,6 +424,28 @@ test("IP do cliente: sem configuração nada é encaminhado; com infraestrutura 
   assert.equal(env.backend.calls.at(-1).headers["x-prazoai-proxy-secret"], "s".repeat(40));
   await env.bff.login(req("POST", "/bff/auth/login", { body: { email: "a@b.com", password: "x" }, headers: { "x-real-ip": "1.2.3.4, 5.6.7.8" } }));
   assert.equal(env.backend.calls.at(-1).headers["x-prazoai-client-ip"], undefined);
+  // Modo padrão (cabeçalho dedicado): X-Forwarded-For nunca é lido.
+  await env.bff.login(req("POST", "/bff/auth/login", { body: { email: "a@b.com", password: "x" }, headers: { "x-forwarded-for": "203.0.113.9" } }));
+  assert.equal(env.backend.calls.at(-1).headers["x-prazoai-client-ip"], undefined);
+});
+
+test("IP do cliente (x-forwarded-for-rightmost): só o último item, que a borda acrescenta; forjados ignorados", async () => {
+  const env = setup({ PRAZOAI_PROXY_SECRET: "s".repeat(40), PRAZOAI_TRUSTED_CLIENT_IP_SOURCE: "x-forwarded-for-rightmost" });
+  const sent = async (headers) => {
+    await env.bff.login(req("POST", "/bff/auth/login", { body: { email: "a@b.com", password: "x" }, headers }));
+    return env.backend.calls.at(-1).headers["x-prazoai-client-ip"];
+  };
+  assert.equal(await sent({ "x-forwarded-for": "203.0.113.5" }), "203.0.113.5");
+  assert.equal(env.backend.calls.at(-1).headers["x-prazoai-proxy-secret"], "s".repeat(40));
+  // Visitante forja um valor; a borda acrescenta o IP real no fim: vale só o último.
+  assert.equal(await sent({ "x-forwarded-for": "6.6.6.6, 203.0.113.5" }), "203.0.113.5");
+  assert.equal(await sent({ "x-forwarded-for": "6.6.6.6,7.7.7.7,  2001:db8::1 " }), "2001:db8::1");
+  // Último item inválido ou ausente: nada é encaminhado (nunca cai para um item anterior).
+  assert.equal(await sent({ "x-forwarded-for": "203.0.113.5, nao-e-ip" }), undefined);
+  assert.equal(await sent({ "x-forwarded-for": "203.0.113.5," }), undefined);
+  assert.equal(await sent({}), undefined);
+  // Outros cabeçalhos de IP não têm efeito neste modo.
+  assert.equal(await sent({ "x-real-ip": "6.6.6.6" }), undefined);
 });
 
 test("capacidade do BFF: novo login recusado com 503 e tokens revogados no backend", async () => {

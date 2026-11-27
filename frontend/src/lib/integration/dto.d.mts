@@ -65,7 +65,7 @@ export interface IntimationDraft {
 }
 export interface Intimation {
   id: string; scope: DeadlineScope;
-  file: { name: string; sizeBytes: number; contentType: string; storage: "not_stored" | string };
+  file: { name: string; sizeBytes: number; contentType: string; storage: "not_stored" | "stored"; storedAt?: string | null };
   receivedAt: string; status: IntimationStatus;
   processing: { status: "not_available" | "pending" | "completed" | "failed" | string; attempts: number; failureCode: string | null };
   draft: IntimationDraft; suggestion: { source: string; fields: Record<string, unknown> } | null;

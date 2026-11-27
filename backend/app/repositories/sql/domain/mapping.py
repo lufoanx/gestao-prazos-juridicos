@@ -151,7 +151,8 @@ def intimation_out(r: Row) -> Intimation:
     return Intimation(
         id=r.id.hex, scope=scope_of(r),
         file=FileMeta(name=r.file_name, size_bytes=r.file_size_bytes, content_type=r.file_content_type,
-                      storage=r.file_storage),
+                      storage=r.file_storage, blob_key=r.file_blob_key, sha256=r.file_sha256,
+                      stored_at=r.file_stored_at),
         received_at=r.received_at, status=r.status,
         processing=Processing(status=r.processing_status, attempts=r.processing_attempts,
                               failure_code=r.processing_failure_code),
@@ -166,7 +167,8 @@ def intimation_cols(i: Intimation) -> dict[str, Any]:
     pending_office = i.status in PENDING and i.scope.kind == "office" and i.suggested_responsible_id is not None
     return {
         "id": U(i.id), **scope_cols(i.scope), "file_name": i.file.name, "file_size_bytes": i.file.size_bytes,
-        "file_content_type": i.file.content_type, "file_storage": i.file.storage, "received_at": i.received_at,
+        "file_content_type": i.file.content_type, "file_storage": i.file.storage, "file_blob_key": i.file.blob_key,
+        "file_sha256": i.file.sha256, "file_stored_at": i.file.stored_at, "received_at": i.received_at,
         "status": i.status, "processing_status": i.processing.status, "processing_attempts": i.processing.attempts,
         "processing_failure_code": i.processing.failure_code, "draft_title": d.title,
         "draft_case_number": d.case_number, "draft_court": d.court, "draft_practice_area": d.practice_area,

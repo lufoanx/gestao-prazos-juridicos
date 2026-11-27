@@ -1,4 +1,4 @@
-"""Backend PrazoAI (FastAPI) — sem banco de dados.
+"""Backend PrazoAI (FastAPI).
 
 Decisão oficial do projeto: o backend é Python/FastAPI, preservando a tecnologia existente.
 Ver docs/backend/02-arquitetura-proposta.md.
@@ -8,8 +8,8 @@ prefixo global /api + versão /v1, validação de ambiente, tratamento global de
 básicos e OpenAPI em dev. Endpoints legados (/ e /calcular-prazo) preservados.
 GET /api/health é mantido como ALIAS LEGADO, restrito ao módulo de saúde.
 
-Etapa 2: autenticação e usuários com armazenamento EM MEMÓRIA por instância (sem banco),
-bloqueado em production. Ver docs/backend/06-etapa-2-autenticacao.md.
+Etapa 2: autenticação e usuários (memória ou PostgreSQL). Homologação/produção exigem PostgreSQL e os
+demais requisitos de implantação (docs/backend/27-implantacao-homologacao-producao.md).
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from pydantic import AfterValidator
 from app.api.health import router as health_router
 from app.api.router import build_api_v1_router
 from app.core.clock import Clock
-from app.core.config import ensure_not_production, get_settings
+from app.core.config import ensure_hosted_requirements, get_settings
 from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging, get_logger
 from app.security.passwords import PasswordHasher
@@ -76,6 +76,7 @@ def _attach_opportunistic_maintenance(app: FastAPI, settings, checkpoint) -> Non
         auth.engine, auth.clock, RetentionPolicy.from_settings(settings),
         MaintenanceLimits.from_settings(settings, max_batches=settings.maintenance_opportunistic_max_batches),
         settings.maintenance_interval_seconds, checkpoint=checkpoint,
+        files=getattr(app.state, "files", None),
     )
     app.state.maintenance = maintenance
 
@@ -103,24 +104,27 @@ def create_app(
     sql_checkpoint: Callable[[str], None] | None = None,
     maintenance_checkpoint: Callable[[str], None] | None = None,
     recovery_overrides: Mapping[str, Any] | None = None,
+    file_store: Any = None,
 ) -> FastAPI:
     """Cria uma instância isolada da aplicação.
 
     Parâmetros opcionais permitem injetar relógio, entrega de recuperação e hasher
     (testes). O estado de autenticação em memória pertence a esta instância.
     `recovery_overrides` (testes): relógio monotônico, capacidade de cancelamento e gancho do
-    registro de cancelamento do RecoveryDispatcher.
+    registro de cancelamento do RecoveryDispatcher. `file_store` (testes): armazenamento de arquivos
+    injetado (ex.: falhas controladas) no lugar do construído a partir de FILE_STORAGE.
     """
     settings = get_settings()
-    # Bloqueio INCONDICIONAL de produção, antes de configurar log, compor módulos ou criar recursos.
-    ensure_not_production(settings)
+    # Homologação/produção: TODOS os requisitos de implantação conferidos antes de configurar log,
+    # compor módulos ou criar recursos (substitui o antigo bloqueio incondicional de produção).
+    ensure_hosted_requirements(settings)
     configure_logging(settings.log_level)
     logger = get_logger("prazoai")
 
-    # Swagger/OpenAPI apenas fora de produção.
-    docs_url = None if settings.is_production else "/docs"
-    redoc_url = None if settings.is_production else "/redoc"
-    openapi_url = None if settings.is_production else "/openapi.json"
+    # Swagger/OpenAPI apenas em development/test (nunca em homologação ou produção).
+    docs_url = None if settings.is_hosted else "/docs"
+    redoc_url = None if settings.is_hosted else "/redoc"
+    openapi_url = None if settings.is_hosted else "/openapi.json"
 
     @asynccontextmanager
     async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
@@ -142,7 +146,7 @@ def create_app(
         lifespan=lifespan,
         title="PrazoAI Backend",
         version="0.1.0",
-        description="Fundação do backend do PrazoAI (sem banco de dados).",
+        description="Backend do PrazoAI.",
         docs_url=docs_url,
         redoc_url=redoc_url,
         openapi_url=openapi_url,
@@ -222,6 +226,7 @@ def create_app(
             )
         # Prazos (Etapa 4): mesma unidade de trabalho (ordem de locks escritórios → prazos).
         app.state.deadlines = None
+        app.state.files = None
         app.state.intimations = None
         app.state.notifications = None
         if app.state.org is not None:
@@ -230,8 +235,17 @@ def create_app(
                 timezone=settings.deadlines_timezone, soon_days=settings.deadlines_soon_days,
             )
             # Intimações e notificações (Etapa 5): mesma unidade de trabalho; processamento indisponível.
+            # Arquivos (doc 28): Azure Blob privado; None = desligado (upload/download → 503).
+            if file_store is None:
+                from app.files.storage import build_blob_store
+
+                file_store = build_blob_store(settings)
+            app.state.files = file_store
+            if file_store is not None:
+                logger.info("file_storage enabled backend=%s", settings.file_storage)
             app.state.intimations = IntimationService(
                 unit_of_work=app.state.org.unit_of_work, clock=app.state.auth.clock, processing=processing_port,
+                files=file_store, file_reservation_seconds=settings.file_upload_reservation_seconds,
             )
             app.state.notifications = NotificationService(
                 unit_of_work=app.state.org.unit_of_work, clock=app.state.auth.clock,

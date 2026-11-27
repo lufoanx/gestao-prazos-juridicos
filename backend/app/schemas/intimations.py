@@ -107,7 +107,8 @@ class FileView(_Output):
     name: str
     size_bytes: int
     content_type: str
-    storage: str
+    storage: str                              # not_stored | stored (a chave do blob nunca é exposta)
+    stored_at: datetime | None = None
 
 
 class ProcessingView(_Output):

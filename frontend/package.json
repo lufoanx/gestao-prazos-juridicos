@@ -10,17 +10,20 @@
     "test": "node --test tests/*.test.mjs",
     "lint": "next lint",
     "test:integration": "node --test --test-concurrency=1 tests/integration/*.test.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "bff:sessions": "node scripts/bff-sessions.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
     "next": "15.5.29",
+    "pg": "8.23.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",
     "@types/node": "^22.10.2",
+    "@types/pg": "8.23.1",
     "@types/react": "^19.0.3",
     "@types/react-dom": "^19.0.2",
     "eslint": "^9.39.5",
