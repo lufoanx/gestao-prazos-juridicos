@@ -154,7 +154,9 @@ export function expireTokenInDatabase(token: string) {
   ].join("\n");
   const out = spawnSync(process.env.PRAZOAI_TEST_PYTHON || "python3", ["-c", script], {
     cwd: join(__dirname, "..", "..", "backend"),
+    // PGPASSWORD: senha do banco DESCARTÁVEL do CI, entregue fora da URL (libpq/psycopg a leem).
     env: { PATH: process.env.PATH ?? "", LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH ?? "", DATABASE_URL: url,
+      ...(process.env.PGPASSWORD ? { PGPASSWORD: process.env.PGPASSWORD } : {}),
       E2E_TOKEN_HASH: createHash("sha256").update(token, "utf8").digest("hex") } as unknown as NodeJS.ProcessEnv,
     encoding: "utf8", timeout: 30_000,
   });
