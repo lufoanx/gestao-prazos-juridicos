@@ -92,8 +92,8 @@ export function createAuthController({ api, channel = null, onReset = () => {} }
     if (!msg || typeof msg !== "object") return;
     // Outra aba saiu: limpa os dados locais e RESSINCRONIZA com o servidor (a sessão deste
     // navegador pode já ter sido substituída por um login mais novo; o aviso não é autoridade).
-    if (msg.type === "logout") { reset(); set({ status: "loading", user: null, error: null }); restore(); }
-    if (msg.type === "login" && msg.userId !== state.user?.id) { reset(); restore(); }
+    if (msg.type === "logout") { reset(); set({ status: "loading", user: null, error: null }); void restore(); }
+    if (msg.type === "login" && msg.userId !== state.user?.id) { reset(); void restore(); }
   }
   if (channel) channel.onmessage = (ev) => onMessage(ev.data);
 

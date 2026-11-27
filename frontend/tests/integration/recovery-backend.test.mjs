@@ -71,7 +71,7 @@ after(async () => {
 
 const enabledTest = (name, fn) => test(name, async (t) => {
   if (!MAILPIT) {
-    if (REQUIRE_MAILPIT) throw new Error("PRAZOAI_REQUIRE_MAILPIT_TESTS=1 exige PRAZOAI_TEST_MAILPIT_SMTP/API.");
+    assert.ok(!REQUIRE_MAILPIT, "PRAZOAI_REQUIRE_MAILPIT_TESTS=1 exige PRAZOAI_TEST_MAILPIT_SMTP/API.");
     t.skip("capturador SMTP não configurado");
     return;
   }

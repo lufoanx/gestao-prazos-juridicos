@@ -11,7 +11,7 @@ import re
 
 MAX_PDF_BYTES = 10 * 1024 * 1024          # igual ao CHECK `file_size_range` do banco
 _HEADER = re.compile(rb"^%PDF-[12]\.[0-9]")
-_OBJ = re.compile(rb"\d+\s+\d+\s+obj\b")
+_OBJ = re.compile(rb"(?<!\d)\d{1,10}\s{1,8}\d{1,5}\s{1,8}obj\b")
 _ENCRYPT = re.compile(rb"/Encrypt\b")
 # Palavra-chave `xref` em início de linha (não a contida em `startxref`) ou fluxo de referências.
 _XREF = re.compile(rb"(?:^|[\r\n])xref[\r\n ]|/Type\s*/XRef\b")

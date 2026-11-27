@@ -66,7 +66,7 @@ export default function ConfiguracoesPage() {
             </Select>
           </div>
           <div style={{ maxWidth: 280 }}>
-            <Select label="Antecedência do alerta (dias, demonstrativo)" value={String(settings.soonAlertDays)} onChange={(e) => update({ soonAlertDays: parseInt(e.target.value, 10) })}>
+            <Select label="Antecedência do alerta (dias, demonstrativo)" value={String(settings.soonAlertDays)} onChange={(e) => update({ soonAlertDays: Number.parseInt(e.target.value, 10) })}>
               {[1, 2, 3, 5, 7].map((n) => <option key={n} value={n}>{n} dia(s)</option>)}
             </Select>
           </div>

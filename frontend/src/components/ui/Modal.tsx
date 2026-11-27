@@ -55,7 +55,7 @@ export function Modal({ open, onClose, title, children, footer, wide }: ModalPro
   if (!open) return null;
 
   return (
-    <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="overlay" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div
         className={`modal${wide ? " modal--wide" : ""}`}
         role="dialog" aria-modal="true" aria-labelledby={titleId}

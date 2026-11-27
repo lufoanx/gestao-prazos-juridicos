@@ -10,8 +10,7 @@ import { useAuth } from "./AuthProvider";
 import { errorMessage } from "./messages";
 import { UnavailableNote } from "./Unavailable";
 import { GoogleButton } from "./GoogleButton";
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import { EMAIL_RE } from "@/lib/email-format";
 
 /** `embedded`: usado dentro de outra tela (ex.: convite) — não navega e não usa a moldura. */
 export function IntegratedLogin({ embedded = false, onSuccess }: { embedded?: boolean; onSuccess?: () => void } = {}) {

@@ -227,13 +227,13 @@ test("cabeçalhos ao backend montados do zero: sem cookie, Authorization ou X-Fo
 test("corpo encaminhado exato; logs sem token, senha, e-mail ou corpo", async () => {
   const { bff, calls, logs } = setup(() => new Response(null, { status: 204 }));
   await bff.passwordReset(resetReq());
-  check(JSON.stringify(Object.keys(JSON.parse(calls[0].init.body))) === JSON.stringify(["token", "newPassword"]), "reset: só token e newPassword");
-  check(JSON.parse(calls[0].init.body).token === TOKEN, "reset: token encaminhado no corpo");
-  check(!calls[0].url.includes(TOKEN), "reset: token fora da URL");
+  assert.ok(JSON.stringify(Object.keys(JSON.parse(calls[0].init.body))) === JSON.stringify(["token", "newPassword"]), "reset: só token e newPassword");
+  assert.ok(JSON.parse(calls[0].init.body).token === TOKEN, "reset: token encaminhado no corpo");
+  assert.ok(!calls[0].url.includes(TOKEN), "reset: token fora da URL");
   const f = setup(() => { throw Object.assign(new Error("x"), { name: "TimeoutError" }); });
   await f.bff.passwordForgot(forgotReq());
   checkAbsent([...logs, ...f.logs].join("\n"), { token: TOKEN, senha: PASSWORD, email: EMAIL }, "log");
-  check(f.logs.some((l) => l.includes("bff_public_password_uncertain")), "log: categoria do resultado incerto");
+  assert.ok(f.logs.some((l) => l.includes("bff_public_password_uncertain")), "log: categoria do resultado incerto");
 });
 
 // ---------------------------------------------------------------- resultado incerto

@@ -157,10 +157,10 @@ test("classificação da redefinição: link inválido descarta o token; senha r
 });
 
 test("textos: neutros (nunca 'e-mail enviado') e sem afirmar falha no resultado desconhecido", () => {
-  check(!/enviado|enviamos o|existe/i.test(RECOVERY_TEXT.accepted), "aceite neutro");
-  check(/Se houver uma conta/.test(RECOVERY_TEXT.accepted), "texto do aceite");
-  check(!/falhou|não foi redefinida/i.test(RECOVERY_TEXT.resetUnknown), "desconhecido não afirma falha");
-  check(/NOVA senha/.test(RECOVERY_TEXT.resetUnknown), "explica como conferir");
+  assert.ok(!/enviado|enviamos o|existe/i.test(RECOVERY_TEXT.accepted), "aceite neutro");
+  assert.ok(/Se houver uma conta/.test(RECOVERY_TEXT.accepted), "texto do aceite");
+  assert.ok(!/falhou|não foi redefinida/i.test(RECOVERY_TEXT.resetUnknown), "desconhecido não afirma falha");
+  assert.ok(/NOVA senha/.test(RECOVERY_TEXT.resetUnknown), "explica como conferir");
 });
 
 // ------------------------------------------------------------------------------------ transições

@@ -12,8 +12,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     WEB_CONCURRENCY=1
 
 WORKDIR /srv
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Versões travadas com hash (requirements.lock, gerado de requirements.txt) e só pacotes binários (wheels):
+# o pip confere cada arquivo baixado e nenhum script de instalação de terceiros roda durante o build.
+COPY requirements.lock .
+RUN pip install --no-cache-dir --only-binary :all: --require-hashes -r requirements.lock
 
 COPY alembic.ini ./
 COPY migrations ./migrations

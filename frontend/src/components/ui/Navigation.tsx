@@ -22,7 +22,7 @@ export function Tabs({
   }
 
   return (
-    <div className="tabs" role="tablist" aria-label={ariaLabel} onKeyDown={onKey}>
+    <div className="tabs" role="tablist" aria-label={ariaLabel}>
       {items.map((t) => (
         <button
           key={t.id}
@@ -32,6 +32,7 @@ export function Tabs({
           aria-selected={t.id === active}
           tabIndex={t.id === active ? 0 : -1}
           onClick={() => onChange(t.id)}
+          onKeyDown={onKey}
         >
           {t.label}
         </button>

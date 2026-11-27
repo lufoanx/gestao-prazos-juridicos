@@ -9,6 +9,7 @@ import { useScope } from "@/context/ScopeContext";
 import { DemoOfficeEntry } from "@/components/shell/DemoOfficeEntry";
 import { useOrg } from "@/context/OrgContext";
 import { Input, Button, Badge, Select, Modal, useToast } from "@/components/ui";
+import { copyText } from "@/lib/clipboard";
 
 function DemoEscritorioPage() {
   const router = useRouter();
@@ -97,7 +98,7 @@ function DemoEscritorioPage() {
           <dt>Código do escritório</dt>
           <dd>
             <code style={{ userSelect: "all" }}>{office.id}</code>{" "}
-            <button className="icon-btn" aria-label="Copiar código" onClick={() => { navigator.clipboard?.writeText(office.id); toast.success("Código copiado"); }}>
+            <button className="icon-btn" aria-label="Copiar código" onClick={() => { void copyText(office.id); toast.success("Código copiado"); }}>
               <Copy size={15} aria-hidden />
             </button>
           </dd>

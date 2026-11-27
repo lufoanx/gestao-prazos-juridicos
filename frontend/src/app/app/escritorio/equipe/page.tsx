@@ -17,6 +17,7 @@ import type { Membership, Permission } from "@/types/domain";
 import {
   Tabs, Badge, Button, Input, Select, Modal, EmptyState, SearchField, useToast,
 } from "@/components/ui";
+import { copyText } from "@/lib/clipboard";
 
 const PERMS: [Permission, string][] = [
   ["deadline.read", "Ver prazos"],
@@ -204,7 +205,7 @@ function DemoEquipePage() {
               <div className="filechip" style={{ marginTop: 12 }}>
                 <span className="filechip__icon"><Link2 size={18} aria-hidden /></span>
                 <span className="filechip__main"><span className="filechip__name" style={{ userSelect: "all" }}>{lastLink}</span><span className="filechip__meta">link único demonstrativo</span></span>
-                <button className="icon-btn" aria-label="Copiar link" onClick={() => { navigator.clipboard?.writeText(lastLink); toast.success("Link copiado"); }}><Copy size={16} aria-hidden /></button>
+                <button className="icon-btn" aria-label="Copiar link" onClick={() => { void copyText(lastLink); toast.success("Link copiado"); }}><Copy size={16} aria-hidden /></button>
               </div>
             ) : null}
           </div>
@@ -221,7 +222,7 @@ function DemoEquipePage() {
                 <div style={{ display: "flex", gap: 8 }}>
                   {st === "valid" ? (
                     <>
-                      <button className="btn btn--secondary btn--sm" onClick={() => { navigator.clipboard?.writeText(`${window.location.origin}/convite/${i.token}`); toast.success("Link copiado"); }}><Copy size={14} aria-hidden /> Copiar</button>
+                      <button className="btn btn--secondary btn--sm" onClick={() => { void copyText(`${window.location.origin}/convite/${i.token}`); toast.success("Link copiado"); }}><Copy size={14} aria-hidden /> Copiar</button>
                       <button className="btn btn--ghost btn--sm" onClick={() => { org.revokeInvite(i.id); toast.info("Convite revogado"); }}>Revogar</button>
                     </>
                   ) : null}

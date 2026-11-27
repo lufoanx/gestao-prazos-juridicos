@@ -52,7 +52,7 @@ Valores marcados como **segredo** ficam em `secrets` do app e entram por `secret
 ## 5. Como atualizar
 
 1. PR → CI (`ci.yml`) verde → merge no `main`.
-2. O workflow **Publicar imagens** gera as duas imagens com a tag do SHA do commit.
+2. O último job do CI (**publicar**, que chama `publicar-imagens.yml`) gera as duas imagens com a tag do SHA do commit — só num push para o `main` e só depois de todos os testes passarem.
 3. No Cloud Shell do portal (a conta institucional bloqueia o Azure CLI local e credenciais do Azure no GitHub):
 
 ```bash

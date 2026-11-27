@@ -10,8 +10,7 @@ import { PasswordInput } from "@/components/public/PasswordInput";
 import { GoogleDemoButton } from "@/components/public/GoogleDemoButton";
 import { Input, Button } from "@/components/ui";
 import { useSession } from "@/context/SessionContext";
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import { EMAIL_RE } from "@/lib/email-format";
 
 // Nome amigável derivado do e-mail (apenas demonstrativo).
 function nameFromEmail(email: string): string {

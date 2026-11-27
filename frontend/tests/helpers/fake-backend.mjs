@@ -20,7 +20,7 @@ export function createFakeBackend() {
     seq: 1,
     user: { id: "u1", name: "Ana", email: "ana@exemplo.com", createdAt: "2026-11-09T12:00:00Z" },
     beforeRefresh: null,
-    failRefresh: null,                       // "timeout" | "refused" | "500" | "401" | "network"
+    failRefresh: /** @type {null | string} */ (null),                       // "timeout" | "refused" | "500" | "401" | "network"
     failNext: null,
     loginStatus: 200,
     sessions,

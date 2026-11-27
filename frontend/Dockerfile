@@ -7,9 +7,15 @@ ARG NEXT_PUBLIC_PRAZOAI_MODE=demo
 ENV NEXT_PUBLIC_PRAZOAI_MODE=$NEXT_PUBLIC_PRAZOAI_MODE \
     NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
+COPY package.json package-lock.json ./
+# --ignore-scripts: nenhum script de instalação de pacote de terceiros roda no build.
+RUN npm ci --ignore-scripts
+# Só o necessário para o build, arquivo por arquivo (nada de `COPY . .`: nenhum arquivo local, .env ou
+# segredo esquecido na pasta entra na imagem).
+COPY next.config.ts tsconfig.json next-env.d.ts postcss.config.mjs eslint.config.mjs ./
+COPY public ./public
+COPY scripts ./scripts
+COPY src ./src
 RUN npm run build && chown -R node:node /app
 USER node
 EXPOSE 3000

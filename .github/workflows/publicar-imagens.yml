@@ -1,42 +1,37 @@
 # Publica as imagens Docker de produção no GitHub Container Registry (GHCR) — doc 27.
 #
-# Quando: depois que o workflow "CI" termina COM SUCESSO num push para main (ou manualmente).
+# Quando: chamado pelo job "publicar" do workflow CI, só num push para main e só depois de TODOS os jobs
+#         do CI passarem (o código publicado é o mesmo commit que acabou de ser testado). Também pode ser
+#         disparado à mão (Actions → Publicar imagens → Run workflow), sempre a partir do main.
 # O quê:  ghcr.io/<dono>/prazoai-backend   (backend/Dockerfile, sem alterações)
 #         ghcr.io/<dono>/prazoai-frontend  (frontend/Dockerfile com NEXT_PUBLIC_PRAZOAI_MODE=integrated)
 # Tags:   o SHA completo do commit (imutável, usado na implantação) e "latest".
 #
+# Segurança: não há gatilho workflow_run nem checkout de código de outra execução — o checkout é o do
+# próprio commit do main. O login no GHCR usa só o GITHUB_TOKEN desta execução, sem action de terceiros.
 # Nenhum segredo entra nas imagens: tudo é configurado em execução no Azure Container Apps.
 # A implantação no Azure é feita por comando explícito (az containerapp update --image ...:<sha>),
 # porque a conta institucional não permite credenciais do Azure para o GitHub Actions.
 name: Publicar imagens
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: publicar-imagens
-  cancel-in-progress: false
-
 jobs:
   publicar:
-    # Automático só quando o CI passou num push para main; manual sempre (a partir do main).
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    concurrency:
+      group: publicar-imagens
+      cancel-in-progress: false
     steps:
-      - name: Checkout do commit aprovado pelo CI
+      - name: Checkout do commit testado
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Nomes das imagens
         id: nomes
@@ -47,12 +42,11 @@ jobs:
           echo "frontend=ghcr.io/${owner}/prazoai-frontend" >> "$GITHUB_OUTPUT"
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
-      - name: Login no GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Login no GHCR (token temporário desta execução)
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
 
       - name: Backend — build e push
         run: |
@@ -68,6 +62,10 @@ jobs:
                        -t "${{ steps.nomes.outputs.frontend }}:latest" frontend
           docker push "${{ steps.nomes.outputs.frontend }}:${{ steps.nomes.outputs.sha }}"
           docker push "${{ steps.nomes.outputs.frontend }}:latest"
+
+      - name: Sair do GHCR
+        if: always()
+        run: docker logout ghcr.io
 
       - name: Resumo
         run: |

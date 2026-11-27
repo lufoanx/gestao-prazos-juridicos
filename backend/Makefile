@@ -27,4 +27,12 @@ build:
 	# Backend interpretado (sem artefato de build). Valida a compilação dos módulos.
 	$(PY) -m compileall app
 
-.PHONY: install dev test lint typecheck build
+# Regenera os locks com hash (CI e Docker instalam SÓ deles: --only-binary :all: --require-hashes).
+# Rode depois de mudar requirements.txt ou requirements-dev.txt e faça commit dos dois .lock.
+LOCK_OPTS=--python-version 3.12 --python-platform x86_64-manylinux_2_28 --generate-hashes --only-binary :all: --no-header
+lock:
+	uvx --from uv uv pip compile requirements.txt $(LOCK_OPTS) -o requirements.lock.tmp
+	uvx --from uv uv pip compile requirements-dev.txt $(LOCK_OPTS) -o requirements-dev.lock.tmp
+	@echo "Confira e renomeie: requirements.lock.tmp → requirements.lock (mantendo o cabeçalho GERADO)."
+
+.PHONY: install dev test lint typecheck build lock

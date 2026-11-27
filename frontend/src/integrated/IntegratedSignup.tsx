@@ -10,8 +10,8 @@ import { useAuth } from "./AuthProvider";
 import { errorMessage } from "./messages";
 import { UnavailableNote } from "./Unavailable";
 import { GoogleButton } from "./GoogleButton";
+import { EMAIL_RE } from "@/lib/email-format";
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Mesma política do backend: 8 a 128 caracteres, sem ser só espaços (o servidor é a autoridade).
 export function passwordProblem(pw: string): string | undefined {
   if (pw.length < 8) return "A senha deve ter pelo menos 8 caracteres.";

@@ -11,7 +11,7 @@ export function check(condition, requirement) {
 
 /** Nenhum dos segredos (rotulados) aparece no texto; a falha lista só os rótulos. */
 export function checkAbsent(text, secrets, where) {
-  const leaked = Object.entries(secrets).filter(([, v]) => v && String(text).includes(v)).map(([k]) => k).sort();
+  const leaked = Object.entries(secrets).filter(([, v]) => v && String(text).includes(v)).map(([k]) => k).sort((a, b) => a.localeCompare(b));
   if (leaked.length) {
     const e = new Error(`requisito não atendido: ${where} expõe ${leaked.join(", ")}`);
     e.stack = e.message;
